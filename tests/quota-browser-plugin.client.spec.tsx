@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -9,7 +10,9 @@ import { apply, inject, NS } from '../src/client/quota/index.ts'
 import {
   CodexQuotaFooter,
   type CodexQuotaFooterFace,
+  type CodexQuotaFooterProps,
 } from '../src/client/quota/CodexQuotaFooter.tsx'
+import { zh, type CodexQuotaLocaleKey } from '../src/client/quota/locales.ts'
 
 const SNAPSHOT = {
   currentAccountName: '经纬 钟',
@@ -19,6 +22,14 @@ const SNAPSHOT = {
   poolRemainingPercent: 61,
   refreshedAt: 1,
 } as const
+
+const t = ((key: CodexQuotaLocaleKey, params?: Record<string, unknown>): string => {
+  let value: string = zh[key]
+  for (const [name, replacement] of Object.entries(params ?? {})) {
+    value = value.replace(`{${name}}`, String(replacement))
+  }
+  return value
+}) as CodexQuotaFooterProps['t']
 
 interface RegisteredEntry {
   component: unknown
@@ -56,7 +67,9 @@ function bench(withSettingsNavigation = true): {
     locale: { register: localeRegister },
     slots,
     get(name: string) {
-      return name === 'settingsNavigation' && withSettingsNavigation
+      return name === 'settingsNavigation'
+        && inject.some(service => service === name)
+        && withSettingsNavigation
         ? { openSection }
         : undefined
     },
@@ -77,7 +90,10 @@ function bench(withSettingsNavigation = true): {
   }
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
 describe('unified Codex quota browser contribution', () => {
   it('registers one localized sidebar contribution and opens the shared Codex settings page', async () => {
@@ -85,7 +101,7 @@ describe('unified Codex quota browser contribution', () => {
     vi.stubGlobal('fetch', fetchMock)
     const b = bench()
 
-    expect(inject).toEqual(['slots', 'locale'])
+    expect(inject).toEqual(['slots', 'locale', 'settingsNavigation'])
     apply(b.ctx as never)
 
     expect(b.localeRegister).toHaveBeenCalledWith(NS, expect.any(Object))
@@ -104,6 +120,38 @@ describe('unified Codex quota browser contribution', () => {
 
     await b.dispose()
     expect(b.entry()).toBeUndefined()
+  })
+
+  it.each([
+    [
+      'zero-account',
+      {
+        ...SNAPSHOT,
+        currentAccountName: null,
+        currentRemainingPercent: null,
+        poolAccountCount: 0,
+        poolRemainingPercent: null,
+      },
+      '账号池 0 个账号',
+    ],
+    ['populated-account', SNAPSHOT, '经纬 钟'],
+  ])('renders an Open action that reaches Codex Settings in the %s state', async (
+    _state,
+    snapshot,
+    expectedText,
+  ) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot), { status: 200 })))
+    const b = bench()
+    apply(b.ctx as never)
+    const injected = b.entry()?.inject()
+    if (injected === undefined) throw new Error('quota contribution should be registered')
+
+    render(<CodexQuotaFooter wide read={injected.read} openSettings={injected.openSettings} t={t} />)
+    expect(await screen.findByText(expectedText)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开' }))
+
+    expect(b.openSection).toHaveBeenCalledWith('openai-codex')
+    await b.dispose()
   })
 
   it('keeps Settings navigation optional and rejects an unsuccessful quota response', async () => {
