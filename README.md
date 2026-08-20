@@ -17,7 +17,7 @@
   <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/showcase.gif" alt="DSH Codex Shared Pool 自动切换账号并显示最近请求流水" width="900" />
 </p>
 
-> 演示来自目标版本 tarball 安装到隔离的 stock DSH `0.1.0-rc.8` 后的真实插件页面。为了公开展示，账号名称、额度和请求流水使用受控演示数据；演示没有调用真实 OpenAI 账号或模型。
+> 受控演示：账号 A 的额度为 `0%` 后，请求预检跳过 A，只由账号 B 发出 Provider 请求；成功后 B 变为“使用中”，并留下 A → B 的额度回退流水。账号、额度和请求均为演示数据，不代表真实 Token、费用或精确订阅消耗。
 
 ## 自动切换规则
 
