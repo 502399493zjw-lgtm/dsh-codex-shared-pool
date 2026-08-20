@@ -11,6 +11,11 @@ import {
 import { CODEX_QUOTA_PATH, type CodexQuotaReadFace } from './useCodexQuota.ts'
 import { en, zh, type CodexQuotaLocaleKey } from './locales.ts'
 import { QUOTA_CLIENT_INJECT } from '../runtime-contract.ts'
+import {
+  CODEX_SETTINGS_SECTION_ID,
+  CODEX_SETTINGS_SECTION_LABEL,
+  openSettingsSection,
+} from '../settings-section-navigation.ts'
 
 export type {
   CodexQuotaFooterFace,
@@ -55,9 +60,13 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (): CodexQuotaFooterFace => ({
       read,
-      ...(settingsNavigation === undefined
-        ? {}
-        : { openSettings: () => { settingsNavigation.openSection('openai-codex') } }),
+      openSettings: () => {
+        openSettingsSection(
+          CODEX_SETTINGS_SECTION_ID,
+          CODEX_SETTINGS_SECTION_LABEL,
+          settingsNavigation,
+        )
+      },
     }),
   }, CodexQuotaFooter))
 }

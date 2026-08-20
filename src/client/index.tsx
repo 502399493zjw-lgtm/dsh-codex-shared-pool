@@ -24,6 +24,7 @@ import type { TeamSettingsInjected } from './team/TeamSettings.tsx'
 import { en as teamEn, zh as teamZh } from './team/locales.ts'
 import type { TeamSettingsKey } from './team/locales.ts'
 import { CLIENT_INJECT } from './runtime-contract.ts'
+import { CODEX_SETTINGS_SECTION_ID } from './settings-section-navigation.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -80,7 +81,7 @@ export function apply(ctx: ClientContext): void {
   }, 'dsh-openai-codex: release image URLs')
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: 'openai-codex',
+    id: CODEX_SETTINGS_SECTION_ID,
     order: 15,
     label: () => t('nav'),
     inject: (): OpenAICodexSettingsInjected => ({ t }),
