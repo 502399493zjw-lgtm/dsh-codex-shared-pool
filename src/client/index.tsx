@@ -19,18 +19,13 @@ import { FastModeTriggerIcon } from './FastModeTriggerIcon.tsx'
 import { en, zh } from './locales.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 import { apply as applyCodexQuota } from './quota/index.ts'
-import { TeamSettings } from './team/TeamSettings.tsx'
-import type { TeamSettingsInjected } from './team/TeamSettings.tsx'
-import { en as teamEn, zh as teamZh } from './team/locales.ts'
-import type { TeamSettingsKey } from './team/locales.ts'
 import { CLIENT_INJECT } from './runtime-contract.ts'
+import { CODEX_SETTINGS_SECTION_ID } from './settings-section-navigation.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** OpenAI Codex account page copy. */
     'settings.openai-codex': OpenAICodexSettingsKey
-    /** Invite-only Team capacity page copy. */
-    'settings.codex-team': TeamSettingsKey
   }
 }
 
@@ -45,9 +40,6 @@ export function apply(ctx: ClientContext): void {
   const namespace = 'settings.openai-codex'
   ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-openai-codex: settings copy')
   const t = ctx.locale.bind(namespace) as OpenAICodexSettingsInjected['t']
-  const teamNamespace = 'settings.codex-team'
-  ctx.effect(() => ctx.locale.register(teamNamespace, { zh: teamZh, en: teamEn }), 'dsh-codex-team: settings copy')
-  const teamT = ctx.locale.bind(teamNamespace) as TeamSettingsInjected['t']
   const imageUrls = new Map<string, Promise<string>>()
   const createdUrls = new Set<string>()
   const loadImage = (sessionId: SessionId, attachment: ImageAttachmentRef): Promise<string> => {
@@ -80,18 +72,11 @@ export function apply(ctx: ClientContext): void {
   }, 'dsh-openai-codex: release image URLs')
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
-    id: 'openai-codex',
+    id: CODEX_SETTINGS_SECTION_ID,
     order: 15,
     label: () => t('nav'),
     inject: (): OpenAICodexSettingsInjected => ({ t }),
   }, OpenAICodexSettings))
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'codex-team',
-    order: 16,
-    label: () => teamT('nav'),
-    inject: (): TeamSettingsInjected => ({ t: teamT }),
-  }, TeamSettings))
   ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
     name: 'tool.call.toolview',
     key: 'imagegen',

@@ -136,7 +136,7 @@ pnpm pack
 git diff --check
 ```
 
-Expected: all commands exit 0; real PostgreSQL tests may remain skipped locally when no integration URL is configured.
+Expected: all commands exit 0.
 
 - [x] **Step 3: Update plan evidence without overclaiming**
 

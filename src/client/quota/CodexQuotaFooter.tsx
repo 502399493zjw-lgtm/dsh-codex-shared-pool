@@ -15,8 +15,8 @@ export { CODEX_QUOTA_POLL_INTERVAL_MS }
 
 /** Private callbacks supplied by the Codex quota browser plugin. */
 export interface CodexQuotaFooterFace extends CodexQuotaReadFace {
-  /** Open Settings directly when the installed DSH exposes that optional seam. */
-  readonly openSettings?: () => void
+  /** Open this plugin's account-management page in Settings. */
+  readonly openSettings: () => void
 }
 
 /** Props composed by the sidebar footer-action slot. */
@@ -53,11 +53,9 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
           <div className={css.status} aria-live="polite">
             {unavailable ? t('unavailable') : t('loading')}
           </div>
-          {openSettings !== undefined && (
-            <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
-              <IconChevronRightOutline14 size={16} />
-            </button>
-          )}
+          <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
+            <IconChevronRightOutline14 size={16} />
+          </button>
         </div>
         {snapshot !== undefined && (
           <div className={css.pool} aria-live="polite">
@@ -77,26 +75,24 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
 
   return (
     <section className={css.root} aria-label={t('aria')}>
-      <div className={css.accountLine} aria-live="polite">
-        <span className={css.accountLabel}>{t('account')}</span>
-        <span className={css.account}>{snapshot.currentAccountName}</span>
-      </div>
       <div className={css.primary}>
-        <div className={css.current} aria-live="polite">
-          <span>{t('remaining')} </span>
-          <span className={css.quota}>{snapshot.currentRemainingPercent}%</span>
-          <span className={css.separator} aria-hidden> · </span>
-          <span>
-            {snapshot.currentResetsAt === null
-              ? t('resetUnknown')
-              : t('resetAt', { time: formatCodexResetTime(snapshot.currentResetsAt) })}
-          </span>
+        <div className={css.accountLine} aria-live="polite">
+          <span className={css.accountLabel}>{t('account')}</span>
+          <span className={css.account}>{snapshot.currentAccountName}</span>
         </div>
-        {openSettings !== undefined && (
-          <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
-            <IconChevronRightOutline14 size={16} />
-          </button>
-        )}
+        <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
+          <IconChevronRightOutline14 size={16} />
+        </button>
+      </div>
+      <div className={css.current} aria-live="polite">
+        <span>{t('remaining')} </span>
+        <span className={css.quota}>{snapshot.currentRemainingPercent}%</span>
+        <span className={css.separator} aria-hidden> · </span>
+        <span>
+          {snapshot.currentResetsAt === null
+            ? t('resetUnknown')
+            : t('resetAt', { time: formatCodexResetTime(snapshot.currentResetsAt) })}
+        </span>
       </div>
       <div className={css.pool}>
         {t('pool')} {snapshot.poolAccountCount} {t('accounts')}

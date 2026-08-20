@@ -40,13 +40,6 @@ interface CompactResponse {
 
 const MAX_NATIVE_COMPACTION_RETRIES = 2
 
-export interface OpenAICodexResponseRuntimeOptions {
-  /** Alternate Codex Responses endpoint used by the Team gateway. */
-  readonly responsesUrl?: string
-  /** Team HTTP gateways do not expose the provider's WebSocket transport. */
-  readonly forceSse?: boolean
-}
-
 /** Whether an opaque value is a non-array record. */
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -350,7 +343,6 @@ export class OpenAICodexResponseRuntime {
   constructor(
     private readonly preferences: () => ResponseApiPreferences,
     private readonly closeSessionContext: (sessionId: string) => void = closeOpenAICodexWebSocketSessions,
-    private readonly options: OpenAICodexResponseRuntimeOptions = {},
   ) {}
 
   /**
@@ -407,7 +399,7 @@ export class OpenAICodexResponseRuntime {
       model,
       context,
       options,
-      this.options.forceSse !== true && !compaction && preferences.useWebSocketContextReuse,
+      !compaction && preferences.useWebSocketContextReuse,
     )
   }
 
@@ -528,7 +520,7 @@ export class OpenAICodexResponseRuntime {
       let response: Response
       try {
         const signal = requestSignal(options?.signal, options?.timeoutMs)
-        response = await fetch(this.options.responsesUrl ?? OPENAI_CODEX_RESPONSES_URL, {
+        response = await fetch(OPENAI_CODEX_RESPONSES_URL, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),

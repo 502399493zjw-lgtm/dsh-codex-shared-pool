@@ -86,3 +86,32 @@ export type OpenAICodexProfilesStatus<Profile> =
   | { readonly status: 'ready'; readonly profiles: Profile[] }
   | { readonly status: 'signing-in' }
   | { readonly status: 'error'; readonly reason: OpenAICodexAuthorizationFailure }
+
+/** Why the local pool selected one profile for a request. */
+export type LocalRoutingReason =
+  | 'priority'
+  | 'quota_fallback'
+  | 'quota_unknown'
+  | 'all_exhausted'
+  | 'concurrent_binding'
+
+/** Metadata-only lifecycle state for one local Codex request. */
+export type LocalRoutingStatus = 'in_progress' | 'succeeded' | 'failed' | 'cancelled'
+
+/** Browser-safe request receipt; profile identity is reduced to an ordinal alias. */
+export interface LocalRoutingEventSummary {
+  readonly id: string
+  readonly profileAlias: string
+  readonly previousProfileAlias?: string
+  readonly model: string
+  readonly reason: LocalRoutingReason
+  readonly unit: 'request'
+  readonly status: LocalRoutingStatus
+  readonly startedAt: number
+  readonly finishedAt?: number
+}
+
+/** Same-origin response returned by the local routing-event route. */
+export interface LocalRoutingEventsResult {
+  readonly events: readonly LocalRoutingEventSummary[]
+}

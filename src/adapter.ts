@@ -9,11 +9,11 @@ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { allocateOpenAICodexSessionProfile } from './account-allocation.ts'
+import type { LocalRoutingEventLedger } from './local-routing-events.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
 import type { ResponseApiPreferences } from './tool-policy.ts'
-import { resolveTeamClientBaseUrl, teamClientResponsesUrl } from './team/client.ts'
 
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
@@ -73,23 +73,6 @@ function requestProvider(provider: Provider): Provider {
   }
 }
 
-export interface OpenAICodexTeamClientAdapterOptions {
-  /** Validated Team base URL ending in the plugin Team path. */
-  readonly baseUrl: string
-  /** Per-request Host credential resolver returning a Codex-compatible Team bearer. */
-  readonly resolveApiKey: () => Promise<string>
-}
-
-/** Rewrite the complete static Codex model catalog to one Team gateway. */
-export function createTeamClientProvider(provider: Provider, baseUrl: string): Provider {
-  const resolvedBaseUrl = resolveTeamClientBaseUrl(baseUrl)
-  return {
-    ...provider,
-    baseUrl: resolvedBaseUrl,
-    getModels: () => provider.getModels().map(model => ({ ...model, baseUrl: resolvedBaseUrl })),
-  }
-}
-
 /** Preserve Harness call purpose until the generic pi-ai adapter reaches the provider. */
 class OpenAICodexAdapter extends PiAiAdapter {
   constructor(
@@ -97,6 +80,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
     private readonly responses: OpenAICodexResponseRuntime,
     private readonly credentials: OpenAICodexCredentialStore,
     private readonly allocateLocalSession: boolean,
+    private readonly routingEvents?: LocalRoutingEventLedger,
   ) {
     super(options)
   }
@@ -124,8 +108,9 @@ class OpenAICodexAdapter extends PiAiAdapter {
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    let routingEventId: string | undefined
     if (this.allocateLocalSession && options.sessionId !== undefined) {
-      await allocateOpenAICodexSessionProfile(
+      const allocation = await allocateOpenAICodexSessionProfile(
         this.credentials,
         String(options.sessionId),
         options.model,
@@ -135,13 +120,37 @@ class OpenAICodexAdapter extends PiAiAdapter {
           this.responses.resetSessionContext(sessionId)
         },
       )
+      if (allocation !== undefined && this.routingEvents !== undefined) {
+        routingEventId = this.routingEvents.begin({
+          allocation,
+          profileOrder: (await this.credentials.listProfiles()).map(profile => profile.id),
+          model: options.model,
+        })
+      }
     }
     const release = options.purpose === 'compaction'
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
       : undefined
+    let terminalStatus: 'succeeded' | 'failed' | 'cancelled' | undefined
     try {
-      for await (const chunk of super.stream(options)) yield chunk
+      for await (const chunk of super.stream(options)) {
+        if (chunk.type === 'finish') {
+          terminalStatus = chunk.reason.kind === 'aborted'
+            ? 'cancelled'
+            : chunk.reason.kind === 'error' ? 'failed' : 'succeeded'
+        }
+        yield chunk
+      }
+    } catch (error: unknown) {
+      terminalStatus = options.signal?.aborted === true ? 'cancelled' : 'failed'
+      throw error
     } finally {
+      if (routingEventId !== undefined) {
+        this.routingEvents?.settle(
+          routingEventId,
+          terminalStatus ?? (options.signal?.aborted === true ? 'cancelled' : 'succeeded'),
+        )
+      }
       release?.()
     }
   }
@@ -156,28 +165,17 @@ class OpenAICodexAdapter extends PiAiAdapter {
  * @param credentials - Refreshable OAuth credential source.
  * @param resolveAttachments - Resolves the active conversation attachment store.
  * @param responsePreferences - Reads the current Codex Responses preferences.
+ * @param routingEvents - Optional metadata-only ledger for local routing attempts.
  * @returns Harness adapter for the OpenAI Codex provider.
  */
 export function createOpenAICodexAdapter(
   credentials: OpenAICodexCredentialStore,
   resolveAttachments: () => AttachmentStore | undefined,
   responsePreferences: () => ResponseApiPreferences,
-  teamClient?: OpenAICodexTeamClientAdapterOptions,
+  routingEvents?: LocalRoutingEventLedger,
 ): PiAiAdapter {
-  const localProvider = openaiCodexProvider()
-  const provider = teamClient === undefined
-    ? localProvider
-    : createTeamClientProvider(localProvider, teamClient.baseUrl)
-  const responses = new OpenAICodexResponseRuntime(
-    responsePreferences,
-    teamClient === undefined ? undefined : () => {
-      // Team routing owns upstream stickiness; there is no local WebSocket
-      // continuation to close when the gateway changes an upstream account.
-    },
-    teamClient === undefined
-      ? {}
-      : { forceSse: true, responsesUrl: teamClientResponsesUrl(teamClient.baseUrl) },
-  )
+  const provider = openaiCodexProvider()
+  const responses = new OpenAICodexResponseRuntime(responsePreferences)
   const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
@@ -187,17 +185,11 @@ export function createOpenAICodexAdapter(
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider)),
   }]])
-  let resolveApiKey: () => Promise<string | undefined>
-  if (teamClient === undefined) {
-    const models: MutableModels = createModels({ credentials })
-    models.setProvider(localProvider)
-    resolveApiKey = async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey
-  } else {
-    resolveApiKey = teamClient.resolveApiKey
-  }
+  const models: MutableModels = createModels({ credentials })
+  models.setProvider(provider)
   return new OpenAICodexAdapter({
     profiles: () => profiles,
-    resolveApiKey,
+    resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
     resolveAttachments,
-  }, responses, credentials, teamClient === undefined)
+  }, responses, credentials, true, routingEvents)
 }
