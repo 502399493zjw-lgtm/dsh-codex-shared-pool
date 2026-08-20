@@ -1,0 +1,15 @@
+# Public composition boundary for the standalone Codex bundle. This patch is
+# consumed by the stock DSH loader; it does not modify deepseek-harness source.
+
+- id: agent-default-model
+  config:
+    provider: openai-codex
+    model: gpt-5.6-sol
+
+- id: web
+  config:
+    searchProvider: openai-codex
+
+- insert:
+    - id: codex-shared-pool
+      name: dsh-codex-shared-pool

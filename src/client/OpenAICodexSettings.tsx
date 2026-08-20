@@ -1,0 +1,833 @@
+/** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import {
+  Button,
+  IconChevronDownOutline14,
+  IconGlobeOutline14,
+  IconPlusOutline16,
+  IconTrashOutline16,
+  Input,
+  Modal,
+  StateDot,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type {
+  ImageToolPreferences,
+  OpenAICodexUsage,
+  ResponseApiPreferences,
+} from '../shared/types.ts'
+import type { OpenAICodexSettingsKey } from './locales.ts'
+import { watchAuthorizationPopupClose } from './authorization-popup.ts'
+import {
+  loadResponsePreferences,
+  updateResponsePreferences,
+} from './response-preferences.ts'
+import {
+  parseProfileLabelDraft,
+  renameOpenAICodexProfile,
+} from './profile-management.ts'
+import { observeCodexQuotaProfiles } from './quota/invalidation.ts'
+
+const STATUS_PATH = '/plugins/dsh-openai-codex/profiles'
+const LOGIN_PATH = '/plugins/dsh-openai-codex/profiles/login'
+const CANCEL_LOGIN_PATH = '/plugins/dsh-openai-codex/profiles/login/cancel'
+const PRIORITY_PATH = '/plugins/dsh-openai-codex/profiles/priority'
+const REMOVE_PATH = '/plugins/dsh-openai-codex/profiles/remove'
+const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
+const NETWORK_PATH = '/plugins/dsh-openai-codex/network'
+const POLL_INTERVAL_MS = 1_000
+const USAGE_POLL_INTERVAL_MS = 60_000
+
+type AccountStatus =
+  | { status: 'loading' }
+  | { status: 'signing-in' }
+  | { status: 'ready'; profiles: AccountProfile[] }
+  | { status: 'error'; message: string }
+
+interface AccountProfile {
+  id: string
+  label: string
+  createdAt: number
+  updatedAt: number
+  usage: OpenAICodexUsage
+  quotaError?: string
+}
+
+interface LoginChallenge {
+  url: string
+}
+
+interface OutboundNetworkStatus {
+  enabled: boolean
+  httpProxy: boolean
+  httpsProxy: boolean
+  noProxy: boolean
+}
+
+/** Dependencies injected by the browser plugin entry. */
+export interface OpenAICodexSettingsInjected {
+  /** Localized page copy. */
+  t: (key: OpenAICodexSettingsKey, params?: Record<string, unknown>) => string
+}
+
+/** Props delivered by the settings slot renderer. */
+export type OpenAICodexSettingsProps = Partial<OpenAICodexSettingsInjected>
+
+const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', maxWidth: 1040 }
+const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
+const badgeStyle: CSSProperties = { padding: '2px 8px', borderRadius: 999, background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary, #3964fe) 14%, transparent)', color: 'var(--dsw-alias-state-business-primary, #3964fe)', fontSize: 12, fontWeight: 600 }
+const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
+const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 22 }
+const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
+const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
+const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
+const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
+
+function PreferenceToggle({
+  checked,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean
+  disabled: boolean
+  label: string
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      style={{
+        ...toggleTrackStyle,
+        opacity: disabled ? 0.55 : 1,
+        background: checked ? 'var(--dsw-alias-state-business-primary, #3964fe)' : 'var(--dsw-alias-bg-layer-2, #c8ccd2)',
+      }}
+      onClick={() => { onChange(!checked) }}
+    >
+      <span style={{
+        position: 'absolute',
+        top: 3,
+        left: checked ? 21 : 3,
+        width: 16,
+        height: 16,
+        borderRadius: '50%',
+        background: 'white',
+        boxShadow: '0 1px 3px rgba(0, 0, 0, 0.25)',
+        transition: 'left 120ms ease',
+      }} />
+    </button>
+  )
+}
+
+function progressFillStyle(percent: number): CSSProperties {
+  return {
+    width: `${Math.max(0, Math.min(100, percent))}%`,
+    height: '100%',
+    borderRadius: 'inherit',
+    background: 'var(--dsw-alias-state-business-primary, #3964fe)',
+  }
+}
+
+function windowLabel(seconds: number, t: OpenAICodexSettingsInjected['t']): string {
+  if (seconds === 5 * 60 * 60) return t('fiveHourLimit')
+  if (seconds === 7 * 24 * 60 * 60) return t('weeklyLimit')
+  const hours = seconds / (60 * 60)
+  return Number.isInteger(hours) ? t('hourLimit', { count: hours }) : t('usageWindow')
+}
+
+function formatPercent(percent: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
+}
+
+function QuotaBar({
+  label,
+  percent,
+  detail,
+  t,
+}: {
+  label: string
+  percent: number
+  detail?: string
+  t: OpenAICodexSettingsInjected['t']
+}) {
+  const display = formatPercent(percent)
+  return (
+    <div style={quotaGroupStyle}>
+      <div style={quotaLabelStyle}>
+        <span>{label}</span>
+        <span>{t('percentRemaining', { percent: display })}</span>
+      </div>
+      <div
+        style={progressTrackStyle}
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+        aria-valuetext={t('percentRemaining', { percent: display })}
+      >
+        <div style={progressFillStyle(percent)} />
+      </div>
+      {detail === undefined ? null : <p style={bodyStyle}>{detail}</p>}
+    </div>
+  )
+}
+
+function UsageLimits({ usage, quotaError, t }: {
+  usage: OpenAICodexUsage
+  quotaError?: string
+  t: OpenAICodexSettingsInjected['t']
+}) {
+  const hasData = usage.rateLimits.length > 0 || usage.credits !== undefined || usage.individualLimit !== undefined
+  return (
+    <div style={quotaListStyle}>
+      <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
+      {usage.rateLimits.map(limit => (
+        <div key={limit.id} style={quotaGroupStyle}>
+          <h4 style={quotaTitleStyle}>{limit.name ?? limit.id}</h4>
+          {limit.windows.map(window => (
+            <QuotaBar
+              key={window.windowSeconds}
+              label={windowLabel(window.windowSeconds, t)}
+              percent={window.remainingPercent}
+              t={t}
+            />
+          ))}
+        </div>
+      ))}
+      {usage.individualLimit === undefined ? null : (
+        <QuotaBar
+          label={t('monthlyLimit')}
+          percent={usage.individualLimit.remainingPercent}
+          detail={t('exactRemaining', {
+            remaining: usage.individualLimit.remaining,
+            limit: usage.individualLimit.limit,
+          })}
+          t={t}
+        />
+      )}
+      {usage.credits === undefined ? null : (
+        <div style={quotaLabelStyle}>
+          <span>{t('credits')}</span>
+          <span>{usage.credits.unlimited
+            ? t('unlimited')
+            : usage.credits.balance === undefined ? t('available') : usage.credits.balance}</span>
+        </div>
+      )}
+      {!hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
+      {quotaError === undefined ? null : <p style={errorStyle}>{t('quotaUnavailable')}</p>}
+    </div>
+  )
+}
+
+async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method,
+    headers: { accept: 'application/json', ...body === undefined ? {} : { 'content-type': 'application/json' } },
+    credentials: 'same-origin',
+    ...body === undefined ? {} : { body: JSON.stringify(body) },
+  })
+  const value: unknown = await response.json().catch(() => undefined)
+  if (!response.ok) {
+    const message = typeof value === 'object' && value !== null && 'error' in value && typeof value.error === 'string'
+      ? value.error
+      : `HTTP ${response.status}`
+    throw new Error(message)
+  }
+  return value as T
+}
+
+type AccountDialog = 'rename' | 'remove'
+
+/** OpenAI Codex account status, global allocation priority, and OAuth actions. */
+export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
+  if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
+  const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
+  const [busy, setBusy] = useState(false)
+  const [selectedProfileId, setSelectedProfileId] = useState<string>()
+  const [priorityError, setPriorityError] = useState<string>()
+  const [dialog, setDialog] = useState<AccountDialog>()
+  const [renameLabel, setRenameLabel] = useState('')
+  const [dialogError, setDialogError] = useState<string>()
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
+  const [imageToolsBusy, setImageToolsBusy] = useState(false)
+  const [imageToolsError, setImageToolsError] = useState<string | undefined>()
+  const [responseApi, setResponseApi] = useState<ResponseApiPreferences | undefined>()
+  const [responseApiBusy, setResponseApiBusy] = useState(false)
+  const [responseApiError, setResponseApiError] = useState<string | undefined>()
+  const [network, setNetwork] = useState<OutboundNetworkStatus | undefined>()
+  const [networkError, setNetworkError] = useState(false)
+  const [signInNotice, setSignInNotice] = useState<string>()
+  const popupWatchRef = useRef<(() => void) | undefined>(undefined)
+  const loginOperationRef = useRef<object | undefined>(undefined)
+  const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
+
+  const refresh = useCallback(async () => {
+    try {
+      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+    } catch (error: unknown) {
+      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+    }
+  }, [t])
+
+  const stopPopupWatch = useCallback(() => {
+    popupWatchRef.current?.()
+    popupWatchRef.current = undefined
+  }, [])
+
+  const cancelSignIn = useCallback(async () => {
+    stopPopupWatch()
+    if (loginOperationRef.current === undefined) return
+    loginOperationRef.current = undefined
+    try {
+      const result = await jsonRequest<{ cancelled: boolean }>(CANCEL_LOGIN_PATH, 'POST')
+      if (result.cancelled) setSignInNotice(t('signInCancelled'))
+      await refresh()
+    } catch (error: unknown) {
+      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+    }
+  }, [refresh, stopPopupWatch, t])
+
+  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => () => {
+    const loginWasActive = loginOperationRef.current !== undefined
+    loginOperationRef.current = undefined
+    stopPopupWatch()
+    if (loginWasActive) {
+      void fetch(CANCEL_LOGIN_PATH, {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+      })
+    }
+  }, [stopPopupWatch])
+  useEffect(() => {
+    void jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH).then(
+      (value) => { setImageTools(value); setImageToolsError(undefined) },
+      () => { setImageToolsError(t('imageToolSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void loadResponsePreferences().then(
+      (value) => { setResponseApi(value); setResponseApiError(undefined) },
+      () => { setResponseApiError(t('responseApiSettingsFailed')) },
+    )
+  }, [t])
+  useEffect(() => {
+    void jsonRequest<OutboundNetworkStatus>(NETWORK_PATH).then(
+      (value) => { setNetwork(value); setNetworkError(false) },
+      () => { setNetworkError(true) },
+    )
+  }, [])
+  useEffect(() => {
+    const interval = status.status === 'signing-in'
+      ? POLL_INTERVAL_MS
+      : status.status === 'ready' && status.profiles.length > 0 ? USAGE_POLL_INTERVAL_MS : undefined
+    if (interval === undefined) return
+    const timer = window.setInterval(() => { void refresh() }, interval)
+    return () => { window.clearInterval(timer) }
+  }, [refresh, status.status])
+
+  useEffect(() => {
+    if (status.status !== 'signing-in' && popupWatchRef.current !== undefined) {
+      loginOperationRef.current = undefined
+      stopPopupWatch()
+    }
+  }, [status.status, stopPopupWatch])
+
+  useEffect(() => {
+    if (status.status !== 'ready') return
+    setSelectedProfileId((current) => {
+      if (current !== undefined && status.profiles.some(profile => profile.id === current)) return current
+      return status.profiles[0]?.id
+    })
+  }, [status])
+
+  useEffect(() => {
+    if (status.status !== 'ready') return
+    quotaProfilesRevisionRef.current = observeCodexQuotaProfiles(
+      quotaProfilesRevisionRef.current,
+      status.profiles,
+    )
+  }, [status])
+
+  const profiles = status.status === 'ready' ? status.profiles : []
+  const selectedProfile = profiles.find(profile => profile.id === selectedProfileId)
+    ?? profiles[0]
+  const priorityProfile = profiles[0]
+
+  const signIn = async (): Promise<void> => {
+    stopPopupWatch()
+    setSignInNotice(undefined)
+    const popup = window.open('about:blank', '_blank')
+    if (popup !== null) popup.opener = null
+    setBusy(true)
+    setStatus({ status: 'signing-in' })
+    const operation = {}
+    loginOperationRef.current = operation
+    try {
+      const challenge = await jsonRequest<LoginChallenge>(LOGIN_PATH, 'POST')
+      if (loginOperationRef.current !== operation) {
+        popup?.close()
+        return
+      }
+      if (popup === null) {
+        loginOperationRef.current = undefined
+        await jsonRequest(CANCEL_LOGIN_PATH, 'POST')
+        setStatus({ status: 'error', message: t('popupBlocked') })
+        return
+      }
+      popup.location.replace(challenge.url)
+      popupWatchRef.current = watchAuthorizationPopupClose(popup, () => {
+        popupWatchRef.current = undefined
+        void cancelSignIn()
+      })
+    } catch (error: unknown) {
+      const loginWasActive = loginOperationRef.current === operation
+      if (loginWasActive) loginOperationRef.current = undefined
+      stopPopupWatch()
+      popup?.close()
+      if (loginWasActive) {
+        await jsonRequest(CANCEL_LOGIN_PATH, 'POST').catch(() => undefined)
+      }
+      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const prioritizeProfile = async (profileId: string): Promise<void> => {
+    setBusy(true)
+    setPriorityError(undefined)
+    try {
+      await jsonRequest<{ ok: true }>(PRIORITY_PATH, 'POST', { profileId })
+      const nextStatus = await jsonRequest<AccountStatus>(STATUS_PATH)
+      if (nextStatus.status !== 'ready' || nextStatus.profiles[0]?.id !== profileId) {
+        throw new Error(t('profilePriorityFailed'))
+      }
+      setStatus(nextStatus)
+    } catch {
+      setPriorityError(t('profilePriorityFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const renameProfile = async (profile: AccountProfile): Promise<void> => {
+    const parsed = parseProfileLabelDraft(renameLabel)
+    if (!parsed.ok) {
+      setDialogError(t('profileLabelRequired'))
+      return
+    }
+    setBusy(true)
+    setDialogError(undefined)
+    try {
+      await renameOpenAICodexProfile(jsonRequest, profile.id, parsed.label)
+      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+      setDialog(undefined)
+      setRenameLabel('')
+    } catch (error: unknown) {
+      setDialogError(error instanceof Error ? error.message : t('requestFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeProfile = async (profile: AccountProfile): Promise<void> => {
+    setBusy(true)
+    try {
+      await jsonRequest<{ ok: true }>(REMOVE_PATH, 'POST', { profileId: profile.id })
+      await refresh()
+      setDialog(undefined)
+    } catch (error: unknown) {
+      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const updateImageTool = async (patch: Partial<ImageToolPreferences>): Promise<void> => {
+    setImageToolsBusy(true)
+    setImageToolsError(undefined)
+    try {
+      setImageTools(await jsonRequest<ImageToolPreferences>(IMAGE_TOOLS_PATH, 'POST', patch))
+    } catch {
+      setImageToolsError(t('imageToolSettingsFailed'))
+    } finally {
+      setImageToolsBusy(false)
+    }
+  }
+
+  const updateResponseApi = async (patch: Partial<ResponseApiPreferences>): Promise<void> => {
+    setResponseApiBusy(true)
+    setResponseApiError(undefined)
+    try {
+      setResponseApi(await updateResponsePreferences(patch))
+    } catch {
+      setResponseApiError(t('responseApiSettingsFailed'))
+    } finally {
+      setResponseApiBusy(false)
+    }
+  }
+
+  const label = status.status === 'loading'
+    ? t('loadingAccount')
+    : status.status === 'signing-in'
+      ? t('signingIn')
+      : status.status === 'error'
+        ? t('requestFailed')
+        : status.profiles.length === 0 ? t('signedOut') : t('profileCount', { count: status.profiles.length })
+
+  const networkLabel = networkError
+    ? t('networkStatusUnavailable')
+    : network === undefined
+      ? t('networkLoading')
+      : network.enabled ? t('environmentProxy') : t('directNetwork')
+
+  const closeDialog = (): void => {
+    if (busy) return
+    setDialog(undefined)
+    setRenameLabel('')
+    setDialogError(undefined)
+  }
+
+  return (
+    <section className="dsh-codex-settings" style={pageStyle} aria-labelledby="openai-codex-settings-title">
+      <style>{`
+        .dsh-codex-settings, .dsh-codex-settings * { box-sizing: border-box; }
+        .dsh-codex-settings button, .dsh-codex-settings input, .dsh-codex-settings select { font: inherit; }
+        .dsh-codex-settings button:focus-visible,
+        .dsh-codex-settings input:focus-visible,
+        .dsh-codex-settings select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3964fe); outline-offset: 2px; }
+        .dsh-codex-workspace { display: grid; grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.45fr); min-height: 500px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
+        .dsh-codex-profile-list { display: flex; flex-direction: column; min-width: 0; padding: 20px; border-right: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .dsh-codex-list-heading h3 { margin: 0; color: var(--dsw-alias-label-primary); font-size: 16px; line-height: 24px; font-weight: 600; }
+        .dsh-codex-list-heading h3 span { color: var(--dsw-alias-label-tertiary); font-weight: 500; }
+        .dsh-codex-profile-items { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
+        .dsh-codex-profile-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
+        .dsh-codex-profile-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
+        .dsh-codex-profile-item[data-selected='true'] { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); }
+        .dsh-codex-profile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
+        .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 24px 26px 0; }
+        .dsh-codex-detail-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
+        .dsh-codex-detail-title { margin: 0; color: var(--dsw-alias-label-primary); font-size: 20px; line-height: 28px; font-weight: 600; }
+        .dsh-codex-account-status { display: inline-flex; align-items: center; gap: 7px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-weight: 500; }
+        .dsh-codex-account-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
+        .dsh-codex-default { margin-top: 18px; }
+        .dsh-codex-default-action { min-width: 112px; justify-content: center; }
+        .dsh-codex-default p { margin: 8px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-default p[role='alert'] { color: var(--dsw-alias-state-error-primary); }
+        .dsh-codex-quota { margin-top: 26px; padding: 24px 0 28px; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions { display: grid; grid-template-columns: 1fr 1fr; min-height: 60px; margin: auto -26px 0; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; color: var(--dsw-alias-state-business-primary, #3964fe); background: transparent; cursor: pointer; }
+        .dsh-codex-detail-actions button + button { border-left: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+        .dsh-codex-detail-actions .danger { color: var(--dsw-alias-state-error-primary); }
+        .dsh-codex-dialog-field { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+        .dsh-codex-dialog-field > span { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; font-weight: 500; }
+        .dsh-codex-dialog-error { margin: 10px 0 0; color: var(--dsw-alias-state-error-primary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
+        .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
+        .dsh-codex-advanced { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
+        .dsh-codex-advanced-trigger { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 82px; padding: 18px 20px; border: 0; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
+        .dsh-codex-advanced-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
+        .dsh-codex-advanced-trigger > span { display: flex; flex-direction: column; gap: 3px; }
+        .dsh-codex-advanced-trigger strong { color: var(--dsw-alias-label-primary); font-size: 15px; line-height: 22px; font-weight: 600; }
+        .dsh-codex-advanced-trigger small { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-advanced-chevron { transition: transform 160ms ease; }
+        .dsh-codex-advanced[data-open='false'] .dsh-codex-advanced-chevron { transform: rotate(-90deg); }
+        .dsh-codex-advanced-content { margin: 0 20px; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-advanced-group { padding: 22px 0; }
+        .dsh-codex-advanced-group + .dsh-codex-advanced-group { border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+        .dsh-codex-group-heading h3 { margin: 0; color: var(--dsw-alias-label-primary); font-size: 15px; line-height: 22px; font-weight: 600; }
+        .dsh-codex-group-heading p, .dsh-codex-preference-row p, .dsh-codex-restart { margin: 4px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-network-badges { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+        .dsh-codex-preference-list { margin-top: 14px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 10px; background: var(--dsw-alias-bg-layer-1); }
+        .dsh-codex-preference-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-start; gap: 24px; padding: 16px; }
+        .dsh-codex-preference-row + .dsh-codex-preference-row { border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-preference-row strong { color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
+        .dsh-codex-danger-button { border-color: var(--dsw-alias-state-error-primary) !important; background: var(--dsw-alias-state-error-primary) !important; color: white !important; }
+        .dsh-codex-danger-button:hover:not(:disabled) { filter: brightness(1.08); }
+        @media (max-width: 760px) {
+          .dsh-codex-workspace { grid-template-columns: 1fr; }
+          .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+          .dsh-codex-profile-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+          .dsh-codex-profile-detail { min-height: 440px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .dsh-codex-settings *, .dsh-codex-settings *::before, .dsh-codex-settings *::after { transition: none !important; }
+        }
+      `}</style>
+      <div>
+        <h2 id="openai-codex-settings-title" style={titleStyle}>{t('title')}</h2>
+        <p style={{ ...bodyStyle, marginTop: 6 }}>{t('intro')}</p>
+      </div>
+
+      <div className="dsh-codex-workspace">
+        <aside className="dsh-codex-profile-list" aria-label={t('accountList')}>
+          <div className="dsh-codex-list-heading">
+            <h3>{t('accounts')} <span>({profiles.length})</span></h3>
+            <Button
+              variant="outline"
+              size="sm"
+              icon={<IconPlusOutline16 />}
+              disabled={busy || status.status === 'signing-in'}
+              onClick={() => { void signIn() }}
+            >
+              {t('addAccount')}
+            </Button>
+          </div>
+          <div className="dsh-codex-profile-items">
+            {profiles.map(profile => (
+              <button
+                key={profile.id}
+                type="button"
+                className="dsh-codex-profile-item"
+                data-selected={profile.id === selectedProfile?.id}
+                aria-current={profile.id === selectedProfile?.id ? 'true' : undefined}
+                onClick={() => {
+                  setSelectedProfileId(profile.id)
+                  setPriorityError(undefined)
+                }}
+              >
+                <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} size={9} />
+                <span className="dsh-codex-profile-name">{profile.label}</span>
+                {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('priorityProfile')}</span> : null}
+              </button>
+            ))}
+          </div>
+        </aside>
+
+        {selectedProfile === undefined ? (
+          <div className="dsh-codex-empty">
+            <div>
+              <div className="dsh-codex-empty-status" role="status">
+                {status.status === 'ready' ? null : <StateDot state={status.status === 'error' ? 'error' : 'ongoing'} size={9} />}
+                <strong style={{ color: 'var(--dsw-alias-label-primary)' }}>{label}</strong>
+              </div>
+              {status.status === 'error'
+                ? <p style={{ ...errorStyle, marginTop: 6 }}>{status.message}</p>
+                : status.status === 'ready' ? <p style={{ ...bodyStyle, marginTop: 6 }}>{signInNotice ?? t('emptyAccountHint')}</p> : null}
+            </div>
+          </div>
+        ) : (
+          <section className="dsh-codex-profile-detail" aria-label={selectedProfile.label}>
+            <div className="dsh-codex-detail-heading">
+              <h3 className="dsh-codex-detail-title">{selectedProfile.label}</h3>
+              <span
+                className="dsh-codex-account-status"
+                data-state={selectedProfile.quotaError === undefined ? 'done' : 'error'}
+                role="status"
+                {...selectedProfile.quotaError === undefined ? {} : { title: selectedProfile.quotaError }}
+              >
+                <StateDot state={selectedProfile.quotaError === undefined ? 'done' : 'error'} size={9} />
+                {selectedProfile.quotaError === undefined ? t('accountConnected') : t('accountConnectionUnavailable')}
+              </span>
+            </div>
+            <div className="dsh-codex-default">
+              <Button
+                className="dsh-codex-default-action"
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => { void prioritizeProfile(selectedProfile.id) }}
+              >
+                {t('setPriorityProfile')}
+              </Button>
+              {priorityError === undefined ? null : <p role="alert">{priorityError}</p>}
+            </div>
+            <div className="dsh-codex-quota">
+              <UsageLimits
+                usage={selectedProfile.usage}
+                {...selectedProfile.quotaError === undefined ? {} : { quotaError: selectedProfile.quotaError }}
+                t={t}
+              />
+            </div>
+            <div className="dsh-codex-detail-actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setRenameLabel(selectedProfile.label)
+                  setDialogError(undefined)
+                  setDialog('rename')
+                }}
+              >
+                {t('renameProfile')}
+              </button>
+              <button type="button" className="danger" disabled={busy} onClick={() => { setDialog('remove') }}>
+                <IconTrashOutline16 />
+                {t('removeAccount')}
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+
+      <section className="dsh-codex-advanced" data-open={advancedOpen}>
+        <button type="button" className="dsh-codex-advanced-trigger" aria-expanded={advancedOpen} onClick={() => { setAdvancedOpen(open => !open) }}>
+          <IconGlobeOutline14 size={20} />
+          <span>
+            <strong>{t('advancedSettings')}</strong>
+            <small>{t('advancedSettingsSummary')}</small>
+          </span>
+          <IconChevronDownOutline14 className="dsh-codex-advanced-chevron" />
+        </button>
+        {advancedOpen ? (
+          <div className="dsh-codex-advanced-content">
+            <section className="dsh-codex-advanced-group" aria-labelledby="dsh-codex-network-title">
+              <div className="dsh-codex-group-heading">
+                <div>
+                  <h3 id="dsh-codex-network-title">{t('outboundNetwork')}</h3>
+                  <p>{t('outboundNetworkIntro')}</p>
+                </div>
+                <span style={badgeStyle}>{networkLabel}</span>
+              </div>
+              {network?.enabled === true ? (
+                <div className="dsh-codex-network-badges" aria-label={t('networkOptionsEnabled')}>
+                  {network.httpProxy ? <span style={badgeStyle}>{t('httpProxyConfigured')}</span> : null}
+                  {network.httpsProxy ? <span style={badgeStyle}>{t('httpsProxyConfigured')}</span> : null}
+                  {network.noProxy ? <span style={badgeStyle}>{t('noProxyConfigured')}</span> : null}
+                </div>
+              ) : null}
+              <p className="dsh-codex-restart">{t('networkRestartHint')}</p>
+            </section>
+
+            <section className="dsh-codex-advanced-group" aria-labelledby="dsh-codex-image-title">
+              <div className="dsh-codex-group-heading">
+                <div>
+                  <h3 id="dsh-codex-image-title">{t('imageTools')}</h3>
+                  <p>{t('imageToolsIntro')}</p>
+                </div>
+              </div>
+              <div className="dsh-codex-preference-list">
+                <div className="dsh-codex-preference-row">
+                  <div>
+                    <strong>{t('modifyReadImage')}</strong>
+                    <p>{t('modifyReadImageHint')}</p>
+                  </div>
+                  <PreferenceToggle
+                    label={t('modifyReadImage')}
+                    disabled={imageTools === undefined || imageToolsBusy}
+                    checked={imageTools?.modifyReadImage ?? false}
+                    onChange={(checked) => { void updateImageTool({ modifyReadImage: checked }) }}
+                  />
+                </div>
+              </div>
+              {imageToolsError === undefined ? null : <p style={{ ...errorStyle, marginTop: 10 }}>{imageToolsError}</p>}
+            </section>
+
+            <section className="dsh-codex-advanced-group" aria-labelledby="dsh-codex-conversation-title">
+              <div className="dsh-codex-group-heading">
+                <div>
+                  <h3 id="dsh-codex-conversation-title">{t('responseApi')}</h3>
+                  <p>{t('responseApiIntro')}</p>
+                </div>
+              </div>
+              <div className="dsh-codex-preference-list">
+                <div className="dsh-codex-preference-row">
+                  <div>
+                    <strong>{t('webSocketContextReuse')}</strong>
+                    <p>{t('webSocketContextReuseHint')}</p>
+                  </div>
+                  <PreferenceToggle
+                    label={t('webSocketContextReuse')}
+                    disabled={responseApi === undefined || responseApiBusy}
+                    checked={responseApi?.useWebSocketContextReuse ?? false}
+                    onChange={(checked) => { void updateResponseApi({ useWebSocketContextReuse: checked }) }}
+                  />
+                </div>
+                <div className="dsh-codex-preference-row">
+                  <div>
+                    <strong>{t('nativeCompaction')}</strong>
+                    <p>{t('nativeCompactionHint')}</p>
+                  </div>
+                  <PreferenceToggle
+                    label={t('nativeCompaction')}
+                    disabled={responseApi === undefined || responseApiBusy}
+                    checked={responseApi?.useNativeCompaction ?? false}
+                    onChange={(checked) => { void updateResponseApi({ useNativeCompaction: checked }) }}
+                  />
+                </div>
+              </div>
+              {responseApiError === undefined ? null : <p style={{ ...errorStyle, marginTop: 10 }}>{responseApiError}</p>}
+            </section>
+          </div>
+        ) : null}
+      </section>
+
+      <Modal
+        open={dialog === 'rename' && selectedProfile !== undefined}
+        onClose={closeDialog}
+        title={t('renameAccountTitle')}
+        closeLabel={t('closeDialog')}
+        description={t('renameAccountDescription')}
+        footer={(
+          <>
+            <Button variant="ghost" disabled={busy} onClick={closeDialog}>{t('cancel')}</Button>
+            <Button
+              variant="primary"
+              disabled={busy || selectedProfile === undefined || renameLabel.trim() === selectedProfile.label}
+              onClick={() => { if (selectedProfile !== undefined) void renameProfile(selectedProfile) }}
+            >
+              {busy ? t('working') : t('save')}
+            </Button>
+          </>
+        )}
+      >
+        <label className="dsh-codex-dialog-field">
+          <span>{t('profileLabel')}</span>
+          <Input
+            autoFocus
+            maxLength={80}
+            value={renameLabel}
+            aria-label={t('renameProfilePrompt')}
+            placeholder={t('profileLabelPlaceholder')}
+            onChange={event => {
+              setRenameLabel(event.target.value)
+              setDialogError(undefined)
+            }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && selectedProfile !== undefined && !busy) {
+                event.preventDefault()
+                void renameProfile(selectedProfile)
+              }
+            }}
+          />
+        </label>
+        {dialogError === undefined ? null : <p className="dsh-codex-dialog-error" role="alert">{dialogError}</p>}
+      </Modal>
+
+      <Modal
+        open={dialog === 'remove' && selectedProfile !== undefined}
+        onClose={closeDialog}
+        title={selectedProfile === undefined ? t('removeAccount') : t('removeAccountTitle', { label: selectedProfile.label })}
+        closeLabel={t('closeDialog')}
+        description={t('removeAccountDescription')}
+        footer={(
+          <>
+            <Button variant="ghost" disabled={busy} onClick={closeDialog}>{t('cancel')}</Button>
+            <Button
+              variant="primary"
+              className="dsh-codex-danger-button"
+              disabled={busy || selectedProfile === undefined}
+              onClick={() => { if (selectedProfile !== undefined) void removeProfile(selectedProfile) }}
+            >
+              {busy ? t('working') : t('confirmRemove')}
+            </Button>
+          </>
+        )}
+      />
+    </section>
+  )
+}

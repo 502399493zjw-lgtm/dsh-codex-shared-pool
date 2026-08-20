@@ -1,0 +1,12 @@
+- id: codex-shared-pool
+  name: dsh-codex-shared-pool
+  config:
+    team:
+      enabled: true
+      storage: postgres
+      databaseUrlRef: DSH_CODEX_SHARED_POOL_DATABASE_URL
+      credentialBroker: remote
+      credentialBrokerBaseUrl: http://127.0.0.1:8788/v1/dsh-team-credential-broker
+      credentialBrokerApiKeyRef: DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY
+      bootstrapTokenRef: DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN
+      maxInviteTtlMs: 604800000
