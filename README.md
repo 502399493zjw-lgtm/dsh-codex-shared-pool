@@ -41,18 +41,22 @@ v2 document. The array order is the global priority order. The older
 migration. OAuth access/refresh credentials never cross the browser boundary.
 
 The first profile is the default candidate. The request adapter checks the
-selected model's quota before each session request, keeps a healthy DSH Session
-bound to its profile, and moves that Session to the first eligible profile when
-the current profile is exhausted. The allocator understands the Codex and
-`gpt-5.3-codex-spark` quota buckets, treats a temporary quota-read failure as
-unknown/eligible, and clears cached Responses context when a Session changes
-profiles. Concurrent requests keep one committed binding per Session.
+selected model's quota before each session request. When that first profile is
+proven exhausted, the allocator chooses a profile with known remaining capacity,
+preferring the provider reset time that comes first, and promotes the selected
+profile to global priority before the provider attempt is recorded. The allocator
+understands the Codex and `gpt-5.3-codex-spark` quota buckets. A temporary quota-read
+failure remains a fail-open fallback only when no account has proven model capacity.
+It clears cached Responses context when a Session changes profiles, and concurrent
+requests keep one committed binding per Session.
 
-The Settings page exposes the same order with a compact **优先** marker and a
-simple priority button. Adding an account starts an isolated OAuth flow and
-does not overwrite the current profile. Rename, remove, cancel-login, and
-manual priority operations are available in Settings; Host routes and the TUI
-address the same exact profiles.
+The Settings page exposes the first profile with one compact **使用中** marker;
+other profiles offer a **使用此账号** action. A newly recorded provider attempt
+triggers a profile-state refresh, so an automatic fallback moves that single marker
+without waiting for the 60-second quota poll. Adding an account starts an isolated
+OAuth flow and does not overwrite the current profile. Rename, remove, cancel-login,
+and manual account-selection operations are available in Settings; Host routes and
+the TUI address the same exact profiles.
 
 ### TUI profile commands
 
@@ -591,6 +595,8 @@ The independent package carries the DSH bundle's complete Codex surface:
   available and a profile-usage fallback otherwise;
 - OpenAI Codex Responses streaming, WebSocket context reuse, native compaction,
   fast-mode preference, and model reasoning metadata;
+- bounded process-memory receipts for local request routing, with safe ordinal
+  account aliases, selection reasons, request status, and no request content;
 - standalone cached/indexed/live web search;
 - image generation/editing, vision attachment conversion, and the enhanced
   `read_image` URL path;
@@ -609,6 +615,7 @@ Important Host routes are all plugin-owned and same-origin:
 /plugins/dsh-openai-codex/profiles/remove
 /plugins/dsh-openai-codex/quota
 /plugins/dsh-openai-codex/network
+/plugins/dsh-openai-codex/routing-events
 /plugins/dsh-openai-codex/image-tools
 /plugins/dsh-openai-codex/response-api
 ```
@@ -690,8 +697,17 @@ renamed in place without changing the underlying OAuth credential. Use
 central Team Host. Existing
 contributions that show **需要重新登录** can be repaired with **重新授权**;
 the account's sharing protections remain unchanged. Existing
-sessions remain bound until the allocator detects an
-exhausted quota; new sessions follow the current profile order. Do not copy
+sessions are rescanned against the current global profile order on every local
+request. A readable 0% model bucket is skipped; a known-usable fallback with the
+earliest provider reset time becomes the new global priority. Unreadable quota
+remains fail-open only if no alternative has proven model capacity, and if every
+profile reports exhausted the existing binding (or the first profile for a new
+session) is retained for the provider to decide. The
+OpenAI Codex settings page keeps at most 100 metadata-only local request
+receipts in Host process memory and shows the newest three. Each receipt is one
+request attempt—not a token, cost, or exact subscription-consumption metric—and
+is lost when the Host restarts. Ordinal aliases reflect priority order at the
+time of admission; they are not account identities. Do not copy
 `auth.json`, refresh tokens, or `.openai-codex-profiles.json` into the package
 or browser bundle.
 

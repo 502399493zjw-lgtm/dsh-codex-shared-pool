@@ -61,7 +61,8 @@ describe('unified Codex quota footer', () => {
     expect([...blue].map(node => node.textContent)).toEqual(['73%'])
     expect(view.container.querySelectorAll(`.${css.separator}`)).toHaveLength(2)
     const open = screen.getByRole('button', { name: '打开' })
-    expect(rows[0]?.parentElement).toBe(open.parentElement)
+    expect(view.container.querySelector(`.${css.accountLine}`)?.parentElement).toBe(open.parentElement)
+    expect(rows[0]?.parentElement).toBe(view.container.firstElementChild)
     expect(rows[1]?.parentElement).toBe(view.container.firstElementChild)
   })
 

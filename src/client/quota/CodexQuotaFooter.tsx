@@ -75,24 +75,24 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
 
   return (
     <section className={css.root} aria-label={t('aria')}>
-      <div className={css.accountLine} aria-live="polite">
-        <span className={css.accountLabel}>{t('account')}</span>
-        <span className={css.account}>{snapshot.currentAccountName}</span>
-      </div>
       <div className={css.primary}>
-        <div className={css.current} aria-live="polite">
-          <span>{t('remaining')} </span>
-          <span className={css.quota}>{snapshot.currentRemainingPercent}%</span>
-          <span className={css.separator} aria-hidden> · </span>
-          <span>
-            {snapshot.currentResetsAt === null
-              ? t('resetUnknown')
-              : t('resetAt', { time: formatCodexResetTime(snapshot.currentResetsAt) })}
-          </span>
+        <div className={css.accountLine} aria-live="polite">
+          <span className={css.accountLabel}>{t('account')}</span>
+          <span className={css.account}>{snapshot.currentAccountName}</span>
         </div>
         <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
           <IconChevronRightOutline14 size={16} />
         </button>
+      </div>
+      <div className={css.current} aria-live="polite">
+        <span>{t('remaining')} </span>
+        <span className={css.quota}>{snapshot.currentRemainingPercent}%</span>
+        <span className={css.separator} aria-hidden> · </span>
+        <span>
+          {snapshot.currentResetsAt === null
+            ? t('resetUnknown')
+            : t('resetAt', { time: formatCodexResetTime(snapshot.currentResetsAt) })}
+        </span>
       </div>
       <div className={css.pool}>
         {t('pool')} {snapshot.poolAccountCount} {t('accounts')}

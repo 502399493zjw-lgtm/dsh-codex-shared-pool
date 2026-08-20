@@ -9,6 +9,7 @@ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { allocateOpenAICodexSessionProfile } from './account-allocation.ts'
+import type { LocalRoutingEventLedger } from './local-routing-events.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
@@ -97,6 +98,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
     private readonly responses: OpenAICodexResponseRuntime,
     private readonly credentials: OpenAICodexCredentialStore,
     private readonly allocateLocalSession: boolean,
+    private readonly routingEvents?: LocalRoutingEventLedger,
   ) {
     super(options)
   }
@@ -124,8 +126,9 @@ class OpenAICodexAdapter extends PiAiAdapter {
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    let routingEventId: string | undefined
     if (this.allocateLocalSession && options.sessionId !== undefined) {
-      await allocateOpenAICodexSessionProfile(
+      const allocation = await allocateOpenAICodexSessionProfile(
         this.credentials,
         String(options.sessionId),
         options.model,
@@ -135,13 +138,37 @@ class OpenAICodexAdapter extends PiAiAdapter {
           this.responses.resetSessionContext(sessionId)
         },
       )
+      if (allocation !== undefined && this.routingEvents !== undefined) {
+        routingEventId = this.routingEvents.begin({
+          allocation,
+          profileOrder: (await this.credentials.listProfiles()).map(profile => profile.id),
+          model: options.model,
+        })
+      }
     }
     const release = options.purpose === 'compaction'
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
       : undefined
+    let terminalStatus: 'succeeded' | 'failed' | 'cancelled' | undefined
     try {
-      for await (const chunk of super.stream(options)) yield chunk
+      for await (const chunk of super.stream(options)) {
+        if (chunk.type === 'finish') {
+          terminalStatus = chunk.reason.kind === 'aborted'
+            ? 'cancelled'
+            : chunk.reason.kind === 'error' ? 'failed' : 'succeeded'
+        }
+        yield chunk
+      }
+    } catch (error: unknown) {
+      terminalStatus = options.signal?.aborted === true ? 'cancelled' : 'failed'
+      throw error
     } finally {
+      if (routingEventId !== undefined) {
+        this.routingEvents?.settle(
+          routingEventId,
+          terminalStatus ?? (options.signal?.aborted === true ? 'cancelled' : 'succeeded'),
+        )
+      }
       release?.()
     }
   }
@@ -163,6 +190,7 @@ export function createOpenAICodexAdapter(
   resolveAttachments: () => AttachmentStore | undefined,
   responsePreferences: () => ResponseApiPreferences,
   teamClient?: OpenAICodexTeamClientAdapterOptions,
+  routingEvents?: LocalRoutingEventLedger,
 ): PiAiAdapter {
   const localProvider = openaiCodexProvider()
   const provider = teamClient === undefined
@@ -199,5 +227,5 @@ export function createOpenAICodexAdapter(
     profiles: () => profiles,
     resolveApiKey,
     resolveAttachments,
-  }, responses, credentials, teamClient === undefined)
+  }, responses, credentials, teamClient === undefined, routingEvents)
 }

@@ -24,6 +24,7 @@ import { registerOpenAICodexAuthRoutes } from './auth-routes.ts'
 import { installReadImageEnhancement } from './read-image-enhancement.ts'
 import { imagegenTool } from './imagegen.ts'
 import { OutboundNetwork } from './network.ts'
+import { LocalRoutingEventLedger } from './local-routing-events.ts'
 import {
   installOpenAICodexSearchEvent,
   recordOpenAICodexSearchRequest,
@@ -370,6 +371,7 @@ export function apply(ctx: Context, config: Config): void {
   })
   const credentials = service.credentials
   const imageTools = service.policy
+  const routingEvents = new LocalRoutingEventLedger()
   const teamClient = config.teamClient?.enabled === true
     ? {
         baseUrl: resolveTeamClientBaseUrl(config.teamClient.baseUrl),
@@ -390,6 +392,7 @@ export function apply(ctx: Context, config: Config): void {
       () => ctx.get('attachments'),
       () => imageTools.responseApiSnapshot(),
       teamClient,
+      routingEvents,
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({
@@ -402,7 +405,7 @@ export function apply(ctx: Context, config: Config): void {
     recordRequest: (request) => { recordOpenAICodexSearchRequest(ctx, request) },
   }))
   ctx.inject(['webServer'], (webCtx) => {
-    registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network)
+    registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network, routingEvents)
   })
   ctx.inject(['webServer', 'credentials'], (teamClientCtx) => {
     registerTeamManagementRoutes(teamClientCtx, config.teamClient ?? {}, teamClientCtx.credentials)

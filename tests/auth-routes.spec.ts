@@ -5,17 +5,21 @@ import { describe, expect, it } from 'vitest'
 import {
   OPENAI_CODEX_NETWORK_STATUS_PATH,
   OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH,
+  OPENAI_CODEX_ROUTING_EVENTS_PATH,
   registerOpenAICodexAuthRoutes,
 } from '../src/auth-routes.ts'
+import { LocalRoutingEventLedger } from '../src/local-routing-events.ts'
 import { OutboundNetwork } from '../src/network.ts'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
 import type { ImageToolPolicy } from '../src/tool-policy.ts'
 
 function setupRoutes(network: OutboundNetwork): {
   routes: Map<string, WebRoute>
+  routingEvents: LocalRoutingEventLedger
   dispose: () => Promise<void>
 } {
   const routes = new Map<string, WebRoute>()
+  const routingEvents = new LocalRoutingEventLedger({ id: () => 'event-1', now: () => 1_000 })
   let cleanup: (() => void | Promise<void>) | undefined
   const context = {
     webServer: {
@@ -34,9 +38,11 @@ function setupRoutes(network: OutboundNetwork): {
     {} as OpenAICodexCredentialStore,
     {} as ImageToolPolicy,
     network,
+    routingEvents,
   )
   return {
     routes,
+    routingEvents,
     dispose: async () => { await cleanup?.() },
   }
 }
@@ -96,6 +102,45 @@ describe('OpenAI Codex Web routes', () => {
 
     expect(result.status).toBe(200)
     expect(JSON.parse(result.body)).toEqual({ cancelled: false })
+    await dispose()
+  })
+
+  it('returns only bounded Browser-safe local routing receipts over GET', async () => {
+    const { routes, routingEvents, dispose } = setupRoutes(new OutboundNetwork({}))
+    const id = routingEvents.begin({
+      allocation: {
+        profileId: 'raw-profile-b',
+        previousProfileId: 'raw-profile-a',
+        reason: 'quota_fallback',
+      },
+      profileOrder: ['raw-profile-a', 'raw-profile-b'],
+      model: 'gpt-5.6-sol',
+    })
+    routingEvents.settle(id, 'succeeded')
+
+    const get = await request(routes.get(OPENAI_CODEX_ROUTING_EVENTS_PATH), 'GET')
+    const post = await request(routes.get(OPENAI_CODEX_ROUTING_EVENTS_PATH), 'POST')
+
+    expect(get.status).toBe(200)
+    expect(JSON.parse(get.body)).toEqual({
+      events: [{
+        id: 'event-1',
+        profileAlias: 'B',
+        previousProfileAlias: 'A',
+        model: 'gpt-5.6-sol',
+        reason: 'quota_fallback',
+        unit: 'request',
+        status: 'succeeded',
+        startedAt: 1_000,
+        finishedAt: 1_000,
+      }],
+    })
+    expect(get.body).not.toContain('raw-profile')
+    expect(get.body).not.toContain('prompt')
+    expect(get.body).not.toContain('response')
+    expect(get.body).not.toContain('token')
+    expect(get.body).not.toContain('error')
+    expect(post.status).toBe(405)
     await dispose()
   })
 })
