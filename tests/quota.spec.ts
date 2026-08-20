@@ -12,8 +12,6 @@ import {
   readOpenAICodexAccountName,
 } from '../src/quota/account-name.ts'
 import { projectCodexAccountQuota } from '../src/quota/wire.ts'
-import { parseOpenAICodexUsage } from '../src/usage.ts'
-import { projectTeamQuota } from '../src/team/capacity.ts'
 
 const savedPool = process.env.DSH_CODEX_ACCOUNT_HOMES
 const savedHome = process.env.CODEX_HOME
@@ -226,111 +224,6 @@ describe('Codex app-server projection', () => {
       accountName: 'codex@example.com',
       remainingPercent: 100,
       resetsAt: 12_000,
-    })
-  })
-})
-
-describe('Codex Team quota projection', () => {
-  it('preserves absolute and relative provider reset evidence as epoch milliseconds', () => {
-    const observedAt = 1_700_000_000_000
-    const usage = parseOpenAICodexUsage({
-      rate_limit: {
-        primary_window: {
-          used_percent: 25,
-          limit_window_seconds: 18_000,
-          reset_after_seconds: 900,
-        },
-        secondary_window: {
-          used_percent: 40,
-          limit_window_seconds: 604_800,
-          reset_at: 1_700_100_000,
-        },
-      },
-    }, observedAt)
-
-    expect(usage.rateLimits[0]?.windows).toEqual([
-      { remainingPercent: 75, windowSeconds: 18_000, resetsAt: observedAt + 900_000 },
-      { remainingPercent: 60, windowSeconds: 604_800, resetsAt: 1_700_100_000_000 },
-    ])
-  })
-
-  it('uses the most conservative model bucket and individual limit without inventing a reset', () => {
-    const usage = parseOpenAICodexUsage({
-      rate_limit: {
-        primary_window: { used_percent: 30, limit_window_seconds: 18_000 },
-      },
-      additional_rate_limits: [{
-        metered_feature: 'codex_spark',
-        rate_limit: {
-          primary_window: {
-            used_percent: 55,
-            limit_window_seconds: 18_000,
-            reset_after_seconds: 120,
-          },
-        },
-      }],
-      spend_control: {
-        individual_limit: {
-          limit: '100',
-          used: '80',
-          remaining: '20',
-          remaining_percent: 20,
-        },
-      },
-    }, 10_000)
-
-    expect(projectTeamQuota(usage, 'gpt-5.3-codex-spark')).toEqual({
-      healthy: true,
-      remainingPercent: 20,
-      resetAt: 130_000,
-    })
-    expect(projectTeamQuota(usage, 'gpt-5-codex')).toEqual({
-      healthy: true,
-      remainingPercent: 20,
-    })
-  })
-
-  it('anchors the local request cap to the longest provider window instead of the earliest reset', () => {
-    const usage = parseOpenAICodexUsage({
-      rate_limit: {
-        primary_window: {
-          used_percent: 90,
-          limit_window_seconds: 18_000,
-          reset_at: 1_700_010_000,
-        },
-        secondary_window: {
-          used_percent: 20,
-          limit_window_seconds: 604_800,
-          reset_at: 1_700_100_000,
-        },
-      },
-    })
-
-    expect(projectTeamQuota(usage, 'gpt-5-codex')).toEqual({
-      healthy: true,
-      remainingPercent: 10,
-      resetAt: 1_700_100_000_000,
-    })
-  })
-
-  it('fails closed for a request cap when the longest provider window has no reset evidence', () => {
-    const usage = parseOpenAICodexUsage({
-      rate_limit: {
-        primary_window: {
-          used_percent: 10,
-          limit_window_seconds: 18_000,
-          reset_at: 1_700_010_000,
-        },
-        secondary_window: {
-          used_percent: 20,
-          limit_window_seconds: 604_800,
-        },
-      },
-    })
-
-    expect(projectTeamQuota(usage, 'gpt-5-codex')).toEqual({
-      healthy: true,
-      remainingPercent: 80,
     })
   })
 })

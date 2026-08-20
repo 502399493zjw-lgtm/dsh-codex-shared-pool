@@ -63,7 +63,6 @@ describe('local Codex adapter routing receipts', () => {
       store,
       () => undefined,
       () => ({ useFastMode: false, useNativeCompaction: false, useWebSocketContextReuse: false }),
-      undefined,
       ledger,
     )
 

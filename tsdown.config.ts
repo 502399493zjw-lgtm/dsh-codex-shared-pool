@@ -61,8 +61,6 @@ const host: UserConfig = {
     index: 'src/index.ts',
     invariant: 'src/invariant.ts',
     bin: 'src/bin.ts',
-    'team-broker-bin': 'src/team-broker-bin.ts',
-    'team-migrate-bin': 'src/team-migrate-bin.ts',
   },
   outDir: 'lib',
   format: 'esm',

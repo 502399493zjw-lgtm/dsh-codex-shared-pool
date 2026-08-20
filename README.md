@@ -2,7 +2,7 @@
 
 面向 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 的社区 Codex 插件：把多个 ChatGPT/Codex 订阅账号放进同一个本地账号池，并在请求前根据模型额度自动选择可用账号。
 
-当前版本优先收口“一期”的本地多账号体验。好友 Team 共享能力已经有实验性实现，但不作为本期稳定能力承诺。
+当前版本收口“一期”的本地多账号体验。
 
 ## 它解决什么问题
 
@@ -86,12 +86,6 @@ dsh plugin --profile web add ./dsh-codex-shared-pool-0.1.0-alpha.0.tgz
 - 账号别名和最近请求记录不包含原始 profile id、prompt、response 或 token。
 - 本项目通过公开 Cordis/DSH 扩展点安装，不修改或 fork DSH 核心。
 
-## Team 共享：下一阶段
-
-仓库中包含邀请制 Team、成员独立 API key、贡献账号保护、metadata-only 审计、PostgreSQL 存储以及独立 Credential Broker 的实验性实现。一台中心服务器可以服务多个相互隔离的 Team，不要求每个 Team 单独部署服务器。
-
-这部分仍按“第二阶段”继续验收和收口。当前 README 不把它描述为已经完成生产验证的稳定能力，也不建议直接暴露到公网。自托管入口位于 [`deploy/self-hosted/`](deploy/self-hosted/)。
-
 ## 开发与验证
 
 ```bash
@@ -114,7 +108,6 @@ pnpm run verify:package
 - 额度读取暂时失败时会 fail-open；只有明确读取到模型额度耗尽才会在请求前跳过账号。
 - 本地最近请求流水是进程内观察数据，不是持久化账本。
 - 更换 DSH/Cordis 版本前需要重新执行 stock 安装验证。
-- Team 能力目前属于下一阶段，不包含托管公网服务所需的完整 KMS、WAF、备份与运维体系。
 
 ## 许可证
 

@@ -14,7 +14,7 @@
 - The Browser receives JSON-safe bounded metadata only; aliases are ordinal `账号 A`, `账号 B`, and so on.
 - The unit is exactly `request`; do not represent it as token, cost, or exact subscription consumption.
 - Keep at most 100 events in memory and return at most 50 newest events.
-- Do not change Team Gateway semantics or reuse local OAuth credentials as Team contributions.
+- Keep the feature local-only; OAuth credentials remain inside the current Host profile.
 - Verify only against DSH `0.1.0-rc.8` and Cordis `4.0.1`.
 
 ---
@@ -131,7 +131,7 @@ State that local events are process-memory metadata, one settled event per DSH r
 
 - [x] **Step 2: Run the complete relevant suite**
 
-Run the allocator, route, Browser, Team routing/gateway/usage, and package contract suites. Expected: PASS.
+Run the allocator, route, Browser, and package contract suites. Expected: PASS.
 
 - [x] **Step 3: Build and verify the package**
 
@@ -153,4 +153,4 @@ Show the provider-reported 0% first candidate, one bounded request with all cont
 
 - [x] **Step 7: Report exact Git and evidence state**
 
-Report files changed, commands actually run, real versus controlled claims, cleanup, remaining Team configuration gap, and `git status --short --branch`. Do not commit, push, publish, or create a remote.
+Report files changed, commands actually run, real versus controlled claims, cleanup, and `git status --short --branch`. Do not commit, push, publish, or create a remote.

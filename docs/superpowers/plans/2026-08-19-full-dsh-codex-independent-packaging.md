@@ -83,8 +83,8 @@ and TUI commands.
 - [x] Standalone package builds and packs without a monorepo workspace
       dependency; DSH core remains outside this repository and was not edited.
       Evidence: `tests/project.spec.ts` and `tests/loader-composition.spec.ts`
-      pass; the complete 2026-08-20 gate passed 51 test files (352 tests, plus
-      the separately gated PostgreSQL suite), build, package verification, and
+      pass; the complete 2026-08-20 gate passed 51 test files (352 tests),
+      build, package verification, and
       packed-tarball inspection. That tarball installed into a fresh stock DSH
       `0.1.0-rc.7` Web profile, composed the `codex-shared-pool` Loader row,
       started successfully, and passed the root, auth-status, profiles, and

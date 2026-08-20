@@ -10,20 +10,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: dsh_test_password
-          POSTGRES_DB: dsh_team_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dsh_team_test"
-          --health-interval 1s
-          --health-timeout 5s
-          --health-retries 30
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -38,33 +24,8 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-      - name: Run real PostgreSQL concurrency test
-        run: pnpm run test:postgres
-        env:
-          DSH_TEAM_POSTGRES_TEST_URL: postgres://postgres:dsh_test_password@127.0.0.1:5432/dsh_team_test
-
       - name: Build package
         run: pnpm run build
 
       - name: Verify package contents
         run: pnpm run verify:package
-
-      - name: Initialize self-hosted smoke secrets
-        run: node deploy/self-hosted/init-secrets.mjs
-
-      - name: Build and start the self-hosted stack
-        run: docker compose -f deploy/self-hosted/compose.yml up --build --wait --wait-timeout 240
-
-      - name: Prove multi-Team invites, member keys, and data isolation
-        run: >-
-          docker compose -f deploy/self-hosted/compose.yml exec -T team-host
-          node /opt/dsh/deploy/host/smoke-multi-team.mjs --confirm-test-data
-
-      - name: Stop the self-hosted stack
-        if: always()
-        run: >-
-          DSH_TEAM_POSTGRES_ENV_FILE=/dev/null
-          DSH_TEAM_MIGRATION_ENV_FILE=/dev/null
-          DSH_TEAM_HOST_ENV_FILE=/dev/null
-          DSH_TEAM_BROKER_ENV_FILE=/dev/null
-          docker compose -f deploy/self-hosted/compose.yml down --volumes --remove-orphans

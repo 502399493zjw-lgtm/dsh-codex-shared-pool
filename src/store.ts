@@ -54,8 +54,8 @@ export interface CodexProfileSummary {
 }
 
 /**
- * Host-only profile operations required by isolated OAuth contribution flows.
- * Implementations may use owner-only files or an encrypted shared backend;
+ * Host-only profile operations required by isolated OAuth authorization flows.
+ * Implementations use Host-owned storage;
  * callers receive credentials only through the pi-ai `CredentialStore` API.
  */
 export interface OpenAICodexProfileStore extends CredentialStore {

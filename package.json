@@ -11,9 +11,7 @@
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "bin": {
-    "dsh-openai-codex": "lib/bin.js",
-    "dsh-codex-team-broker": "lib/team-broker-bin.js",
-    "dsh-codex-team-migrate": "lib/team-migrate-bin.js"
+    "dsh-openai-codex": "lib/bin.js"
   },
   "exports": {
     ".": {
@@ -39,27 +37,12 @@
     "lib/types/**/*.d.ts.map",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "deploy/broker/Dockerfile",
-    "deploy/broker/Dockerfile.dockerignore",
-    "deploy/edge/Dockerfile",
-    "deploy/edge/server.mjs",
-    "deploy/host/bootstrap.mjs",
-    "deploy/host/Dockerfile",
-    "deploy/host/Dockerfile.dockerignore",
-    "deploy/host/smoke-live-sharing.mjs",
-    "deploy/host/smoke-multi-team.mjs",
-    "deploy/host/team-host.patch.yml",
-    "deploy/postgres/init-runtime-logins.sh",
-    "deploy/postgres/runtime-roles.sql",
-    "deploy/self-hosted/compose.yml",
-    "deploy/self-hosted/init-secrets.mjs"
+    "LICENSE"
   ],
   "dependencies": {
     "@deepseek-ai/dsh-sdk-protocol": "0.1.0-rc.8",
     "@deepseek-ai/schemastery": "^3.18.1",
     "lucide-react": "^0.468.0",
-    "pg": "^8.23.0",
     "undici": "^7.29.0"
   },
   "publishConfig": {
@@ -87,10 +70,8 @@
     "build": "node scripts/clean-build.mjs && tsc -p tsconfig.json && tsdown",
     "prepare": "pnpm run build",
     "prepack": "pnpm run build && pnpm run verify:package",
-    "smoke:team-web": "node scripts/smoke-team-web.mjs --confirm-test-data",
     "smoke:web": "node scripts/smoke-web.mjs",
     "test": "vitest run",
-    "test:postgres": "node scripts/run-postgres-integration.mjs",
     "verify:package": "node scripts/verify-package.mjs"
   },
   "peerDependencies": {
@@ -167,12 +148,10 @@
     "@testing-library/react": "^16.3.2",
     "@tsdown/css": "^0.22.2",
     "@types/node": "^22.20.0",
-    "@types/pg": "^8.23.1",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.0",
     "lucide-react": "^0.468.0",
     "jsdom": "^29.1.1",
-    "pg-mem": "^3.0.14",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tsdown": "^0.22.2",

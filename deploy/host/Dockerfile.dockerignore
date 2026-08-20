@@ -1,7 +1,0 @@
-.git
-.github
-node_modules
-lib
-coverage
-*.tgz
-deploy/self-hosted/.secrets
