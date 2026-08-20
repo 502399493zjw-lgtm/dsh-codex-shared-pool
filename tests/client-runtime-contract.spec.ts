@@ -5,7 +5,7 @@ import {
 } from '../src/client/runtime-contract.ts'
 
 describe('published DSH browser runtime contract', () => {
-  it('does not hard-wait on the optional settings navigation service', () => {
+  it('does not hard-wait on the optional Settings navigation service', () => {
     expect(CLIENT_INJECT).toEqual(['slots', 'locale', 'sessions'])
     expect(QUOTA_CLIENT_INJECT).toEqual(['slots', 'locale'])
   })

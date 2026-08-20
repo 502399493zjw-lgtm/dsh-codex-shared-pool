@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -9,7 +10,9 @@ import { apply, inject, NS } from '../src/client/quota/index.ts'
 import {
   CodexQuotaFooter,
   type CodexQuotaFooterFace,
+  type CodexQuotaFooterProps,
 } from '../src/client/quota/CodexQuotaFooter.tsx'
+import { zh, type CodexQuotaLocaleKey } from '../src/client/quota/locales.ts'
 
 const SNAPSHOT = {
   currentAccountName: '经纬 钟',
@@ -20,10 +23,49 @@ const SNAPSHOT = {
   refreshedAt: 1,
 } as const
 
+const t = ((key: CodexQuotaLocaleKey, params?: Record<string, unknown>): string => {
+  let value: string = zh[key]
+  for (const [name, replacement] of Object.entries(params ?? {})) {
+    value = value.replace(`{${name}}`, String(replacement))
+  }
+  return value
+}) as CodexQuotaFooterProps['t']
+
 interface RegisteredEntry {
   component: unknown
   options: Record<string, unknown>
   inject: () => CodexQuotaFooterFace
+}
+
+function installStockSettingsShell(): {
+  triggerClick: ReturnType<typeof vi.fn>
+  sectionClick: ReturnType<typeof vi.fn>
+} {
+  const trigger = document.createElement('button')
+  trigger.type = 'button'
+  trigger.setAttribute('aria-haspopup', 'dialog')
+  trigger.setAttribute('aria-expanded', 'false')
+  const sectionClick = vi.fn()
+  const triggerClick = vi.fn(() => {
+    trigger.setAttribute('aria-expanded', 'true')
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-modal', 'true')
+    const nav = document.createElement('nav')
+    const general = document.createElement('button')
+    general.type = 'button'
+    general.textContent = 'General'
+    const codex = document.createElement('button')
+    codex.type = 'button'
+    codex.textContent = 'OpenAI Codex'
+    codex.addEventListener('click', sectionClick)
+    nav.append(general, codex)
+    dialog.append(nav)
+    document.body.append(dialog)
+  })
+  trigger.addEventListener('click', triggerClick)
+  document.body.append(trigger)
+  return { triggerClick, sectionClick }
 }
 
 function bench(withSettingsNavigation = true): {
@@ -56,7 +98,8 @@ function bench(withSettingsNavigation = true): {
     locale: { register: localeRegister },
     slots,
     get(name: string) {
-      return name === 'settingsNavigation' && withSettingsNavigation
+      return name === 'settingsNavigation'
+        && withSettingsNavigation
         ? { openSection }
         : undefined
     },
@@ -77,7 +120,11 @@ function bench(withSettingsNavigation = true): {
   }
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+  document.body.replaceChildren()
+})
 
 describe('unified Codex quota browser contribution', () => {
   it('registers one localized sidebar contribution and opens the shared Codex settings page', async () => {
@@ -106,13 +153,47 @@ describe('unified Codex quota browser contribution', () => {
     expect(b.entry()).toBeUndefined()
   })
 
-  it('keeps Settings navigation optional and rejects an unsuccessful quota response', async () => {
+  it.each([
+    [
+      'zero-account',
+      {
+        ...SNAPSHOT,
+        currentAccountName: null,
+        currentRemainingPercent: null,
+        poolAccountCount: 0,
+        poolRemainingPercent: null,
+      },
+      '账号池 0 个账号',
+    ],
+    ['populated-account', SNAPSHOT, '经纬 钟'],
+  ])('renders an Open action that reaches Codex Settings in the %s state', async (
+    _state,
+    snapshot,
+    expectedText,
+  ) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot), { status: 200 })))
+    const shell = installStockSettingsShell()
+    const b = bench(false)
+    apply(b.ctx as never)
+    const injected = b.entry()?.inject()
+    if (injected === undefined) throw new Error('quota contribution should be registered')
+
+    render(<CodexQuotaFooter wide read={injected.read} openSettings={injected.openSettings} t={t} />)
+    expect(await screen.findByText(expectedText)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '打开' }))
+
+    expect(shell.triggerClick).toHaveBeenCalledOnce()
+    expect(shell.sectionClick).toHaveBeenCalledOnce()
+    await b.dispose()
+  })
+
+  it('keeps Settings navigation optional while exposing the stock-shell action on request errors', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
     const b = bench(false)
     apply(b.ctx as never)
 
     const injected = b.entry()?.inject()
-    expect(injected?.openSettings).toBeUndefined()
+    expect(injected?.openSettings).toEqual(expect.any(Function))
     await expect(injected?.read()).rejects.toThrow('HTTP 503')
     await b.dispose()
   })
