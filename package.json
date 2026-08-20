@@ -39,17 +39,13 @@
   },
   "files": [
     "lib/*.js",
-    "lib/*.js.map",
     "lib/style.css",
     "lib/types/**/*.d.ts",
-    "lib/types/**/*.d.ts.map",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "dependencies": {
-    "@deepseek-ai/dsh-sdk-protocol": "0.1.0-rc.8",
-    "@deepseek-ai/schemastery": "^3.18.1",
     "lucide-react": "^0.468.0",
     "undici": "^7.29.0"
   },
@@ -84,6 +80,8 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/dsh-sdk-protocol": "0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
     "@deepseek-ai/dsh-api-remotes": "0.1.0-rc.8",
     "@deepseek-ai/dsh-atomic-write": "0.1.0-rc.8",
@@ -147,11 +145,13 @@
     "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
     "@deepseek-ai/dsh-llm-pi-ai": "0.1.0-rc.8",
     "@deepseek-ai/dsh-session": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-sdk-protocol": "0.1.0-rc.8",
     "@deepseek-ai/dsh-settings": "0.1.0-rc.8",
     "@deepseek-ai/dsh-subprocess": "0.1.0-rc.8",
     "@deepseek-ai/dsh-timeout": "0.1.0-rc.8",
     "@deepseek-ai/dsh-tools": "0.1.0-rc.8",
     "@deepseek-ai/dsh-web": "0.1.0-rc.8",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@earendil-works/pi-ai": "^0.82.1",
     "@testing-library/react": "^16.3.2",
     "@tsdown/css": "^0.22.2",

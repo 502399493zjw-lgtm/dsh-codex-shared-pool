@@ -9,7 +9,13 @@ assert.equal(packageJson.exports?.['./client']?.default, './lib/client.js')
 assert.equal(packageJson.exports?.['./invariant']?.default, './lib/invariant.js')
 assert.deepEqual(packageJson.bin, { 'dsh-openai-codex': 'lib/bin.js' })
 assert.equal(packageJson.dsh?.client?.platform, 'web')
-assert.equal(packageJson.dependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.0-rc.8')
+assert.equal(packageJson.dependencies?.['@deepseek-ai/dsh-sdk-protocol'], undefined)
+assert.equal(packageJson.dependencies?.['@deepseek-ai/schemastery'], undefined)
+assert.equal(packageJson.peerDependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.0-rc.8')
+assert.equal(packageJson.peerDependencies?.['@deepseek-ai/schemastery'], '^3.18.1')
+assert.equal(packageJson.devDependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.0-rc.8')
+assert.equal(packageJson.devDependencies?.['@deepseek-ai/schemastery'], '^3.18.1')
+assert.equal(packageJson.files?.some(path => path.endsWith('.map')), false)
 assert.equal(packageJson.dependencies?.pg, undefined)
 assert.deepEqual(
   packageJson.files?.filter(path => path.startsWith('deploy/')),
@@ -21,6 +27,7 @@ assert.doesNotMatch(packageJson.files?.join('\n') ?? '', /\.secrets|\.env|deploy
 const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 assert.match(patch, /id:\s*codex-shared-pool/u)
 assert.match(patch, /name:\s*dsh-codex-shared-pool/u)
+assert.doesNotMatch(patch, /agent-default-model|provider:\s*openai-codex|searchProvider:/u)
 
 const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
 assert.match(client, /^window\.__ModuleLoader__\.load\(\{/u)
@@ -39,6 +46,11 @@ const hostChunks = await Promise.all(
 )
 const hostBundle = [host, ...hostChunks].join('\n')
 assert.match(hostBundle, /plugins\/dsh-openai-codex\/(?:auth\/status|quota)/u)
+assert.doesNotMatch(
+  hostBundle,
+  /from\s+['"]@deepseek-ai\/(?:dsh-sdk-protocol|schemastery)['"]/u,
+  'peer-only runtime helpers must be bundled because stock DSH does not install them into the plugin profile',
+)
 assert.doesNotMatch(
   hostBundle,
   /dsh-codex-team|TEAM_(?:BOOTSTRAP|OVERVIEW|JOIN|RESPONSES)|Team(?:Service|Client|Gateway|CredentialBroker)|team-client-v1/u,

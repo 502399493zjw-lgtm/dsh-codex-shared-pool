@@ -17,6 +17,7 @@ describe('standalone dsh-codex-shared-pool project boundary', () => {
       dsh?: { bundle?: { patch?: string }; client?: { platform?: string } }
     }
     const patch = readFileSync(`${directory}/cordis.patch.yml`, 'utf8')
+    const buildConfig = readFileSync(`${directory}/tsdown.config.ts`, 'utf8')
     const dependencySpecs = Object.values({
       ...manifest.dependencies,
       ...manifest.peerDependencies,
@@ -35,11 +36,19 @@ describe('standalone dsh-codex-shared-pool project boundary', () => {
       client: { platform: 'web' },
     })
     expect(dependencySpecs.every(specifier => !specifier.startsWith('workspace:'))).toBe(true)
+    expect(Object.keys(manifest.dependencies ?? {}))
+      .not.toEqual(expect.arrayContaining([expect.stringMatching(/^@deepseek-ai\//u)]))
+    expect(manifest.peerDependencies).toMatchObject({
+      '@deepseek-ai/dsh-sdk-protocol': '0.1.0-rc.8',
+      '@deepseek-ai/schemastery': '^3.18.1',
+    })
+    expect(buildConfig).toMatch(/HOST_BUNDLED_MODULES[\s\S]*@deepseek-ai\/dsh-sdk-protocol/u)
+    expect(buildConfig).toMatch(/HOST_BUNDLED_MODULES[\s\S]*@deepseek-ai\/schemastery/u)
+    expect(buildConfig).toMatch(/alwaysBundle:\s*\[\.\.\.HOST_BUNDLED_MODULES\]/u)
 
     expect(patch.match(/id:\s*codex-shared-pool/gu)).toHaveLength(1)
     expect(patch).toMatch(/id:\s*codex-shared-pool\s+name:\s*dsh-codex-shared-pool/u)
-    expect(patch).toMatch(/provider:\s*openai-codex/u)
-    expect(patch).toMatch(/searchProvider:\s*openai-codex/u)
+    expect(patch).not.toMatch(/agent-default-model|provider:\s*openai-codex|searchProvider:/u)
     expect(patch).not.toMatch(/@deepseek-ai\/dsh-codex_shared_pool|dsh-(?:host|client-ui)-codex-quota/u)
   })
 })
