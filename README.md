@@ -73,6 +73,12 @@ dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.1
 
 点击“添加账号”会发起一条独立 OAuth 授权链。授权等待期间可以手动取消；超时或 Host 重启后不会残留永久等待状态。
 
+安装 patch 只挂载插件，不会把现有默认模型或搜索 Provider 改成
+`openai-codex`。添加账号后，请在 DSH 中按需选择 OpenAI Codex Provider、模型，
+并仅在希望搜索也走 Codex 时手动选择对应 Search Provider。
+
+官方 SDK protocol 与 schema 包仍按社区目录规则声明为 peer；Host 构建会内联它们实际使用的轻量运行时代码，避免 stock DSH profile 还要重复安装官方包。
+
 ## TUI 管理
 
 本地命令和设置页共用同一个 Host 账号池：
@@ -104,6 +110,7 @@ dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.1
 pnpm test
 pnpm run build
 pnpm run verify:package
+pnpm pack
 ```
 
 `verify:package` 只验证 npm 包结构，不等于真实 DSH 安装验证。兼容性结论还需要把打包后的 tarball 安装进隔离的 stock DSH，再完成启动和路由探测。

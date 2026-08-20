@@ -29,3 +29,6 @@ jobs:
 
       - name: Verify package contents
         run: pnpm run verify:package
+
+      - name: Pack publishable tarball
+        run: pnpm pack --pack-destination "${RUNNER_TEMP}"

@@ -16,6 +16,12 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-runtime/client',
 ] as const
 
+const HOST_BUNDLED_MODULES = [
+  '@deepseek-ai/cosmokit',
+  '@deepseek-ai/dsh-sdk-protocol',
+  '@deepseek-ai/schemastery',
+] as const
+
 function isPlatformModule(id: string): boolean {
   return PLATFORM_MODULES.includes(id as typeof PLATFORM_MODULES[number])
 }
@@ -68,8 +74,12 @@ const host: UserConfig = {
   target: 'es2024',
   fixedExtension: false,
   dts: false,
-  sourcemap: true,
+  sourcemap: false,
   clean: false,
+  deps: {
+    alwaysBundle: [...HOST_BUNDLED_MODULES],
+    onlyBundle: [...HOST_BUNDLED_MODULES],
+  },
 }
 
 const client: UserConfig = {
@@ -80,12 +90,13 @@ const client: UserConfig = {
   platform: 'browser',
   target: 'es2022',
   dts: false,
-  sourcemap: true,
+  sourcemap: false,
   clean: false,
   plugins: [inlineClientCss()],
   deps: {
     neverBundle: [...PLATFORM_MODULES],
     alwaysBundle: (id: string) => !isPlatformModule(id),
+    onlyBundle: ['lucide-react'],
   },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
