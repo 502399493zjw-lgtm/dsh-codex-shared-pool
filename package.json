@@ -1,6 +1,6 @@
 {
   "name": "dsh-codex-shared-pool",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Community DeepSeek Harness bundle for Codex account-pool integration",
   "type": "module",
   "license": "MIT",

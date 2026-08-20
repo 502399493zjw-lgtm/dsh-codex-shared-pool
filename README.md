@@ -60,7 +60,7 @@
 当前为 alpha 版本，发布在 npm 的 `next` tag。安装到 DSH Web profile：
 
 ```bash
-dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.1
+dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.2
 ```
 
 如需跟随后续预发布版本，可将精确版本替换为 `dsh-codex-shared-pool@next`。
