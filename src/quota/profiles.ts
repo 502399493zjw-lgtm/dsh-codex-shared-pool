@@ -3,6 +3,8 @@
 import type { OpenAICodexUsage } from '../usage.ts'
 import type { CodexQuotaSnapshot } from './types.ts'
 
+const PROFILE_TOTAL_QUOTA = 100
+
 /** Minimum Browser-safe profile metadata needed for quota aggregation. */
 export interface OpenAICodexProfileQuotaInput {
   readonly label: string
@@ -34,19 +36,22 @@ export function assembleOpenAICodexProfileQuota(
   const currentProfile = profiles.find(profile => !hasExhaustedCodexQuota(profile))
     ?? profiles[0]
   const currentWindow = currentProfile === undefined ? undefined : primaryCodexWindow(currentProfile)
-  const readable = profiles.flatMap(profile => {
-    const window = primaryCodexWindow(profile)
-    return window === undefined ? [] : [window]
-  })
+  const windows = profiles.map(primaryCodexWindow)
+  const allRemainingQuotaKnown = windows.every(window => window !== undefined)
+  const totalQuota = profiles.length * PROFILE_TOTAL_QUOTA
+  const remainingQuota = windows.reduce(
+    (total, window) => total + (window?.remainingPercent ?? 0),
+    0,
+  )
 
   return Object.freeze({
     currentAccountName: currentProfile?.label ?? null,
     currentRemainingPercent: currentWindow?.remainingPercent ?? null,
     currentResetsAt: currentWindow?.resetsAt ?? null,
     poolAccountCount: profiles.length,
-    poolRemainingPercent: readable.length === 0
+    poolRemainingPercent: totalQuota === 0 || !allRemainingQuotaKnown
       ? null
-      : Math.round(readable.reduce((total, window) => total + window.remainingPercent, 0) / readable.length),
+      : Math.round((remainingQuota / totalQuota) * 100),
     refreshedAt: now(),
   })
 }

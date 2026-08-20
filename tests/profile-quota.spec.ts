@@ -28,7 +28,7 @@ function profile(label: string, remainingPercent?: number, resetsAt?: number) {
 }
 
 describe('stored OpenAI Codex profile quota projection', () => {
-  it('tracks the stored Pool count from zero to one to three profiles', () => {
+  it('tracks zero to one to three profiles and divides summed remainder by total fixed quota', () => {
     expect(assembleOpenAICodexProfileQuota([], () => 10)).toEqual({
       currentAccountName: null,
       currentRemainingPercent: null,
@@ -103,7 +103,7 @@ describe('stored OpenAI Codex profile quota projection', () => {
     })
   })
 
-  it('keeps the stored count and priority label when one profile usage read fails', () => {
+  it('keeps the stored count and priority label but not a partial pool ratio when one usage read fails', () => {
     const profiles = [
       profile('钟经纬'),
       profile('经纬 钟', 0),
@@ -115,7 +115,7 @@ describe('stored OpenAI Codex profile quota projection', () => {
       currentRemainingPercent: null,
       currentResetsAt: null,
       poolAccountCount: 3,
-      poolRemainingPercent: 40,
+      poolRemainingPercent: null,
       refreshedAt: 60,
     })
   })
