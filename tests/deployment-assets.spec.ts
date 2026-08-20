@@ -713,6 +713,10 @@ describe('self-hosted deployment assets', () => {
 
   it('documents the one-shot migrator and split runtime database identities', async () => {
     const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+    const deploymentReadme = await readFile(
+      new URL('../deploy/self-hosted/README.md', import.meta.url),
+      'utf8',
+    )
     const controlPlanePlan = await readFile(
       new URL('../docs/superpowers/plans/2026-08-19-team-control-plane.md', import.meta.url),
       'utf8',
@@ -722,14 +726,15 @@ describe('self-hosted deployment assets', () => {
       'utf8',
     )
 
-    expect(readme).toMatch(/four long-running processes[\s\S]*one-shot database\s+migrator/iu)
-    expect(readme).toMatch(/four mode-`0600` files/iu)
-    expect(readme).toContain('team-migrations.env')
-    expect(readme).toContain('dsh_team_host_login')
-    expect(readme).toContain('dsh_team_broker_login')
-    expect(readme).toMatch(/Team\s+Host cannot read `team_contribution_credentials`/u)
-    expect(readme).toMatch(/Credential\s+Broker cannot read the Team control-plane tables/u)
-    expect(readme).not.toMatch(/deliberately uses one PostgreSQL login/iu)
+    expect(readme).toContain('deploy/self-hosted/')
+    expect(deploymentReadme).toMatch(/四个长期运行的进程[\s\S]*一次性数据库迁移器/u)
+    expect(deploymentReadme).toMatch(/四个权限为 mode-`0600` 的文件/u)
+    expect(deploymentReadme).toContain('team-migrations.env')
+    expect(deploymentReadme).toContain('dsh_team_host_login')
+    expect(deploymentReadme).toContain('dsh_team_broker_login')
+    expect(deploymentReadme).toMatch(/Team Host 使用，不能读取 `team_contribution_credentials`/u)
+    expect(deploymentReadme).toMatch(/Credential Broker 使用，不能读取 Team 控制面表/u)
+    expect(deploymentReadme).not.toMatch(/deliberately uses one PostgreSQL login/iu)
     expect(controlPlanePlan).not.toMatch(/separate database roles[\s\S]*remain explicit deployment-hardening work/iu)
     expect(selfHostedPlan).toMatch(/four mode-`0600` secret files/iu)
     expect(selfHostedPlan).not.toMatch(/atomic three-file secret generation/iu)
