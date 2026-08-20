@@ -6,7 +6,7 @@ export interface CodexQuotaSnapshot {
   readonly currentRemainingPercent: number | null
   /** Primary-window reset instant in Unix epoch milliseconds. */
   readonly currentResetsAt: number | null
-  /** Number of configured accounts, including temporarily unreadable accounts. */
+  /** Number of stored Pool profiles, or explicit homes including temporarily unreadable accounts. */
   readonly poolAccountCount: number
   /** Sum of remaining primary-window quota divided by total pool quota; null when any remainder is unknown. */
   readonly poolRemainingPercent: number | null

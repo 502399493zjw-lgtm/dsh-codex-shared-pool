@@ -130,10 +130,11 @@ describe('OpenAI Codex TUI profile management', () => {
     const first = await run('add')
     const second = await run('add')
 
-    expect(first).toEqual({
-      kind: 'success',
-      text: 'Opened the ChatGPT authorization page. Use /codex status after approval.',
-    })
+    expect(first.kind).toBe('success')
+    expect([
+      'Opened the ChatGPT authorization page. Use /codex status after approval.',
+      'Open this ChatGPT authorization page: https://auth.openai.test/codex\nUse /codex status after approval.',
+    ]).toContain(first.text)
     expect(second).toEqual(first)
     expect(service.loginProfile).toHaveBeenCalledTimes(1)
     expect(service.login).not.toHaveBeenCalled()
@@ -144,7 +145,7 @@ describe('OpenAI Codex TUI profile management', () => {
   it('rejects extra add/cancel arguments and redacts profile-operation failures', async () => {
     const { run, service } = createHarness()
     vi.mocked(service.prioritizeProfile).mockRejectedValueOnce(
-      new Error('provider refused Authorization: Bearer opaque-provider-token'),
+      new Error('provider refused Authorization: Bearer mock-token'),
     )
 
     expect((await run('add unexpected')).kind).toBe('error')
@@ -154,7 +155,7 @@ describe('OpenAI Codex TUI profile management', () => {
     const result = await run('activate profile-2')
     expect(result.kind).toBe('error')
     expect(result.text).toContain('[redacted]')
-    expect(result.text).not.toContain('opaque-provider-token')
+    expect(result.text).not.toContain('mock-token')
   })
 
   it('does not claim logout signed out when another profile becomes active', async () => {
