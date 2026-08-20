@@ -13,11 +13,29 @@
 - 在设置页查看最近请求走了哪个账号、为什么切换、使用的模型以及成功/失败状态。
 - 保留 Codex Responses、搜索、图片生成、`read_image`、TUI 管理等原有能力。
 
+## 真实操作
+
+以下三段均录自 stock DSH 的实际产品页面，账号身份已经遮罩；第三段包含真实 Provider 请求。
+
+### 从侧栏打开 Codex 账号池
+
 <p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/showcase.gif" alt="DSH Codex Shared Pool 自动切换账号并显示最近请求流水" width="900" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/open-account-settings.gif" alt="从 DSH 侧栏打开 Codex 账号设置" width="900" />
 </p>
 
-> 受控演示：账号 A 的额度为 `0%` 后，请求预检跳过 A，只由账号 B 发出 Provider 请求；成功后 B 变为“使用中”，并留下 A → B 的额度回退流水。账号、额度和请求均为演示数据，不代表真实 Token、费用或精确订阅消耗。
+### 在三个账号之间选择和调整顺序
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/switch-three-accounts.gif" alt="在三个真实授权的 Codex 账号之间选择并调整顺序" width="560" />
+</p>
+
+### 额度不足时自动路由并留下最近请求流水
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/automatic-routing-and-receipts.gif" alt="Codex 额度不足时自动路由到可用账号并显示最近请求流水" width="506" />
+</p>
+
+> 真实验收中，账号 A 的 Provider 额度显示为 `0%`，因此它在请求发出前被跳过，唯一一次 Provider 请求由账号 B 完成。流水中的“1 次请求”不代表 Token、费用或精确订阅消耗。
 
 ## 自动切换规则
 
