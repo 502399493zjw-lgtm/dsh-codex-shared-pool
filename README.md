@@ -15,27 +15,21 @@
 
 ## 真实操作
 
-以下三段均录自 stock DSH 的实际产品页面，账号身份已经遮罩；第三段包含真实 Provider 请求。
+以下两段展示一期最核心的产品操作：先看真实账号池和各账号额度，再看优先账号额度不足时如何自动切换并留下请求流水。第二段只模拟“首账号额度不足”的输入信号，账号选择、Provider 请求、响应和最近请求流水都由插件实际完成。
 
-### 从侧栏打开 Codex 账号池
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/open-account-settings.gif" alt="从 DSH 侧栏打开 Codex 账号设置" width="900" />
-</p>
-
-### 在三个账号之间选择和调整顺序
+### 多账号池与额度概览
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/switch-three-accounts.gif" alt="在三个真实授权的 Codex 账号之间选择并调整顺序" width="560" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/account-pool-and-quota.gif" alt="在 DSH 中查看 Codex 多账号池和各账号额度" width="900" />
 </p>
 
 ### 额度不足时自动路由并留下最近请求流水
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/automatic-routing-and-receipts.gif" alt="Codex 额度不足时自动路由到可用账号并显示最近请求流水" width="506" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/automatic-routing-and-receipts.gif" alt="演示额度信号触发 Codex 自动路由，并显示真实响应和最近请求流水" width="779" />
 </p>
 
-> 真实验收中，账号 A 的 Provider 额度显示为 `0%`，因此它在请求发出前被跳过，唯一一次 Provider 请求由账号 B 完成。流水中的“1 次请求”不代表 Token、费用或精确订阅消耗。
+> 第二段明确标注为混合演示：只把原使用中账号的额度信号临时投影为 `0%`，用于稳定触发回退；插件在请求发出前跳过它，并由下一可用账号完成真实 Provider 请求。流水中的“1 次请求”不代表 Token、费用或精确订阅消耗。
 
 ## 自动切换规则
 
