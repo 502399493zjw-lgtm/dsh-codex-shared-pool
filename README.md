@@ -63,13 +63,13 @@
 
 ## 安装
 
-当前为 alpha 版本，推荐从源码打包后安装到 DSH Web profile：
+当前为 alpha 版本，发布在 npm 的 `next` tag。安装到 DSH Web profile：
 
 ```bash
-pnpm install
-pnpm pack
-dsh plugin --profile web add ./dsh-codex-shared-pool-0.1.0-alpha.0.tgz
+dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.1
 ```
+
+如需跟随后续预发布版本，可将精确版本替换为 `dsh-codex-shared-pool@next`。
 
 然后启动同一个 Web profile，进入：
 
