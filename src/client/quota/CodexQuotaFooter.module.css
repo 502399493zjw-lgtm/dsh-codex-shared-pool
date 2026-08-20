@@ -34,6 +34,9 @@
 .current {
   display: flex;
   color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 22px;
 }
 
 .status {

@@ -18,6 +18,14 @@ type ProfileSwitchObserver = (
   profileId: string,
 ) => void
 
+/** Host-only allocation result. Raw profile ids must never cross into Browser projections. */
+export interface LocalProfileAllocation {
+  readonly profileId: string
+  /** Previously bound profile, or the first skipped priority candidate for a fresh Session. */
+  readonly previousProfileId?: string
+  readonly reason: import('./shared/types.ts').LocalRoutingReason
+}
+
 /**
  * Resolve the provider quota bucket that limits one Codex model.
  * @param model - Provider model id from the current request.
@@ -33,10 +41,25 @@ function isExhausted(usage: OpenAICodexUsage, bucketId: string): boolean {
   return bucket?.windows.some(window => window.remainingPercent === 0) ?? false
 }
 
+function quotaResetAt(usage: OpenAICodexUsage, bucketId: string): number | undefined {
+  const bucket = usage.rateLimits.find(limit => limit.id === bucketId)
+  if (bucket === undefined || bucket.windows.length === 0) return undefined
+  const resetTimes = bucket.windows
+    .map(window => window.resetsAt)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  return resetTimes.length === 0 ? undefined : Math.min(...resetTimes)
+}
+
+function hasKnownModelQuota(usage: OpenAICodexUsage, bucketId: string): boolean {
+  const bucket = usage.rateLimits.find(limit => limit.id === bucketId)
+  return bucket !== undefined && bucket.windows.length > 0
+}
+
 /**
- * Scan the global profile order before every request and commit the first profile
- * whose model-specific quota is not proven exhausted. Missing quota metadata keeps
- * the inspected profile eligible. Concurrent replacement preserves its winner.
+ * Inspect the global priority before every request. When it is proven exhausted,
+ * choose the usable fallback whose provider reset time is earliest and promote it
+ * to global priority. Missing quota metadata remains a fail-open fallback only when
+ * no account has proven model capacity. Concurrent replacement preserves its winner.
  *
  * @param store - Host-owned ordered profile and Session-binding store.
  * @param sessionId - Session receiving a provider request.
@@ -44,7 +67,7 @@ function isExhausted(usage: OpenAICodexUsage, bucketId: string): boolean {
  * @param signal - Optional request cancellation signal.
  * @param readUsage - Quota reader override used by focused tests.
  * @param onProfileSwitch - Called only by the request that commits a profile replacement.
- * @returns The profile id committed to the Session, or undefined when signed out.
+ * @returns The committed profile and decision reason, or undefined when signed out.
  */
 export async function allocateOpenAICodexSessionProfile(
   store: OpenAICodexCredentialStore,
@@ -53,35 +76,102 @@ export async function allocateOpenAICodexSessionProfile(
   signal?: AbortSignal,
   readUsage: UsageReader = readOpenAICodexRateLimits,
   onProfileSwitch?: ProfileSwitchObserver,
-): Promise<string | undefined> {
+): Promise<LocalProfileAllocation | undefined> {
   const existing = await store.sessionProfileId(sessionId)
   const profiles = await store.listProfiles()
   const first = profiles[0]
   if (first === undefined) return undefined
   const bucketId = openAICodexQuotaBucket(model)
-  const commit = async (profileId: string): Promise<string | undefined> => {
-    if (existing === undefined) return store.bindSessionProfile(sessionId, profileId)
+  const commit = async (
+    profileId: string,
+    reason: LocalProfileAllocation['reason'],
+    skippedPriorityProfileId?: string,
+  ): Promise<LocalProfileAllocation | undefined> => {
+    if (existing === undefined) {
+      const boundProfileId = await store.bindSessionProfile(sessionId, profileId)
+      return {
+        profileId: boundProfileId,
+        ...boundProfileId === profileId && skippedPriorityProfileId !== undefined
+          ? { previousProfileId: skippedPriorityProfileId }
+          : {},
+        reason,
+      }
+    }
     const replacement = await store.replaceSessionProfile(sessionId, existing, profileId)
     if (replacement?.replaced === true) onProfileSwitch?.(sessionId, existing, replacement.profileId)
-    return replacement?.profileId
-      ?? allocateOpenAICodexSessionProfile(store, sessionId, model, signal, readUsage, onProfileSwitch)
-  }
-
-  for (const profile of profiles) {
-    const concurrentBinding = await store.sessionProfileId(sessionId)
-    if (concurrentBinding !== existing) {
-      if (concurrentBinding !== undefined) return concurrentBinding
+    if (replacement === undefined) {
       return allocateOpenAICodexSessionProfile(store, sessionId, model, signal, readUsage, onProfileSwitch)
     }
+    if (replacement.profileId !== profileId) {
+      return { profileId: replacement.profileId, reason: 'concurrent_binding' }
+    }
+    return {
+      profileId: replacement.profileId,
+      ...replacement.replaced ? { previousProfileId: existing } : {},
+      reason,
+    }
+  }
+
+  const ensureUnchangedBinding = async (): Promise<LocalProfileAllocation | undefined | null> => {
+    const concurrentBinding = await store.sessionProfileId(sessionId)
+    if (concurrentBinding !== existing) {
+      if (concurrentBinding !== undefined) {
+        return { profileId: concurrentBinding, reason: 'concurrent_binding' }
+      }
+      return allocateOpenAICodexSessionProfile(store, sessionId, model, signal, readUsage, onProfileSwitch)
+    }
+    return null
+  }
+
+  const concurrent = await ensureUnchangedBinding()
+  if (concurrent !== null) return concurrent
+  let firstUsage: OpenAICodexUsage
+  try {
+    firstUsage = await readUsage(store.forProfile(first.id), signal)
+  } catch (error: unknown) {
+    if (signal?.aborted === true) throw error
+    return commit(first.id, 'quota_unknown')
+  }
+  if (!isExhausted(firstUsage, bucketId)) return commit(first.id, 'priority')
+
+  const usable: Array<{ profileId: string; resetAt: number | undefined; index: number }> = []
+  const unknown: Array<{ profileId: string; index: number }> = []
+  for (const [index, profile] of profiles.slice(1).entries()) {
+    const concurrent = await ensureUnchangedBinding()
+    if (concurrent !== null) return concurrent
     let usage: OpenAICodexUsage
     try {
       usage = await readUsage(store.forProfile(profile.id), signal)
     } catch (error: unknown) {
       if (signal?.aborted === true) throw error
-      return commit(profile.id)
+      unknown.push({ profileId: profile.id, index })
+      continue
     }
-    if (!isExhausted(usage, bucketId)) return commit(profile.id)
+    if (isExhausted(usage, bucketId)) continue
+    if (!hasKnownModelQuota(usage, bucketId)) {
+      unknown.push({ profileId: profile.id, index })
+      continue
+    }
+    usable.push({ profileId: profile.id, resetAt: quotaResetAt(usage, bucketId), index })
   }
 
-  return existing ?? store.bindSessionProfile(sessionId, first.id)
+  const selected = usable.sort((left, right) => (
+    (left.resetAt ?? Number.POSITIVE_INFINITY) - (right.resetAt ?? Number.POSITIVE_INFINITY)
+    || left.index - right.index
+  ))[0]
+  if (selected !== undefined) {
+    const allocation = await commit(selected.profileId, 'quota_fallback', first.id)
+    if (allocation?.profileId === selected.profileId && allocation.reason === 'quota_fallback') {
+      await store.prioritizeProfile(selected.profileId)
+    }
+    return allocation
+  }
+
+  const failOpen = unknown.sort((left, right) => left.index - right.index)[0]
+  if (failOpen !== undefined) return commit(failOpen.profileId, 'quota_unknown', first.id)
+
+  return {
+    profileId: existing ?? await store.bindSessionProfile(sessionId, first.id),
+    reason: 'all_exhausted',
+  }
 }

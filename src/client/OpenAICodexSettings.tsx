@@ -14,6 +14,10 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ImageToolPreferences,
+  LocalRoutingEventSummary,
+  LocalRoutingEventsResult,
+  LocalRoutingReason,
+  LocalRoutingStatus,
   OpenAICodexAuthorizationFailure,
   OpenAICodexCancelLoginResult,
   OpenAICodexLoginChallenge,
@@ -40,7 +44,9 @@ const PRIORITY_PATH = '/plugins/dsh-openai-codex/profiles/priority'
 const REMOVE_PATH = '/plugins/dsh-openai-codex/profiles/remove'
 const IMAGE_TOOLS_PATH = '/plugins/dsh-openai-codex/image-tools'
 const NETWORK_PATH = '/plugins/dsh-openai-codex/network'
+const ROUTING_EVENTS_PATH = '/plugins/dsh-openai-codex/routing-events'
 const POLL_INTERVAL_MS = 1_000
+const ROUTING_POLL_INTERVAL_MS = 2_000
 const USAGE_POLL_INTERVAL_MS = 60_000
 
 type AccountStatus =
@@ -55,6 +61,7 @@ interface AccountProfile {
   createdAt: number
   updatedAt: number
   usage: OpenAICodexUsage
+  inUse?: boolean
   quotaError?: string
 }
 
@@ -146,6 +153,42 @@ function windowLabel(seconds: number, t: OpenAICodexSettingsInjected['t']): stri
 
 function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
+}
+
+function ordinalAlias(index: number): string {
+  let value = index + 1
+  let alias = ''
+  while (value > 0) {
+    value -= 1
+    alias = String.fromCharCode(65 + (value % 26)) + alias
+    value = Math.floor(value / 26)
+  }
+  return alias
+}
+
+function routingReasonKey(reason: LocalRoutingReason): OpenAICodexSettingsKey {
+  switch (reason) {
+    case 'priority': return 'routingReasonPriority'
+    case 'quota_fallback': return 'routingReasonQuotaFallback'
+    case 'quota_unknown': return 'routingReasonQuotaUnknown'
+    case 'all_exhausted': return 'routingReasonAllExhausted'
+    case 'concurrent_binding': return 'routingReasonConcurrentBinding'
+  }
+}
+
+function routingStatusKey(status: LocalRoutingStatus): OpenAICodexSettingsKey {
+  switch (status) {
+    case 'in_progress': return 'routingStatusInProgress'
+    case 'succeeded': return 'routingStatusSucceeded'
+    case 'failed': return 'routingStatusFailed'
+    case 'cancelled': return 'routingStatusCancelled'
+  }
+}
+
+function routingDotState(status: LocalRoutingStatus): 'ongoing' | 'done' | 'error' {
+  if (status === 'in_progress') return 'ongoing'
+  if (status === 'succeeded') return 'done'
+  return 'error'
 }
 
 function QuotaBar({
@@ -267,6 +310,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [dialog, setDialog] = useState<AccountDialog>()
   const [renameLabel, setRenameLabel] = useState('')
   const [dialogError, setDialogError] = useState<string>()
+  const [routingOpen, setRoutingOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [imageTools, setImageTools] = useState<ImageToolPreferences | undefined>()
   const [imageToolsBusy, setImageToolsBusy] = useState(false)
@@ -276,12 +320,15 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [responseApiError, setResponseApiError] = useState<string | undefined>()
   const [network, setNetwork] = useState<OutboundNetworkStatus | undefined>()
   const [networkError, setNetworkError] = useState(false)
+  const [routingEvents, setRoutingEvents] = useState<readonly LocalRoutingEventSummary[]>([])
+  const [routingEventsError, setRoutingEventsError] = useState(false)
   const [signInNotice, setSignInNotice] = useState<string>()
   const [signInCancelling, setSignInCancelling] = useState(false)
   const popupWatchRef = useRef<(() => void) | undefined>(undefined)
   const loginPopupRef = useRef<Window | null>(null)
   const loginOperationRef = useRef<object | undefined>(undefined)
   const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
+  const latestRoutingEventIdRef = useRef<string | null | undefined>(undefined)
 
   const refresh = useCallback(async () => {
     try {
@@ -293,6 +340,21 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     }
   }, [t])
+
+  const refreshRoutingEvents = useCallback(async () => {
+    try {
+      const result = await jsonRequest<LocalRoutingEventsResult>(ROUTING_EVENTS_PATH)
+      const newestId = result.events[0]?.id ?? null
+      const shouldRefreshProfiles = latestRoutingEventIdRef.current !== undefined
+        && latestRoutingEventIdRef.current !== newestId
+      latestRoutingEventIdRef.current = newestId
+      setRoutingEvents(result.events)
+      setRoutingEventsError(false)
+      if (shouldRefreshProfiles) void refresh()
+    } catch {
+      setRoutingEventsError(true)
+    }
+  }, [refresh])
 
   const stopPopupWatch = useCallback(() => {
     popupWatchRef.current?.()
@@ -358,6 +420,17 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     const timer = window.setInterval(() => { void refresh() }, interval)
     return () => { window.clearInterval(timer) }
   }, [refresh, status.status])
+  useEffect(() => {
+    if (status.status !== 'ready' || status.profiles.length === 0) {
+      latestRoutingEventIdRef.current = undefined
+      setRoutingEvents([])
+      setRoutingEventsError(false)
+      return
+    }
+    void refreshRoutingEvents()
+    const timer = window.setInterval(() => { void refreshRoutingEvents() }, ROUTING_POLL_INTERVAL_MS)
+    return () => { window.clearInterval(timer) }
+  }, [refreshRoutingEvents, status])
 
   useEffect(() => {
     if (status.status !== 'signing-in' && popupWatchRef.current !== undefined) {
@@ -554,7 +627,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         .dsh-codex-profile-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-profile-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
         .dsh-codex-profile-item[data-selected='true'] { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); }
+        .dsh-codex-profile-identity { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+        .dsh-codex-profile-alias { color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 18px; font-weight: 600; }
         .dsh-codex-profile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
+        .dsh-codex-profile-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
         .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 24px 26px 0; }
         .dsh-codex-detail-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
         .dsh-codex-detail-title { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 20px; line-height: 28px; font-weight: 600; }
@@ -576,6 +652,25 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
         .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
         .dsh-codex-cancel-auth { margin-top: 16px; }
+        .dsh-codex-routing { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
+        .dsh-codex-routing-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 54px; padding: 15px 20px; border: 0; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
+        .dsh-codex-routing-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
+        .dsh-codex-routing-trigger strong { min-width: 0; overflow: hidden; color: var(--dsw-alias-label-primary); font-size: 15px; line-height: 22px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+        .dsh-codex-routing-chevron { flex: 0 0 auto; transition: transform 160ms ease; }
+        .dsh-codex-routing[data-open='false'] .dsh-codex-routing-chevron { transform: rotate(-90deg); }
+        .dsh-codex-routing-content { border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-routing-description { margin: 0; padding: 14px 20px; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-routing-list { display: flex; flex-direction: column; margin: 0; padding: 0; border-top: 1px solid var(--dsw-alias-border-l2); list-style: none; }
+        .dsh-codex-routing-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; padding: 14px 20px; }
+        .dsh-codex-routing-item + .dsh-codex-routing-item { border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-routing-item > :first-child { margin-top: 5px; }
+        .dsh-codex-routing-body { display: flex; flex-direction: column; min-width: 0; gap: 4px; }
+        .dsh-codex-routing-primary, .dsh-codex-routing-meta { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 8px 12px; }
+        .dsh-codex-routing-primary strong { color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
+        .dsh-codex-routing-primary span { min-width: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-routing-meta { color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; }
+        .dsh-codex-routing-empty { margin: 0; padding: 16px 20px; border-top: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+        .dsh-codex-routing-empty[role='alert'] { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-advanced { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
         .dsh-codex-advanced-trigger { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 82px; padding: 18px 20px; border: 0; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-advanced-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -630,7 +725,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
             </Button>
           </div>
           <div className="dsh-codex-profile-items">
-            {profiles.map(profile => (
+            {profiles.map((profile, index) => (
               <button
                 key={profile.id}
                 type="button"
@@ -643,8 +738,13 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
                 }}
               >
                 <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} size={9} />
-                <span className="dsh-codex-profile-name">{profile.label}</span>
-                {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('priorityProfile')}</span> : null}
+                <span className="dsh-codex-profile-identity">
+                  <span className="dsh-codex-profile-alias">{t('accountAlias', { alias: ordinalAlias(index) })}</span>
+                  <span className="dsh-codex-profile-name">{profile.label}</span>
+                </span>
+                <span className="dsh-codex-profile-badges">
+                  {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('profileInUse')}</span> : null}
+                </span>
               </button>
             ))}
           </div>
@@ -729,6 +829,55 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           </section>
         )}
       </div>
+
+      {profiles.length === 0 ? null : <section className="dsh-codex-routing" data-open={routingOpen} aria-labelledby="dsh-codex-routing-title">
+        <button
+          type="button"
+          className="dsh-codex-routing-trigger"
+          aria-expanded={routingOpen}
+          aria-controls="dsh-codex-routing-content"
+          onClick={() => { setRoutingOpen(open => !open) }}
+        >
+          <strong id="dsh-codex-routing-title">{t('recentRequests')}</strong>
+          <IconChevronDownOutline14 className="dsh-codex-routing-chevron" />
+        </button>
+        {routingOpen ? <div id="dsh-codex-routing-content" className="dsh-codex-routing-content">
+          <p className="dsh-codex-routing-description">{t('requestAttemptsOnly')}</p>
+          {routingEventsError ? (
+            <p className="dsh-codex-routing-empty" role="alert">{t('routingEventsUnavailable')}</p>
+          ) : routingEvents.length === 0 ? (
+            <p className="dsh-codex-routing-empty">{t('noRecentRequests')}</p>
+          ) : (
+            <ul className="dsh-codex-routing-list">
+              {routingEvents.slice(0, 3).map(event => {
+                const selectedAccount = t('accountAlias', { alias: event.profileAlias })
+                const accountRoute = event.previousProfileAlias === undefined
+                  ? selectedAccount
+                  : `${t('accountAlias', { alias: event.previousProfileAlias })} → ${selectedAccount}`
+                return (
+                  <li className="dsh-codex-routing-item" key={event.id}>
+                    <StateDot state={routingDotState(event.status)} size={9} />
+                    <div className="dsh-codex-routing-body">
+                      <div className="dsh-codex-routing-primary">
+                        <strong>{accountRoute}</strong>
+                        <span>{event.model}</span>
+                      </div>
+                      <div className="dsh-codex-routing-meta">
+                        <span>{t(routingReasonKey(event.reason))}</span>
+                        <span>{t(routingStatusKey(event.status))}</span>
+                        <span>{t('oneRequest')}</span>
+                        <time dateTime={new Date(event.startedAt).toISOString()}>
+                          {new Date(event.finishedAt ?? event.startedAt).toLocaleTimeString()}
+                        </time>
+                      </div>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div> : null}
+      </section>}
 
       <section className="dsh-codex-advanced" data-open={advancedOpen}>
         <button type="button" className="dsh-codex-advanced-trigger" aria-expanded={advancedOpen} onClick={() => { setAdvancedOpen(open => !open) }}>

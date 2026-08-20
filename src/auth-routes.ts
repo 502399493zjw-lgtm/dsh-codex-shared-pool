@@ -19,6 +19,7 @@ import type {
   OpenAICodexLoginChallenge,
   OpenAICodexProfilesStatus,
 } from './shared/types.ts'
+import type { LocalRoutingEventLedger } from './local-routing-events.ts'
 
 /** Plugin-owned status endpoint consumed by its browser half. */
 export const OPENAI_CODEX_AUTH_STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
@@ -46,6 +47,8 @@ export const OPENAI_CODEX_RESPONSE_API_SETTINGS_PATH = '/plugins/dsh-openai-code
 export const OPENAI_CODEX_NETWORK_STATUS_PATH = '/plugins/dsh-openai-codex/network'
 /** Secret-free aggregate quota used by the sidebar footer. */
 export const OPENAI_CODEX_QUOTA_PATH = '/plugins/dsh-openai-codex/quota'
+/** Browser-safe metadata-only receipts for recent local Codex requests. */
+export const OPENAI_CODEX_ROUTING_EVENTS_PATH = '/plugins/dsh-openai-codex/routing-events'
 
 /** Browser-safe state of the active OpenAI Codex authentication lifecycle. */
 export type OpenAICodexWebAuthStatus =
@@ -57,6 +60,8 @@ export type OpenAICodexWebAuthStatus =
 /** Browser-safe account profile with its current quota projection. */
 export interface OpenAICodexWebProfile extends CodexProfileSummary {
   usage: OpenAICodexUsage
+  /** Whether the newest local provider attempt selected this profile. */
+  inUse: boolean
   quotaError?: string
 }
 
@@ -125,6 +130,7 @@ export class OpenAICodexWebAuth {
   constructor(
     private readonly store: OpenAICodexCredentialStore,
     options: OpenAICodexWebAuthOptions = {},
+    private readonly routingEvents?: LocalRoutingEventLedger,
   ) {
     this.timeoutMs = typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs)
       ? Math.max(1, Math.floor(options.timeoutMs))
@@ -152,10 +158,11 @@ export class OpenAICodexWebAuth {
     return {
       status: 'ready',
       profiles: await Promise.all(profiles.map(async (profile) => {
+        const inUse = this.routingEvents?.currentProfileId() === profile.id
         try {
-          return { ...profile, usage: await readOpenAICodexRateLimits(this.store.forProfile(profile.id)) }
+          return { ...profile, usage: await readOpenAICodexRateLimits(this.store.forProfile(profile.id)), inUse }
         } catch (error: unknown) {
-          return { ...profile, usage: { rateLimits: [] }, quotaError: safeExternalErrorMessage(error) }
+          return { ...profile, usage: { rateLimits: [] }, inUse, quotaError: safeExternalErrorMessage(error) }
         }
       })),
     }
@@ -478,15 +485,18 @@ function responseApiPatch(value: Record<string, unknown>): Partial<ResponseApiPr
  * @param store - Credential-safe profile store.
  * @param imageTools - Live image-tool policy exposed through settings routes.
  * @param network - Secret-free outbound network status owner.
+ * @param routingEvents - Host-owned bounded metadata-only request ledger.
+ * @param quota - Optional official app-server quota reader.
  */
 export function registerOpenAICodexAuthRoutes(
   ctx: Context,
   store: OpenAICodexCredentialStore,
   imageTools: ImageToolPolicy,
   network: OutboundNetwork,
+  routingEvents: LocalRoutingEventLedger,
   quota?: OpenAICodexQuotaReader,
 ): void {
-  const auth = new OpenAICodexWebAuth(store)
+  const auth = new OpenAICodexWebAuth(store, {}, routingEvents)
   ctx.effect(() => {
     const routes = [
       ctx.webServer.register({
@@ -516,6 +526,15 @@ export function registerOpenAICodexAuthRoutes(
               refreshedAt: Date.now(),
             })
           }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_ROUTING_EVENTS_PATH,
+        handler: (req, res) => {
+          if (req.method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+          if (!trustedRequest(req)) { json(res, 403, { error: 'forbidden' }); return }
+          json(res, 200, { events: routingEvents.list(50) })
         },
       }),
       ctx.webServer.register({
