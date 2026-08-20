@@ -1,9 +1,17 @@
 {
   "name": "dsh-codex-shared-pool",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.1",
   "description": "Community DeepSeek Harness bundle for Codex account-pool integration",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/502399493zjw-lgtm/dsh-codex-shared-pool.git"
+  },
+  "homepage": "https://github.com/502399493zjw-lgtm/dsh-codex-shared-pool#readme",
+  "bugs": {
+    "url": "https://github.com/502399493zjw-lgtm/dsh-codex-shared-pool/issues"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
