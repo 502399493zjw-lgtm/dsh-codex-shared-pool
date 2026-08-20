@@ -15,8 +15,8 @@ export { CODEX_QUOTA_POLL_INTERVAL_MS }
 
 /** Private callbacks supplied by the Codex quota browser plugin. */
 export interface CodexQuotaFooterFace extends CodexQuotaReadFace {
-  /** Open Settings directly when the installed DSH exposes that optional seam. */
-  readonly openSettings?: () => void
+  /** Open this plugin's account-management page in Settings. */
+  readonly openSettings: () => void
 }
 
 /** Props composed by the sidebar footer-action slot. */
@@ -53,11 +53,9 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
           <div className={css.status} aria-live="polite">
             {unavailable ? t('unavailable') : t('loading')}
           </div>
-          {openSettings !== undefined && (
-            <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
-              <IconChevronRightOutline14 size={16} />
-            </button>
-          )}
+          <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
+            <IconChevronRightOutline14 size={16} />
+          </button>
         </div>
         {snapshot !== undefined && (
           <div className={css.pool} aria-live="polite">
@@ -92,11 +90,9 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
               : t('resetAt', { time: formatCodexResetTime(snapshot.currentResetsAt) })}
           </span>
         </div>
-        {openSettings !== undefined && (
-          <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
-            <IconChevronRightOutline14 size={16} />
-          </button>
-        )}
+        <button type="button" className={css.open} aria-label={t('open')} onClick={openSettings}>
+          <IconChevronRightOutline14 size={16} />
+        </button>
       </div>
       <div className={css.pool}>
         {t('pool')} {snapshot.poolAccountCount} {t('accounts')}

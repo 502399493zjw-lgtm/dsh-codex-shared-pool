@@ -77,7 +77,10 @@ function bench(withSettingsNavigation = true): {
   }
 }
 
-afterEach(() => { vi.unstubAllGlobals() })
+afterEach(() => {
+  vi.unstubAllGlobals()
+  document.body.replaceChildren()
+})
 
 describe('unified Codex quota browser contribution', () => {
   it('registers one localized sidebar contribution and opens the shared Codex settings page', async () => {
@@ -106,14 +109,50 @@ describe('unified Codex quota browser contribution', () => {
     expect(b.entry()).toBeUndefined()
   })
 
-  it('keeps Settings navigation optional and rejects an unsuccessful quota response', async () => {
+  it('keeps the navigation service optional and rejects an unsuccessful quota response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
     const b = bench(false)
     apply(b.ctx as never)
 
     const injected = b.entry()?.inject()
-    expect(injected?.openSettings).toBeUndefined()
+    expect(injected?.openSettings).toEqual(expect.any(Function))
     await expect(injected?.read()).rejects.toThrow('HTTP 503')
+    await b.dispose()
+  })
+
+  it('opens the Codex section through the stock rc.8 Settings shell when no navigation service exists', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(SNAPSHOT), { status: 200 })))
+    const b = bench(false)
+    const trigger = document.createElement('button')
+    trigger.type = 'button'
+    trigger.setAttribute('aria-haspopup', 'dialog')
+    trigger.setAttribute('aria-expanded', 'false')
+    const triggerClick = vi.fn(() => {
+      trigger.setAttribute('aria-expanded', 'true')
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      dialog.setAttribute('aria-modal', 'true')
+      const nav = document.createElement('nav')
+      const general = document.createElement('button')
+      general.type = 'button'
+      general.textContent = 'General'
+      const codex = document.createElement('button')
+      codex.type = 'button'
+      codex.textContent = 'OpenAI Codex'
+      codex.addEventListener('click', sectionClick)
+      nav.append(general, codex)
+      dialog.append(nav)
+      document.body.append(dialog)
+    })
+    const sectionClick = vi.fn()
+    trigger.addEventListener('click', triggerClick)
+    document.body.append(trigger)
+
+    apply(b.ctx as never)
+    b.entry()?.inject().openSettings?.()
+
+    expect(triggerClick).toHaveBeenCalledOnce()
+    expect(sectionClick).toHaveBeenCalledOnce()
     await b.dispose()
   })
 })

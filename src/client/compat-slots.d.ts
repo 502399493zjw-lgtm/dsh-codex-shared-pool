@@ -9,10 +9,10 @@
 import type { SlotEntryDef } from '@deepseek-ai/dsh-client-ui-slots'
 
 /**
- * The published rc.8 settings package ships the runtime navigation service,
- * but its browser declaration omits `navigation.ts` from the type bundle.
- * Keep the narrow public face local so the standalone plugin does not require
- * a private DSH workspace path or a core-package patch.
+ * Published rc.8 does not provide an external Settings navigation service,
+ * while compatible/newer shells may do so. Keep the narrow optional face local
+ * so the standalone plugin can prefer it without requiring a private DSH path
+ * or a core-package patch.
  */
 declare module '@deepseek-ai/cordis' {
   interface Context {
