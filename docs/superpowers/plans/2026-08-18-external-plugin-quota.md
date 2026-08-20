@@ -97,7 +97,7 @@ Run `pnpm run build` and verify that `lib/index.js` imports only published DSH r
 
 - [x] **Step 1: Extend the Settings component**
 
-Fetch status and quota independently, validate all JSON fields, and display the active account, primary remaining percentage, pool count, mean pool percentage, and reset time. Do not render raw Host errors.
+Fetch status and quota independently, validate all JSON fields, and display the active account, primary remaining percentage, pool count, total-remaining-over-total-pool percentage, and reset time. Do not render raw Host errors.
 
 - [x] **Step 2: Extend artifact verification and documentation**
 
