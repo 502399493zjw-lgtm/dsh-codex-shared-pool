@@ -17,6 +17,11 @@ export interface OpenAICodexAuthStatus {
   expiresAt?: Date
 }
 
+/** Host-only commit gate used to invalidate a completed but cancelled login. */
+export interface OpenAICodexLoginOptions {
+  beforeCommit?(): void
+}
+
 /**
  * Complete provider-native OAuth and persist the resulting credential.
  * @param interaction - terminal or UI callbacks for the provider flow.
@@ -25,10 +30,16 @@ export interface OpenAICodexAuthStatus {
 export async function loginOpenAICodex(
   interaction: AuthInteraction,
   store: OpenAICodexCredentialStore = new OpenAICodexCredentialStore(),
+  options: OpenAICodexLoginOptions = {},
 ): Promise<void> {
-  const models = createModels({ credentials: store })
+  const captured = new CapturedCredentialStore()
+  const models = createModels({ credentials: captured })
   models.setProvider(openaiCodexProvider())
   await models.login(OPENAI_CODEX_PROVIDER, 'oauth', interaction)
+  const credential = await captured.read(OPENAI_CODEX_PROVIDER)
+  if (credential?.type !== 'oauth') throw new Error('openai-codex: OAuth completed without a credential')
+  options.beforeCommit?.()
+  await store.modify(OPENAI_CODEX_PROVIDER, async () => credential)
 }
 
 /** Minimal temporary store used so a new OAuth login cannot overwrite any stored profile. */
@@ -73,6 +84,7 @@ class CapturedCredentialStore implements CredentialStore {
 export async function loginOpenAICodexProfile(
   interaction: AuthInteraction,
   store: OpenAICodexProfileStore = new OpenAICodexCredentialStore(),
+  options: OpenAICodexLoginOptions = {},
 ): Promise<CodexProfileSummary> {
   const captured = new CapturedCredentialStore()
   const models = createModels({ credentials: captured })
@@ -81,6 +93,7 @@ export async function loginOpenAICodexProfile(
   const credential = await captured.read(OPENAI_CODEX_PROVIDER)
   if (credential?.type !== 'oauth') throw new Error('openai-codex: OAuth completed without a credential')
   const oauthCredential = credential
+  options.beforeCommit?.()
   return store.addProfile(openAICodexAccountName(oauthCredential) ?? 'Codex account', oauthCredential)
 }
 

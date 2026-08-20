@@ -54,6 +54,13 @@ does not overwrite the current profile. Rename, remove, cancel-login, and
 manual priority operations are available in Settings; Host routes and the TUI
 address the same exact profiles.
 
+While browser authorization is pending, Settings keeps the waiting state
+visible and offers **取消授权**. Cancellation invalidates the Host-owned attempt
+before returning the page to its retryable empty/account-list state, so a late
+OAuth callback cannot add a profile. Repeated cancellation is a no-op; pending
+attempts time out after ten minutes, and an interrupted Host starts idle after
+a restart. The browser receives only typed, secret-free lifecycle reasons.
+
 ### TUI profile commands
 
 The `/codex` command uses the same Host-owned profile store as the model

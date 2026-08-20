@@ -14,6 +14,10 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ImageToolPreferences,
+  OpenAICodexAuthorizationFailure,
+  OpenAICodexCancelLoginResult,
+  OpenAICodexLoginChallenge,
+  OpenAICodexProfilesStatus,
   OpenAICodexUsage,
   ResponseApiPreferences,
 } from '../shared/types.ts'
@@ -54,9 +58,7 @@ interface AccountProfile {
   quotaError?: string
 }
 
-interface LoginChallenge {
-  url: string
-}
+type RemoteAccountStatus = OpenAICodexProfilesStatus<AccountProfile>
 
 interface OutboundNetworkStatus {
   enabled: boolean
@@ -244,6 +246,15 @@ async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Pro
   return value as T
 }
 
+function authorizationFailureMessage(
+  reason: OpenAICodexAuthorizationFailure,
+  t: OpenAICodexSettingsInjected['t'],
+): string {
+  return reason === 'authorization-timed-out'
+    ? t('authorizationTimedOut')
+    : t('authorizationFailed')
+}
+
 type AccountDialog = 'rename' | 'remove'
 
 /** OpenAI Codex account status, global allocation priority, and OAuth actions. */
@@ -266,13 +277,18 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [network, setNetwork] = useState<OutboundNetworkStatus | undefined>()
   const [networkError, setNetworkError] = useState(false)
   const [signInNotice, setSignInNotice] = useState<string>()
+  const [signInCancelling, setSignInCancelling] = useState(false)
   const popupWatchRef = useRef<(() => void) | undefined>(undefined)
+  const loginPopupRef = useRef<Window | null>(null)
   const loginOperationRef = useRef<object | undefined>(undefined)
   const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+      const next = await jsonRequest<RemoteAccountStatus>(STATUS_PATH)
+      setStatus(next.status === 'error'
+        ? { status: 'error', message: authorizationFailureMessage(next.reason, t) }
+        : next)
     } catch (error: unknown) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     }
@@ -285,14 +301,19 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
 
   const cancelSignIn = useCallback(async () => {
     stopPopupWatch()
-    if (loginOperationRef.current === undefined) return
+    loginPopupRef.current?.close()
+    loginPopupRef.current = null
     loginOperationRef.current = undefined
+    setBusy(false)
+    setSignInCancelling(true)
     try {
-      const result = await jsonRequest<{ cancelled: boolean }>(CANCEL_LOGIN_PATH, 'POST')
+      const result = await jsonRequest<OpenAICodexCancelLoginResult>(CANCEL_LOGIN_PATH, 'POST')
       if (result.cancelled) setSignInNotice(t('signInCancelled'))
       await refresh()
     } catch (error: unknown) {
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
+    } finally {
+      setSignInCancelling(false)
     }
   }, [refresh, stopPopupWatch, t])
 
@@ -301,6 +322,8 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     const loginWasActive = loginOperationRef.current !== undefined
     loginOperationRef.current = undefined
     stopPopupWatch()
+    loginPopupRef.current?.close()
+    loginPopupRef.current = null
     if (loginWasActive) {
       void fetch(CANCEL_LOGIN_PATH, {
         method: 'POST',
@@ -340,6 +363,8 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     if (status.status !== 'signing-in' && popupWatchRef.current !== undefined) {
       loginOperationRef.current = undefined
       stopPopupWatch()
+      loginPopupRef.current?.close()
+      loginPopupRef.current = null
     }
   }, [status.status, stopPopupWatch])
 
@@ -369,25 +394,30 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
     setSignInNotice(undefined)
     const popup = window.open('about:blank', '_blank')
     if (popup !== null) popup.opener = null
+    loginPopupRef.current = popup
     setBusy(true)
     setStatus({ status: 'signing-in' })
     const operation = {}
     loginOperationRef.current = operation
     try {
-      const challenge = await jsonRequest<LoginChallenge>(LOGIN_PATH, 'POST')
+      const challenge = await jsonRequest<OpenAICodexLoginChallenge>(LOGIN_PATH, 'POST')
       if (loginOperationRef.current !== operation) {
         popup?.close()
+        if (loginPopupRef.current === popup) loginPopupRef.current = null
         return
       }
       if (popup === null) {
         loginOperationRef.current = undefined
+        loginPopupRef.current = null
         await jsonRequest(CANCEL_LOGIN_PATH, 'POST')
+        setBusy(false)
         setStatus({ status: 'error', message: t('popupBlocked') })
         return
       }
       popup.location.replace(challenge.url)
       popupWatchRef.current = watchAuthorizationPopupClose(popup, () => {
         popupWatchRef.current = undefined
+        if (loginPopupRef.current === popup) loginPopupRef.current = null
         void cancelSignIn()
       })
     } catch (error: unknown) {
@@ -395,12 +425,18 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
       if (loginWasActive) loginOperationRef.current = undefined
       stopPopupWatch()
       popup?.close()
+      if (loginPopupRef.current === popup) loginPopupRef.current = null
       if (loginWasActive) {
         await jsonRequest(CANCEL_LOGIN_PATH, 'POST').catch(() => undefined)
+        const message = error instanceof Error
+          && (error.message === 'authorization-failed' || error.message === 'authorization-timed-out')
+          ? authorizationFailureMessage(error.message, t)
+          : error instanceof Error ? error.message : t('requestFailed')
+        setStatus({ status: 'error', message })
+        setBusy(false)
       }
-      setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     } finally {
-      setBusy(false)
+      if (loginOperationRef.current === operation) setBusy(false)
     }
   }
 
@@ -537,6 +573,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         .dsh-codex-dialog-error { margin: 10px 0 0; color: var(--dsw-alias-state-error-primary); font-size: 13px; line-height: 20px; }
         .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
         .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
+        .dsh-codex-cancel-auth { margin-top: 16px; }
         .dsh-codex-advanced { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
         .dsh-codex-advanced-trigger { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; min-height: 82px; padding: 18px 20px; border: 0; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-advanced-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
@@ -617,7 +654,21 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
               </div>
               {status.status === 'error'
                 ? <p style={{ ...errorStyle, marginTop: 6 }}>{status.message}</p>
-                : status.status === 'ready' ? <p style={{ ...bodyStyle, marginTop: 6 }}>{signInNotice ?? t('emptyAccountHint')}</p> : null}
+                : status.status === 'ready'
+                  ? <p style={{ ...bodyStyle, marginTop: 6 }}>{signInNotice ?? t('emptyAccountHint')}</p>
+                  : status.status === 'signing-in'
+                    ? (
+                        <Button
+                          className="dsh-codex-cancel-auth"
+                          variant="outline"
+                          size="sm"
+                          disabled={signInCancelling}
+                          onClick={() => { void cancelSignIn() }}
+                        >
+                          {signInCancelling ? t('cancellingAuthorization') : t('cancelAuthorization')}
+                        </Button>
+                      )
+                    : null}
             </div>
           </div>
         ) : (

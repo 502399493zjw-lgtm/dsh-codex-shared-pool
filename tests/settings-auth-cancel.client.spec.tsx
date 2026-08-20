@@ -57,6 +57,72 @@ const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): strin
 }
 
 describe('OpenAI Codex settings authorization', () => {
+  it('shows a manual cancel action while waiting, returns to signed out, and can retry', async () => {
+    let resolveFirstLogin: ((value: Response) => void) | undefined
+    const firstLogin = new Promise<Response>((resolve) => { resolveFirstLogin = resolve })
+    let loginRequests = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles/login/cancel')) return response({ cancelled: true })
+      if (path.endsWith('/profiles/login')) {
+        loginRequests += 1
+        return loginRequests === 1
+          ? firstLogin
+          : response({ url: 'https://auth.openai.test/retry' })
+      }
+      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/image-tools')) {
+        return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      }
+      if (path.endsWith('/response-api')) {
+        return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      }
+      if (path.endsWith('/network')) {
+        return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      }
+      throw new Error(`unexpected request: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const firstPopup = {
+      closed: false,
+      opener: null,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+    }
+    const retryPopup = {
+      closed: false,
+      opener: null,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+    }
+    vi.spyOn(window, 'open')
+      .mockReturnValueOnce(firstPopup as unknown as Window)
+      .mockReturnValueOnce(retryPopup as unknown as Window)
+    render(<OpenAICodexSettings t={t} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: en.addAccount }))
+
+    await screen.findByText(en.signingIn)
+    const cancelAuthorization = screen.getByRole('button', { name: en.cancelAuthorization })
+    expect(cancelAuthorization).toHaveProperty('disabled', false)
+    fireEvent.click(cancelAuthorization)
+
+    await screen.findByText(en.signInCancelled)
+    expect(firstPopup.close).toHaveBeenCalledOnce()
+    const retry = screen.getByRole('button', { name: en.addAccount })
+    expect(retry).toHaveProperty('disabled', false)
+    resolveFirstLogin?.(response({ url: 'https://auth.openai.test/late' }))
+    await waitFor(() => { expect(firstPopup.location.replace).not.toHaveBeenCalled() })
+
+    fireEvent.click(retry)
+
+    await screen.findByText(en.signingIn)
+    await waitFor(() => {
+      expect(retryPopup.location.replace).toHaveBeenCalledWith('https://auth.openai.test/retry')
+    })
+    expect(loginRequests).toBe(2)
+  })
+
   it('cancels the login and restores the empty state when the popup closes', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
