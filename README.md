@@ -1,6 +1,6 @@
 # DSH Codex Shared Pool
 
-面向 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 的社区 Codex 插件：把多个 ChatGPT/Codex 订阅账号放进同一个本地账号池，并在请求前根据模型额度自动选择可用账号。
+在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 里自由使用 Codex 订阅额度：把多个 ChatGPT/Codex 订阅账号放进同一个本地账号池，并在请求前根据模型额度自动选择可用账号。
 
 当前版本收口“一期”的本地多账号体验。
 
