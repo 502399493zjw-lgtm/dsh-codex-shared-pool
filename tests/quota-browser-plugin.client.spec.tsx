@@ -37,6 +37,37 @@ interface RegisteredEntry {
   inject: () => CodexQuotaFooterFace
 }
 
+function installStockSettingsShell(): {
+  triggerClick: ReturnType<typeof vi.fn>
+  sectionClick: ReturnType<typeof vi.fn>
+} {
+  const trigger = document.createElement('button')
+  trigger.type = 'button'
+  trigger.setAttribute('aria-haspopup', 'dialog')
+  trigger.setAttribute('aria-expanded', 'false')
+  const sectionClick = vi.fn()
+  const triggerClick = vi.fn(() => {
+    trigger.setAttribute('aria-expanded', 'true')
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    dialog.setAttribute('aria-modal', 'true')
+    const nav = document.createElement('nav')
+    const general = document.createElement('button')
+    general.type = 'button'
+    general.textContent = 'General'
+    const codex = document.createElement('button')
+    codex.type = 'button'
+    codex.textContent = 'OpenAI Codex'
+    codex.addEventListener('click', sectionClick)
+    nav.append(general, codex)
+    dialog.append(nav)
+    document.body.append(dialog)
+  })
+  trigger.addEventListener('click', triggerClick)
+  document.body.append(trigger)
+  return { triggerClick, sectionClick }
+}
+
 function bench(withSettingsNavigation = true): {
   ctx: object
   entry: () => RegisteredEntry | undefined
@@ -68,7 +99,6 @@ function bench(withSettingsNavigation = true): {
     slots,
     get(name: string) {
       return name === 'settingsNavigation'
-        && inject.some(service => service === name)
         && withSettingsNavigation
         ? { openSection }
         : undefined
@@ -93,6 +123,7 @@ function bench(withSettingsNavigation = true): {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  document.body.replaceChildren()
 })
 
 describe('unified Codex quota browser contribution', () => {
@@ -101,7 +132,7 @@ describe('unified Codex quota browser contribution', () => {
     vi.stubGlobal('fetch', fetchMock)
     const b = bench()
 
-    expect(inject).toEqual(['slots', 'locale', 'settingsNavigation'])
+    expect(inject).toEqual(['slots', 'locale'])
     apply(b.ctx as never)
 
     expect(b.localeRegister).toHaveBeenCalledWith(NS, expect.any(Object))
@@ -141,7 +172,8 @@ describe('unified Codex quota browser contribution', () => {
     expectedText,
   ) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(snapshot), { status: 200 })))
-    const b = bench()
+    const shell = installStockSettingsShell()
+    const b = bench(false)
     apply(b.ctx as never)
     const injected = b.entry()?.inject()
     if (injected === undefined) throw new Error('quota contribution should be registered')
@@ -150,17 +182,18 @@ describe('unified Codex quota browser contribution', () => {
     expect(await screen.findByText(expectedText)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开' }))
 
-    expect(b.openSection).toHaveBeenCalledWith('openai-codex')
+    expect(shell.triggerClick).toHaveBeenCalledOnce()
+    expect(shell.sectionClick).toHaveBeenCalledOnce()
     await b.dispose()
   })
 
-  it('keeps Settings navigation optional and rejects an unsuccessful quota response', async () => {
+  it('keeps Settings navigation optional while exposing the stock-shell action on request errors', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
     const b = bench(false)
     apply(b.ctx as never)
 
     const injected = b.entry()?.inject()
-    expect(injected?.openSettings).toBeUndefined()
+    expect(injected?.openSettings).toEqual(expect.any(Function))
     await expect(injected?.read()).rejects.toThrow('HTTP 503')
     await b.dispose()
   })

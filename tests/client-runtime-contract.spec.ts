@@ -5,8 +5,8 @@ import {
 } from '../src/client/runtime-contract.ts'
 
 describe('published DSH browser runtime contract', () => {
-  it('injects Settings navigation only into the quota Browser child plugin', () => {
+  it('does not hard-wait on the optional Settings navigation service', () => {
     expect(CLIENT_INJECT).toEqual(['slots', 'locale', 'sessions'])
-    expect(QUOTA_CLIENT_INJECT).toEqual(['slots', 'locale', 'settingsNavigation'])
+    expect(QUOTA_CLIENT_INJECT).toEqual(['slots', 'locale'])
   })
 })
