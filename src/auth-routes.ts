@@ -14,6 +14,11 @@ import type { OpenAICodexUsage } from './usage.ts'
 import type { CodexQuotaSnapshot } from './quota/types.ts'
 import { assembleOpenAICodexProfileQuota } from './quota/profiles.ts'
 import { safeExternalErrorMessage } from './safe-message.ts'
+import type {
+  OpenAICodexAuthorizationFailure,
+  OpenAICodexLoginChallenge,
+  OpenAICodexProfilesStatus,
+} from './shared/types.ts'
 
 /** Plugin-owned status endpoint consumed by its browser half. */
 export const OPENAI_CODEX_AUTH_STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
@@ -47,7 +52,7 @@ export type OpenAICodexWebAuthStatus =
   | { status: 'signed-out' }
   | { status: 'signing-in' }
   | { status: 'signed-in'; usage: OpenAICodexUsage; quotaError?: string }
-  | { status: 'error'; message: string }
+  | { status: 'error'; reason: OpenAICodexAuthorizationFailure }
 
 /** Browser-safe account profile with its current quota projection. */
 export interface OpenAICodexWebProfile extends CodexProfileSummary {
@@ -56,18 +61,41 @@ export interface OpenAICodexWebProfile extends CodexProfileSummary {
 }
 
 /** Browser-safe state for the complete named-profile collection. */
-export type OpenAICodexWebProfilesStatus =
-  | { status: 'ready'; profiles: OpenAICodexWebProfile[] }
-  | { status: 'signing-in' }
-  | { status: 'error'; message: string }
+export type OpenAICodexWebProfilesStatus = OpenAICodexProfilesStatus<OpenAICodexWebProfile>
 
 /** Optional host-side app-server quota reader, kept behind the plugin boundary. */
 export interface OpenAICodexQuotaReader {
   read(): Promise<CodexQuotaSnapshot>
 }
 
-interface LoginChallenge {
-  url: string
+const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60_000
+
+type LoginAttemptPhase = 'active' | 'committing' | 'cancelled'
+type LoginAttemptErrorCode = OpenAICodexAuthorizationFailure | 'authorization-cancelled'
+
+class LoginAttemptError extends Error {
+  constructor(readonly code: LoginAttemptErrorCode) {
+    super(code)
+    this.name = 'LoginAttemptError'
+  }
+}
+
+interface LoginAttempt {
+  readonly addProfile: boolean
+  readonly cancellation: AbortController
+  readonly waiters: Array<{
+    resolve(value: OpenAICodexLoginChallenge): void
+    reject(error: unknown): void
+  }>
+  phase: LoginAttemptPhase
+  challenge?: OpenAICodexLoginChallenge
+  timeout?: ReturnType<typeof setTimeout>
+  operation?: Promise<void>
+}
+
+export interface OpenAICodexWebAuthOptions {
+  /** Maximum time an OAuth callback may remain pending. */
+  readonly timeoutMs?: number
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -90,19 +118,25 @@ function waitForPromptAbort(prompt: AuthPrompt, operationSignal: AbortSignal): P
 /** One lifecycle owner for the callback server, challenge, and public status. */
 export class OpenAICodexWebAuth {
   private state: OpenAICodexWebAuthStatus = { status: 'signed-out' }
-  private operation: Promise<void> | undefined
-  private cancellation: AbortController | undefined
-  private challenge: LoginChallenge | undefined
-  private challengeWaiters: Array<{ resolve(value: LoginChallenge): void; reject(error: unknown): void }> = []
+  private attempt: LoginAttempt | undefined
+  private readonly operations = new Set<Promise<void>>()
+  private readonly timeoutMs: number
 
-  constructor(private readonly store: OpenAICodexCredentialStore) {}
+  constructor(
+    private readonly store: OpenAICodexCredentialStore,
+    options: OpenAICodexWebAuthOptions = {},
+  ) {
+    this.timeoutMs = typeof options.timeoutMs === 'number' && Number.isFinite(options.timeoutMs)
+      ? Math.max(1, Math.floor(options.timeoutMs))
+      : DEFAULT_LOGIN_TIMEOUT_MS
+  }
 
   /**
    * Read current public state, consulting durable storage while idle.
    * @returns Browser-safe authentication and quota state.
    */
   async status(): Promise<OpenAICodexWebAuthStatus> {
-    if (this.operation !== undefined) return this.state
+    if (this.attempt !== undefined) return this.state
     if (this.state.status === 'error') return this.state
     return this.readStoredStatus()
   }
@@ -112,7 +146,7 @@ export class OpenAICodexWebAuth {
    * @returns Browser-safe profile collection state.
    */
   async profilesStatus(): Promise<OpenAICodexWebProfilesStatus> {
-    if (this.operation !== undefined) return { status: 'signing-in' }
+    if (this.attempt !== undefined) return { status: 'signing-in' }
     if (this.state.status === 'error') return this.state
     const profiles = await this.store.listProfiles()
     return {
@@ -153,11 +187,11 @@ export class OpenAICodexWebAuth {
    * Start or join the current browser-login operation.
    * @returns Provider authorization challenge.
    */
-  async signIn(): Promise<LoginChallenge> {
-    if (this.operation === undefined) this.start()
-    if (this.challenge !== undefined) return this.challenge
-    return new Promise<LoginChallenge>((resolve, reject) => {
-      this.challengeWaiters.push({ resolve, reject })
+  async signIn(): Promise<OpenAICodexLoginChallenge> {
+    const attempt = this.attempt ?? this.start()
+    if (attempt.challenge !== undefined) return attempt.challenge
+    return new Promise<OpenAICodexLoginChallenge>((resolve, reject) => {
+      attempt.waiters.push({ resolve, reject })
     })
   }
 
@@ -165,11 +199,11 @@ export class OpenAICodexWebAuth {
    * Start OAuth for a new profile without overwriting the active credential.
    * @returns Provider authorization challenge.
    */
-  async signInProfile(): Promise<LoginChallenge> {
-    if (this.operation === undefined) this.start(true)
-    if (this.challenge !== undefined) return this.challenge
-    return new Promise<LoginChallenge>((resolve, reject) => {
-      this.challengeWaiters.push({ resolve, reject })
+  async signInProfile(): Promise<OpenAICodexLoginChallenge> {
+    const attempt = this.attempt ?? this.start(true)
+    if (attempt.challenge !== undefined) return attempt.challenge
+    return new Promise<OpenAICodexLoginChallenge>((resolve, reject) => {
+      attempt.waiters.push({ resolve, reject })
     })
   }
 
@@ -178,18 +212,14 @@ export class OpenAICodexWebAuth {
    * @returns Whether a login was active and cancelled.
    */
   async cancelSignIn(): Promise<boolean> {
-    const operation = this.operation
-    const cancellation = this.cancellation
-    if (operation === undefined || cancellation === undefined) return false
-    cancellation.abort(new Error('OpenAI Codex sign-in cancelled'))
-    await operation.catch(() => undefined)
-    this.state = await this.readStoredStatus()
-    return true
+    const attempt = this.attempt
+    if (attempt === undefined) return false
+    return this.invalidateAttempt(attempt, new LoginAttemptError('authorization-cancelled'))
   }
 
   /** Wait for the current OAuth operation to settle without exposing its credential. */
   async waitForCompletion(): Promise<void> {
-    await this.operation?.catch(() => undefined)
+    await Promise.allSettled([...this.operations])
   }
 
   /**
@@ -197,7 +227,7 @@ export class OpenAICodexWebAuth {
    * @param profileId - Profile to move to the front of the allocation order.
    */
   async prioritizeProfile(profileId: string): Promise<void> {
-    if (this.operation !== undefined) throw new Error('wait for the current sign-in to finish')
+    if (this.attempt !== undefined) throw new Error('wait for the current sign-in to finish')
     await this.store.prioritizeProfile(profileId)
   }
 
@@ -207,7 +237,7 @@ export class OpenAICodexWebAuth {
    * @param label - New human-facing label.
    */
   async renameProfile(profileId: string, label: string): Promise<void> {
-    if (this.operation !== undefined) throw new Error('wait for the current sign-in to finish')
+    if (this.attempt !== undefined) throw new Error('wait for the current sign-in to finish')
     await this.store.renameProfile(profileId, label)
   }
 
@@ -216,66 +246,117 @@ export class OpenAICodexWebAuth {
    * @param profileId - Profile and credential to remove.
    */
   async removeProfile(profileId: string): Promise<void> {
-    if (this.operation !== undefined) throw new Error('wait for the current sign-in to finish')
+    if (this.attempt !== undefined) throw new Error('wait for the current sign-in to finish')
     await this.store.removeProfile(profileId)
     this.state = await this.readStoredStatus()
   }
 
   /** Cancel any callback listener, wait for quiescence, then delete the credential. */
   async signOut(): Promise<void> {
-    this.cancellation?.abort(new Error('OpenAI Codex sign-in cancelled'))
-    await this.operation?.catch(() => undefined)
+    const attempt = this.attempt
+    if (attempt?.phase === 'active') {
+      this.invalidateAttempt(attempt, new LoginAttemptError('authorization-cancelled'))
+    } else {
+      attempt?.cancellation.abort(new LoginAttemptError('authorization-cancelled'))
+    }
+    await this.waitForCompletion()
     await logoutOpenAICodex(this.store)
     this.state = { status: 'signed-out' }
   }
 
   /** Stop the owned callback listener during plugin disposal. */
   async dispose(): Promise<void> {
-    this.cancellation?.abort(new Error('OpenAI Codex plugin disposed'))
-    await this.operation?.catch(() => undefined)
+    const attempt = this.attempt
+    if (attempt?.phase === 'active') {
+      this.invalidateAttempt(attempt, new LoginAttemptError('authorization-cancelled'))
+    } else {
+      attempt?.cancellation.abort(new LoginAttemptError('authorization-cancelled'))
+    }
+    await this.waitForCompletion()
   }
 
-  private start(addProfile = false): void {
-    const cancellation = new AbortController()
-    this.cancellation = cancellation
-    this.challenge = undefined
+  private start(addProfile = false): LoginAttempt {
+    const attempt: LoginAttempt = {
+      addProfile,
+      cancellation: new AbortController(),
+      phase: 'active',
+      waiters: [],
+    }
+    this.attempt = attempt
     this.state = { status: 'signing-in' }
     const interaction = {
-      signal: cancellation.signal,
+      signal: attempt.cancellation.signal,
       prompt: prompt => prompt.type === 'select'
         ? Promise.resolve('browser')
-        : waitForPromptAbort(prompt, cancellation.signal),
-      notify: (event) => { this.onEvent(event) },
+        : waitForPromptAbort(prompt, attempt.cancellation.signal),
+      notify: (event) => { this.onEvent(attempt, event) },
     } satisfies Parameters<typeof loginOpenAICodex>[0]
     const login = addProfile
-      ? loginOpenAICodexProfile(interaction, this.store).then(() => undefined)
-      : loginOpenAICodex(interaction, this.store)
-    this.operation = login.then(
+      ? loginOpenAICodexProfile(interaction, this.store, {
+          beforeCommit: () => { this.beginCommit(attempt) },
+        }).then(() => undefined)
+      : loginOpenAICodex(interaction, this.store, {
+          beforeCommit: () => { this.beginCommit(attempt) },
+        })
+    const operation = login.then(
       async () => {
-        this.state = await this.readStoredStatus()
+        if (this.attempt === attempt && attempt.phase === 'committing') {
+          this.state = await this.readStoredStatus()
+        }
       },
       (error: unknown) => {
-        this.rejectChallenge(error)
-        this.state = { status: 'error', message: safeExternalErrorMessage(error) }
+        this.rejectChallenge(attempt, error)
+        if (this.attempt === attempt && attempt.phase !== 'cancelled') {
+          this.state = { status: 'error', reason: 'authorization-failed' }
+        }
       },
     ).finally(() => {
-      this.operation = undefined
-      this.cancellation = undefined
+      if (attempt.timeout !== undefined) clearTimeout(attempt.timeout)
+      if (this.attempt === attempt) this.attempt = undefined
+      this.operations.delete(operation)
     })
+    attempt.operation = operation
+    this.operations.add(operation)
+    attempt.timeout = setTimeout(() => {
+      this.invalidateAttempt(attempt, new LoginAttemptError('authorization-timed-out'))
+    }, this.timeoutMs)
+    return attempt
   }
 
-  private onEvent(event: AuthEvent): void {
+  private beginCommit(attempt: LoginAttempt): void {
+    if (this.attempt !== attempt || attempt.phase !== 'active' || attempt.cancellation.signal.aborted) {
+      throw new LoginAttemptError('authorization-cancelled')
+    }
+    attempt.phase = 'committing'
+    if (attempt.timeout !== undefined) clearTimeout(attempt.timeout)
+  }
+
+  private invalidateAttempt(attempt: LoginAttempt, error: LoginAttemptError): boolean {
+    if (this.attempt !== attempt || attempt.phase !== 'active') return false
+    attempt.phase = 'cancelled'
+    this.attempt = undefined
+    if (attempt.timeout !== undefined) clearTimeout(attempt.timeout)
+    this.state = error.code === 'authorization-timed-out'
+      ? { status: 'error', reason: error.code }
+      : { status: 'signed-out' }
+    attempt.cancellation.abort(error)
+    this.rejectChallenge(attempt, error)
+    return true
+  }
+
+  private onEvent(attempt: LoginAttempt, event: AuthEvent): void {
+    if (this.attempt !== attempt || attempt.phase !== 'active') return
     if (event.type !== 'auth_url') return
     const url = new URL(event.url)
     if (url.protocol !== 'https:') {
       const error = new Error('OpenAI returned an unsafe authorization URL')
-      this.cancellation?.abort(error)
-      this.rejectChallenge(error)
+      attempt.cancellation.abort(error)
+      this.rejectChallenge(attempt, error)
       return
     }
     const challenge = { url: event.url }
-    this.challenge = challenge
-    for (const waiter of this.challengeWaiters.splice(0)) waiter.resolve(challenge)
+    attempt.challenge = challenge
+    for (const waiter of attempt.waiters.splice(0)) waiter.resolve(challenge)
   }
 
   private async readStoredStatus(): Promise<OpenAICodexWebAuthStatus> {
@@ -288,8 +369,8 @@ export class OpenAICodexWebAuth {
     }
   }
 
-  private rejectChallenge(error: unknown): void {
-    for (const waiter of this.challengeWaiters.splice(0)) waiter.reject(error)
+  private rejectChallenge(attempt: LoginAttempt, error: unknown): void {
+    for (const waiter of attempt.waiters.splice(0)) waiter.reject(error)
   }
 }
 
@@ -316,6 +397,15 @@ function json(res: ServerResponse, status: number, value: unknown): void {
     'x-content-type-options': 'nosniff',
   })
   res.end(JSON.stringify(value))
+}
+
+function loginErrorResponse(res: ServerResponse, error: unknown): void {
+  if (error instanceof LoginAttemptError) {
+    const status = error.code === 'authorization-timed-out' ? 408 : 409
+    json(res, status, { error: error.code })
+    return
+  }
+  json(res, 400, { error: 'authorization-failed' })
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -446,7 +536,7 @@ export function registerOpenAICodexAuthRoutes(
           try {
             json(res, 200, await auth.signIn())
           } catch (error: unknown) {
-            json(res, 500, { error: safeExternalErrorMessage(error) })
+            loginErrorResponse(res, error)
           }
         },
       }),
@@ -478,7 +568,7 @@ export function registerOpenAICodexAuthRoutes(
           try {
             json(res, 200, await auth.signInProfile())
           } catch (error: unknown) {
-            json(res, 400, { error: safeExternalErrorMessage(error) })
+            loginErrorResponse(res, error)
           }
         },
       }),
@@ -488,11 +578,7 @@ export function registerOpenAICodexAuthRoutes(
         handler: async (req, res) => {
           if (req.method !== 'POST') {  json(res, 405, { error: 'method not allowed' }); return }
           if (!trustedRequest(req)) {  json(res, 403, { error: 'forbidden' }); return }
-          try {
-            json(res, 200, { cancelled: await auth.cancelSignIn() })
-          } catch (error: unknown) {
-            json(res, 500, { error: safeExternalErrorMessage(error) })
-          }
+          json(res, 200, { cancelled: await auth.cancelSignIn() })
         },
       }),
       ctx.webServer.register({

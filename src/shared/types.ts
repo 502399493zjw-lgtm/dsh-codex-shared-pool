@@ -65,3 +65,24 @@ export interface OpenAICodexUsage {
   /** Optional workspace member spend-limit projection. */
   readonly individualLimit?: OpenAICodexIndividualLimit
 }
+
+/** Fixed, secret-free reasons an OAuth attempt can fail in the Host. */
+export type OpenAICodexAuthorizationFailure =
+  | 'authorization-failed'
+  | 'authorization-timed-out'
+
+/** Browser-safe authorization challenge. The OAuth code remains Host-owned. */
+export interface OpenAICodexLoginChallenge {
+  readonly url: string
+}
+
+/** Idempotent result returned by the plugin-owned cancellation route. */
+export interface OpenAICodexCancelLoginResult {
+  readonly cancelled: boolean
+}
+
+/** Typed JSON-safe profile lifecycle projection returned to the browser. */
+export type OpenAICodexProfilesStatus<Profile> =
+  | { readonly status: 'ready'; readonly profiles: Profile[] }
+  | { readonly status: 'signing-in' }
+  | { readonly status: 'error'; readonly reason: OpenAICodexAuthorizationFailure }
