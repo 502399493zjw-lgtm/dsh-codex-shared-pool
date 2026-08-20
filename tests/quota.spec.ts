@@ -38,6 +38,43 @@ describe('Codex quota account pool', () => {
     expect(resolveCodexAccountHomes(undefined)).toEqual([resolve('./one'), resolve('./two')])
   })
 
+  it('does not count the implicit Codex home before a Pool profile is stored', async () => {
+    delete process.env.DSH_CODEX_ACCOUNT_HOMES
+    process.env.CODEX_HOME = '/private/implicit-codex-home'
+    const readAccount = vi.fn(async () => { throw new Error('signed out') })
+    const provider = new CodexQuotaProvider({}, {
+      cwd: process.cwd(),
+      spawn: (() => { throw new Error('not used') }) as never,
+      readAccount,
+      readStoredProfileCount: async () => 0,
+    })
+
+    await expect(provider.read()).resolves.toMatchObject({
+      currentAccountName: null,
+      currentRemainingPercent: null,
+      currentResetsAt: null,
+      poolAccountCount: 0,
+      poolRemainingPercent: null,
+    })
+    expect(readAccount).not.toHaveBeenCalled()
+  })
+
+  it('keeps explicitly configured homes in the Pool when their quota reads are offline', async () => {
+    const provider = new CodexQuotaProvider({
+      accountHomes: ['/private/current', '/private/offline'],
+    }, {
+      cwd: process.cwd(),
+      spawn: (() => { throw new Error('not used') }) as never,
+      readAccount: async () => { throw new Error('offline') },
+      readStoredProfileCount: async () => 0,
+    })
+
+    await expect(provider.read()).resolves.toMatchObject({
+      poolAccountCount: 2,
+      poolRemainingPercent: null,
+    })
+  })
+
   it('keeps configured pool count while averaging successful reads', async () => {
     const snapshot = await assembleCodexQuotaSnapshot(
       ['current', 'offline', 'other'],

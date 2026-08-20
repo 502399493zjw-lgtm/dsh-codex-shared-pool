@@ -63,6 +63,11 @@ export interface OpenAICodexWebProfile extends CodexProfileSummary {
 /** Browser-safe state for the complete named-profile collection. */
 export type OpenAICodexWebProfilesStatus = OpenAICodexProfilesStatus<OpenAICodexWebProfile>
 
+/** Optional host-side app-server quota reader, kept behind the plugin boundary. */
+export interface OpenAICodexQuotaReader {
+  read(): Promise<CodexQuotaSnapshot>
+}
+
 const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60_000
 
 type LoginAttemptPhase = 'active' | 'committing' | 'cancelled'
@@ -162,7 +167,8 @@ export class OpenAICodexWebAuth {
    * Profile order is the global allocation order. Usage failures remain
    * represented as unreadable quota while every stored profile stays counted.
    */
-  async quotaSnapshot(): Promise<CodexQuotaSnapshot> {
+  async quotaSnapshot(reader?: OpenAICodexQuotaReader): Promise<CodexQuotaSnapshot> {
+    if (reader !== undefined) return reader.read()
     const status = await this.profilesStatus()
     if (status.status !== 'ready') {
       return {
@@ -478,6 +484,7 @@ export function registerOpenAICodexAuthRoutes(
   store: OpenAICodexCredentialStore,
   imageTools: ImageToolPolicy,
   network: OutboundNetwork,
+  quota?: OpenAICodexQuotaReader,
 ): void {
   const auth = new OpenAICodexWebAuth(store)
   ctx.effect(() => {
@@ -498,7 +505,7 @@ export function registerOpenAICodexAuthRoutes(
           if (req.method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
           if (!trustedRequest(req)) { json(res, 403, { error: 'forbidden' }); return }
           try {
-            json(res, 200, await auth.quotaSnapshot())
+            json(res, 200, await auth.quotaSnapshot(quota))
           } catch {
             json(res, 200, {
               currentAccountName: null,

@@ -71,6 +71,8 @@ export interface CodexQuotaProviderOptions {
   readonly warn?: (message: string) => void
   /** Host-only override used by deterministic tests and alternate readers. */
   readonly readAccount?: (spec: CodexAccountReadSpec) => Promise<CodexAccountQuota>
+  /** Count of validated Pool profiles stored by the Host credential owner. */
+  readonly readStoredProfileCount?: () => Promise<number>
 }
 
 function positiveTimer(name: string, value: number): number {
@@ -209,6 +211,7 @@ export class CodexQuotaProvider {
   private readonly config: ResolvedConfig
   private readonly options: CodexQuotaProviderOptions
   private readonly accounts: ReturnType<typeof resolveCodexAccounts>
+  private readonly usesExplicitAccountHomes: boolean
   private activeAccountHome: string | undefined
   private selectionVersion = 0
   private cached: { readonly expiresAt: number; readonly snapshot: CodexQuotaSnapshot } | undefined
@@ -219,7 +222,11 @@ export class CodexQuotaProvider {
   constructor(config: CodexQuotaConfig = {}, options: CodexQuotaProviderOptions) {
     const codexCommand = config.codexCommand?.trim() ?? 'codex'
     if (codexCommand.length === 0) throw new TypeError('codex-quota: codexCommand must not be empty')
-    const accountHomes = resolveCodexAccountHomes(config.accountHomes)
+    const configuredHomes = config.accountHomes
+    const environmentHomes = process.env.DSH_CODEX_ACCOUNT_HOMES
+    this.usesExplicitAccountHomes = (configuredHomes !== undefined && configuredHomes.length > 0)
+      || (environmentHomes !== undefined && environmentHomes.trim().length > 0)
+    const accountHomes = resolveCodexAccountHomes(configuredHomes)
     this.accounts = resolveCodexAccounts(accountHomes, config.accountIds)
     const activeAccount = selectCodexAccount(this.accounts, config.activeAccountId)
     this.config = {
@@ -287,7 +294,25 @@ export class CodexQuotaProvider {
    * Return one cached, display-safe account-pool snapshot.
    * @returns The latest account and pool quota projection.
    */
-  read(): Promise<CodexQuotaSnapshot> {
+  async read(): Promise<CodexQuotaSnapshot> {
+    if (this.usesExplicitAccountHomes) return this.readQuotaSnapshot()
+    const poolAccountCount = await this.options.readStoredProfileCount?.() ?? 0
+    if (poolAccountCount === 0) {
+      return Object.freeze({
+        currentAccountName: null,
+        currentRemainingPercent: null,
+        currentResetsAt: null,
+        poolAccountCount: 0,
+        poolRemainingPercent: null,
+        refreshedAt: Date.now(),
+      })
+    }
+    const snapshot = await this.readQuotaSnapshot()
+    if (poolAccountCount === snapshot.poolAccountCount) return snapshot
+    return Object.freeze({ ...snapshot, poolAccountCount })
+  }
+
+  private readQuotaSnapshot(): Promise<CodexQuotaSnapshot> {
     const now = Date.now()
     if (this.cached !== undefined && now < this.cached.expiresAt) {
       return Promise.resolve(this.cached.snapshot)
@@ -306,7 +331,7 @@ export class CodexQuotaProvider {
           // A startup Settings resolution raced the first read. Drop the
           // stale projection and immediately re-read against the new home.
           if (this.inFlight === pending) this.inFlight = undefined
-          return this.read()
+          return this.readQuotaSnapshot()
         }
         this.cached = { expiresAt: Date.now() + this.config.refreshIntervalMs, snapshot }
         return snapshot
