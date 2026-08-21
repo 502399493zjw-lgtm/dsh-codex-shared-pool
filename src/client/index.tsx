@@ -14,8 +14,7 @@ import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
 import type { OpenAICodexSettingsInjected } from './OpenAICodexSettings.tsx'
 import { ImagegenToolView } from './ImagegenToolView.tsx'
 import type { ImageLoader } from './ImagegenToolView.tsx'
-import { FastModeModelPreference } from './FastModeModelPreference.tsx'
-import { FastModeTriggerIcon } from './FastModeTriggerIcon.tsx'
+import { CodexModelSelect } from './CodexModelSelect.tsx'
 import { en, zh } from './locales.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 import { apply as applyCodexQuota } from './quota/index.ts'
@@ -85,15 +84,31 @@ export function apply(ctx: ClientContext): void {
       t,
     }),
   }, ImagegenToolView))
-  ctx.slots.inject('conversation.input.model.preference', () => ctx.slots.register({
-    name: 'conversation.input.model.preference',
-    id: 'openai-codex-speed',
-    order: 10,
+  const modelDirectories = ctx.modelDirectories
+  // The shared Host entry augments Cordis with its own `sessions` service.
+  // Narrow back to the browser runtime face at this browser-only boundary.
+  const clientSessions = ctx.sessions as unknown as {
+    subagentAddress(id: SessionId): unknown | undefined
+  }
+  ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
+    name: 'conversation.input.model',
+    // Stock rc.8 declares one complete model affordance. A lower priority is
+    // the supported shadowing mechanism for replacing that single occupant.
+    priority: -10,
     locale: namespace,
-  }, FastModeModelPreference))
-  ctx.slots.inject('conversation.input.model.trigger.prefix', () => ctx.slots.register({
-    name: 'conversation.input.model.trigger.prefix',
-    id: 'openai-codex-fast-mode-bolt',
-    order: 10,
-  }, FastModeTriggerIcon))
+    inject: (sessionId: SessionId) => {
+      const directory = modelDirectories.directoryFor(sessionId)
+      const available = clientSessions.subagentAddress(sessionId) === undefined
+      return {
+        available,
+        directory: directory.store,
+        load: () => {
+          if (available) void directory.load().catch(() => undefined)
+        },
+        select: (selection: Parameters<typeof directory.select>[0]) => available
+          ? directory.select(selection).then(() => true, () => false)
+          : Promise.resolve(false),
+      }
+    },
+  }, CodexModelSelect))
 }

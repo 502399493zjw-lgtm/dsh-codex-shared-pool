@@ -1,11 +1,4 @@
-/**
- * The model-selection child seats are declared by the local DSH workspace
- * package.  They are intentionally repeated here because the published
- * rc.8 declaration currently omits that child-table merge, even though the
- * runtime still exposes these seats.  Keeping the declaration in the plugin
- * lets the standalone package compile against both the workspace and the
- * published DSH package without changing DSH itself.
- */
+/** Published-DSH declarations kept at the plugin's narrow compile boundary. */
 import type { SlotEntryDef } from '@deepseek-ai/dsh-client-ui-slots'
 
 /**
@@ -22,33 +15,17 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-interface CodexModelMenuSelection {
-  provider: string
-  model: string
-}
-
-interface CodexModelTriggerPrefixOwner {
-  selection: CodexModelMenuSelection | null
-}
-
-interface CodexModelMenuPreferenceOwner {
-  selection: CodexModelMenuSelection | null
-  interactionId: string
-  close: (restoreFocus?: boolean) => void
-  registerItem: (node: HTMLButtonElement | null) => void
+interface CodexModelSeatOwner {
+  locked: boolean
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
-    'conversation.input.model.trigger.prefix': SlotEntryDef & {
-      kind: 'list'
+    /** Stock rc.8's documented single model-select seat. */
+    'conversation.input.model': SlotEntryDef & {
+      kind: 'single'
       scope: 'session'
-      owner: CodexModelTriggerPrefixOwner
-    }
-    'conversation.input.model.preference': SlotEntryDef & {
-      kind: 'list'
-      scope: 'session'
-      owner: CodexModelMenuPreferenceOwner
+      owner: CodexModelSeatOwner
     }
   }
 }
