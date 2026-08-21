@@ -4,7 +4,7 @@ This repository is the single public project and installation boundary for the D
 
 ## Task start
 
-Before editing, inspect `git status --short --branch`, the relevant diff, and applicable instructions. Treat existing changes as user-owned. Keep each independent task on a `codex/` branch or Codex-managed worktree; do not edit `main` or `master` directly.
+Before editing, inspect `git status --short --branch`, the relevant diff, and applicable instructions. Treat existing changes as user-owned. Fetch the existing remote and create each independent `codex/` task branch or Codex-managed worktree from the latest remote default branch unless the user names a release, tag, or commit; if the remote cannot be checked, report that the base may be stale. Do not edit `main` or `master` directly.
 
 ## Product boundaries
 
@@ -18,7 +18,11 @@ Before editing, inspect `git status --short --branch`, the relevant diff, and ap
 
 Write a focused failing test before behavior changes. Run focused tests, then `pnpm run build` and `pnpm run verify:package`. For installation changes, pack the plugin and install that tarball into an isolated `DSH_HOME` using the pinned published DSH CLI.
 
-Do not commit credentials, `.env` contents, Codex authentication data, account data, or machine-specific paths. Do not commit, push, publish, create a remote repository, or rewrite history unless the user explicitly requests it. Preserve unrelated changes and never use destructive Git cleanup commands.
+Do not commit credentials, `.env` contents, Codex authentication data, account data, or machine-specific paths. Preserve unrelated changes and never use destructive Git cleanup commands.
+
+For this repository, a request to fix, optimize, implement, or otherwise change the project authorizes the normal GitHub delivery loop after validation: commit only the task-owned diff, push the `codex/` task branch, create or update its PR, include the user-visible change, validation results, media provenance when applicable, and unverified risks, then read the PR and CI status. Do not ask for a second confirmation before those steps. A local-only request overrides this default.
+
+This standing authorization does not include merging the PR, publishing npm, creating a Release or remote repository, changing visibility, rewriting history, or other consequential follow-up actions. When the next useful step needs human review, credentials, a product decision, new authorization, merge, or release, proactively ask whether the user wants to proceed and state the exact action and impact.
 
 ## Handoff
 
