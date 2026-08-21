@@ -17,7 +17,6 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
 import {
   CodexQuotaConfigSchema,
-  CodexQuotaProvider,
   type CodexQuotaConfig,
 } from './quota/provider.ts'
 import { createOpenAICodexAdapter } from './adapter.ts'
@@ -191,19 +190,7 @@ export function apply(ctx: Context, config: Config): void {
     recordRequest: (request) => { recordOpenAICodexSearchRequest(ctx, request) },
   }))
   ctx.inject(['webServer'], (webCtx) => {
-    // The official Codex app-server quota reader is optional at runtime. The
-    // route itself falls back to the profile usage endpoint when a host does
-    // not provide subprocess support, keeping this package independently
-    // installable while preserving the full DSH sidebar projection.
-    const quota = ctx.get('subprocess') === undefined
-      ? undefined
-      : new CodexQuotaProvider(config.quota ?? {}, {
-        cwd: process.cwd(),
-        spawn: spec => ctx.get('subprocess')!.spawn(spec),
-        warn: message => ctx.logger.warn(message),
-        readStoredProfileCount: async () => (await credentials.listProfiles()).length,
-      })
-    registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network, routingEvents, quota)
+    registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network, routingEvents)
   })
   ctx.inject(['tools', 'fs', 'attachments'], (toolCtx) => {
     toolCtx.tools.register(imagegenTool(toolCtx, credentials, imageTools))
