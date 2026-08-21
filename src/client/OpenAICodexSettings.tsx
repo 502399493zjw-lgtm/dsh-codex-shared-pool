@@ -155,17 +155,6 @@ function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
 }
 
-function ordinalAlias(index: number): string {
-  let value = index + 1
-  let alias = ''
-  while (value > 0) {
-    value -= 1
-    alias = String.fromCharCode(65 + (value % 26)) + alias
-    value = Math.floor(value / 26)
-  }
-  return alias
-}
-
 function routingReasonKey(reason: LocalRoutingReason): OpenAICodexSettingsKey {
   switch (reason) {
     case 'priority': return 'routingReasonPriority'
@@ -739,7 +728,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
               >
                 <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} size={9} />
                 <span className="dsh-codex-profile-identity">
-                  <span className="dsh-codex-profile-alias">{t('accountAlias', { alias: ordinalAlias(index) })}</span>
+                  <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
                   <span className="dsh-codex-profile-name">{profile.label}</span>
                 </span>
                 <span className="dsh-codex-profile-badges">
