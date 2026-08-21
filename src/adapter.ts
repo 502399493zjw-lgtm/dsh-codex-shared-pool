@@ -25,14 +25,23 @@ export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 export const OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
 
 const REASONING_DESCRIPTIONS = {
-  low: 'Fast responses with lighter reasoning',
-  medium: 'Balances speed and reasoning depth for everyday tasks',
-  high: 'Greater reasoning depth for complex problems',
-  xhigh: 'Extra high reasoning depth for complex problems',
-  max: 'Maximum reasoning depth for the hardest problems',
+  low: '响应更快，推理程度较轻',
+  medium: '兼顾速度与推理深度，适合日常任务',
+  high: '推理深度更高，适合复杂问题',
+  xhigh: '超高推理深度，适合复杂问题',
+  max: '最高推理深度，适合最困难的问题',
 } as const
 
 type CodexReasoningEffort = keyof typeof REASONING_DESCRIPTIONS
+
+/** Match the simplified-Chinese effort labels used by the Codex client. */
+const REASONING_DISPLAY_NAMES: Readonly<Record<CodexReasoningEffort, string>> = {
+  low: '轻度',
+  medium: '中',
+  high: '高',
+  xhigh: '极高',
+  max: '最高',
+}
 
 interface CodexReasoningCatalogEntry {
   readonly defaultEffort: CodexReasoningEffort
@@ -99,7 +108,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
       reasoning: {
         efforts: catalog.efforts.map(effort => ({
           id: ReasoningEffortId(effort),
-          name: effort === 'xhigh' ? 'Xhigh' : `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`,
+          name: REASONING_DISPLAY_NAMES[effort],
           description: REASONING_DESCRIPTIONS[effort],
         })),
         defaultEffort: ReasoningEffortId(catalog.defaultEffort),

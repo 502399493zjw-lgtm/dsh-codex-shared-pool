@@ -11,6 +11,7 @@ import {
 
 interface ModelTriggerPrefixOwner {
   selection: { provider: string; model: string } | null
+  title?: string
 }
 
 /** Pure visibility rule shared with the state test. */
@@ -24,7 +25,7 @@ export function shouldShowFastModeBolt(
 }
 
 /** Provider-owned prefix contribution for the model trigger. */
-export function FastModeTriggerIcon({ selection }: ModelTriggerPrefixOwner) {
+export function FastModeTriggerIcon({ selection, title = 'Fast' }: ModelTriggerPrefixOwner) {
   const preferences = useSyncExternalStore(
     subscribeResponsePreferences,
     responsePreferencesSnapshot,
@@ -41,7 +42,7 @@ export function FastModeTriggerIcon({ selection }: ModelTriggerPrefixOwner) {
   return (
     <span
       data-dsh-codex-fast-mode="true"
-      title="Fast"
+      title={title}
       aria-hidden="true"
       style={{ display: 'inline-grid', placeItems: 'center', flex: '0 0 16px' }}
     >

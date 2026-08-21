@@ -28,6 +28,16 @@ describe('OpenAI Codex model capabilities', () => {
     expect(resolved.reasoning?.defaultEffort).toBe('low')
     expect(resolved.reasoning?.efforts.map(effort => effort.id))
       .toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(resolved.reasoning?.efforts.map(effort => effort.name))
+      .toEqual(['轻度', '中', '高', '极高', '最高'])
+    expect(resolved.reasoning?.efforts.map(effort => effort.description))
+      .toEqual([
+        '响应更快，推理程度较轻',
+        '兼顾速度与推理深度，适合日常任务',
+        '推理深度更高，适合复杂问题',
+        '超高推理深度，适合复杂问题',
+        '最高推理深度，适合最困难的问题',
+      ])
   })
 
   it('uses the Codex-native default for Terra', async () => {
