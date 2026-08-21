@@ -81,8 +81,11 @@ describe('OpenAI Codex local routing monitor', () => {
 
     const activeProfile = await screen.findByRole('button', { name: /Private B/ })
     expect(within(activeProfile).getByText(en.profileInUse)).toBeDefined()
+    expect(within(activeProfile).getByText('Priority 1')).toBeDefined()
+    const secondProfile = screen.getByRole('button', { name: /Private A/ })
+    expect(within(secondProfile).getByText('Priority 2')).toBeDefined()
     expect(screen.getAllByText(en.profileInUse)).toHaveLength(1)
-    expect(screen.queryByText('Priority')).toBeNull()
+    expect(screen.queryByText('Account A')).toBeNull()
     expect(screen.getByRole('button', { name: en.setPriorityProfile })).toBeDefined()
   })
 
