@@ -66,13 +66,13 @@
 
 ## 安装
 
-当前为 alpha 版本，发布在 npm 的 `next` tag。安装到 DSH Web profile：
+当前正式版发布在 npm 的 `latest` tag。安装到 DSH Web profile：
 
 ```bash
-dsh plugin --profile web add dsh-codex-shared-pool@0.1.0-alpha.2
+dsh plugin --profile web add dsh-codex-shared-pool@0.1.0
 ```
 
-如需跟随后续预发布版本，可将精确版本替换为 `dsh-codex-shared-pool@next`。
+也可以省略版本以安装 `latest`；如需跟随后续预发布版本，请使用 `dsh-codex-shared-pool@next`。
 
 然后启动同一个 Web profile，进入：
 
