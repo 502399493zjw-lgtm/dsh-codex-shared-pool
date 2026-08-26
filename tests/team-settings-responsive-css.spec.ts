@@ -29,6 +29,15 @@ describe('Team Settings responsive container contract', () => {
     )
   })
 
+  it('uses a compact type scale inside the team settings workspace', () => {
+    expect(css).toMatch(/\.workspaceTitle\s*\{[^}]*font-size:\s*18px;/s)
+    expect(css).toMatch(/\.workspaceNavigation button\s*\{[^}]*font-size:\s*13px;/s)
+    expect(css).toMatch(/\.workspaceTeamName\s*\{[^}]*font-size:\s*clamp\(21px,\s*3\.6cqi,\s*24px\);/s)
+    expect(css).toMatch(/\.workspaceSectionTitle\s*\{[^}]*font-size:\s*19px;/s)
+    expect(css).toMatch(/\.usageHeading\s*\{[^}]*font-size:\s*19px;/s)
+    expect(css).toMatch(/\.usageCardTitle\s*\{[^}]*font-size:\s*14px;/s)
+  })
+
   it('keeps the prototype usage hierarchy instead of equal metric tiles', () => {
     expect(css).toMatch(/\.usageCards\s*\{[^}]*border-top:\s*1px solid var\(--team-line-strong\);[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
     expect(css).toMatch(/\.usageMetric:first-child\s+dd\s*\{[^}]*font-size:\s*clamp\(24px,\s*4cqi,\s*32px\);/s)
