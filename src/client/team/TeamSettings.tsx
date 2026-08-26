@@ -2284,9 +2284,16 @@ function TeamUsageSection({ loading, projection, unavailable, onRefresh, t }: {
           <p className={styles.hint}>{t('usageWindow24h')}</p>
         </div>
         {projection === undefined || unavailable ? null : (
-          <Button size="sm" variant="ghost" icon={<IconRefreshOutline16 />} disabled={loading} onClick={onRefresh}>
-            {t('refresh')}
-          </Button>
+          <Button
+            className={styles.usageRefresh}
+            size="sm"
+            variant="ghost"
+            icon={<IconRefreshOutline16 />}
+            aria-label={t('refresh')}
+            title={t('refresh')}
+            disabled={loading}
+            onClick={onRefresh}
+          />
         )}
       </div>
 
@@ -2316,7 +2323,7 @@ function TeamUsageCard({ id, title, aggregate, t }: {
   t: TeamSettingsInjected['t']
 }) {
   const usage = createTeamUsageViewModel(aggregate)
-  const showStatus = usage.state !== 'complete'
+  const showStatus = usage.state !== 'complete' && usage.state !== 'zero'
   const showCoverage = usage.state !== 'complete' && usage.state !== 'zero'
 
   return (

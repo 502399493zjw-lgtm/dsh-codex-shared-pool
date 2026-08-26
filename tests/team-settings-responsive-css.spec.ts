@@ -28,7 +28,7 @@ describe('Team Settings responsive container contract', () => {
   it('uses structural rules without boxing every usage row', () => {
     expect(css).toMatch(/--team-line:\s*color-mix\(in srgb, var\(--team-ink\) 18%, transparent\);/)
     expect(css).toMatch(/--team-line-strong:\s*color-mix\(in srgb, var\(--team-ink\) 30%, transparent\);/)
-    expect(css).toMatch(/\.workspaceShell\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-top:\s*0;[^}]*border-radius:\s*0 0 14px 14px;/s)
+    expect(css).toMatch(/\.workspaceShell\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-radius:\s*14px;/s)
     expect(css).toMatch(/\.workspaceRail\s*\{[^}]*border-right:\s*1px solid var\(--team-line-strong\);/s)
     expect(css).toMatch(/\.workspaceHeader\s*\{[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
     expect(css).toMatch(/\.usageCardHeader\s*\{[^}]*border-bottom:\s*0;/s)
@@ -52,12 +52,12 @@ describe('Team Settings responsive container contract', () => {
     )
   })
 
-  it('keeps the invitation entry action on one line', () => {
+  it('keeps compact header actions intentional', () => {
     expect(css).toMatch(
       /\.workspaceSectionHeader\s*>\s*button\s*\{[^}]*min-height:\s*36px;[^}]*padding:\s*7px 12px;[^}]*font-size:\s*13px;[^}]*white-space:\s*nowrap;/s,
     )
     expect(css).toMatch(
-      /\.usageHeader\s*>\s*button\s*\{[^}]*white-space:\s*nowrap;/s,
+      /\.usageRefresh\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*padding:\s*0;/s,
     )
   })
 })

@@ -122,8 +122,7 @@
   grid-template-columns: minmax(132px, 152px) minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--team-line-strong);
-  border-top: 0;
-  border-radius: 0 0 14px 14px;
+  border-radius: 14px;
   background: var(--team-layer);
 }
 
@@ -474,9 +473,15 @@
   gap: 14px;
 }
 
-.usageHeader > button {
+.usageRefresh {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
-  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 0;
 }
 
 .usageHeading,

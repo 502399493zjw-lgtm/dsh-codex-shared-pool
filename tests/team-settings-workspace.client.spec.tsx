@@ -1420,6 +1420,9 @@ describe('Team subscription-pool workspace', () => {
 
     const settings = await openTeamSettings('usage')
     const usage = within(settings).getByRole('region', { name: '用量' })
+    const refresh = within(usage).getByRole('button', { name: zh.refresh })
+    expect(refresh.textContent).toBe('')
+    expect(refresh.getAttribute('title')).toBe(zh.refresh)
     expect(within(usage).queryByRole('group', { name: zh.teamUsage })).toBeNull()
     const mineUsage = within(usage).getByRole('group', { name: zh.myTeamUsage })
     expect(within(mineUsage).getByText('US$1.75')).toBeDefined()
@@ -1459,7 +1462,7 @@ describe('Team subscription-pool workspace', () => {
       },
       state: '暂无请求', amount: 'US$0.00', tokens: '0 Token',
     },
-  ])('renders the $label usage state without inventing totals', async ({ aggregate, state, amount, tokens }) => {
+  ])('renders the $label usage state without inventing totals', async ({ label, aggregate, state, amount, tokens }) => {
     managementApi.usage.mockResolvedValue({
       role: 'member', window: completeOwnerUsage.window, currency: 'USD', mine: aggregate,
     })
@@ -1469,7 +1472,11 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('usage')
     const mineUsage = within(within(settings).getByRole('region', { name: '用量' }))
       .getByRole('group', { name: zh.myTeamUsage })
-    expect(within(mineUsage).getByText(state)).toBeDefined()
+    if (label === 'zero') {
+      expect(within(mineUsage).queryByText(state)).toBeNull()
+    } else {
+      expect(within(mineUsage).getByText(state)).toBeDefined()
+    }
     if (amount === tokens) {
       expect(within(mineUsage).getAllByText(amount)).toHaveLength(2)
     } else {
