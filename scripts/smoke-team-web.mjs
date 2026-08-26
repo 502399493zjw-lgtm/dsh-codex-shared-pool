@@ -27,6 +27,13 @@ function requiredString(value, key, label) {
   return value[key]
 }
 
+function requiredSafeInteger(value, key, label, minimum = 1) {
+  if (!Number.isSafeInteger(value[key]) || value[key] < minimum) {
+    throw new Error(`invalid ${label}: ${key} is missing`)
+  }
+  return value[key]
+}
+
 function isLoopback(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]'
 }
@@ -162,6 +169,7 @@ function validateInitialOverview(value, teamName, ownerName, secrets) {
   const team = record(overview.team, 'Team management overview')
   const currentMember = record(overview.currentMember, 'Team management overview')
   const teamId = requiredString(team, 'id', 'Team management overview')
+  requiredSafeInteger(team, 'lifecycleRevision', 'Team management overview')
   const ownerMemberId = requiredString(currentMember, 'id', 'Team management overview')
   if (team.name !== teamName || team.status !== 'active') {
     throw new Error('invalid Team management overview: Team mismatch')
@@ -182,6 +190,7 @@ function validateOverview(value, expected, secrets, expectedPendingInviteId) {
   const overview = record(value, 'Team management overview')
   const team = record(overview.team, 'Team management overview')
   const currentMember = record(overview.currentMember, 'Team management overview')
+  requiredSafeInteger(team, 'lifecycleRevision', 'Team management overview')
   if (team.id !== expected.teamId || team.status !== 'active') {
     throw new Error('invalid Team management overview: Team mismatch')
   }
