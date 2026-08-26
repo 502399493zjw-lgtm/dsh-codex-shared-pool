@@ -17,11 +17,19 @@ import {
 } from './envelope-credentials.ts'
 import type { TeamKeyEncryptionProvider } from './envelope-credentials.ts'
 import { RemoteTeamCredentialBroker } from './remote-credentials.ts'
+import { TeamInviteCipher } from './invite-cipher.ts'
+import type { TeamInviteKeyEncryptionProvider } from './invite-cipher.ts'
+import {
+  Aes256GcmTeamInviteKeyEncryptionProvider,
+  decodeTeamInviteMasterKey,
+  TeamInviteKeyEncryptionKeyring,
+} from './invite-key-encryption.ts'
 
 export const DEFAULT_TEAM_DATABASE_URL_REF = credentialRef('DSH_CODEX_SHARED_POOL_DATABASE_URL')
 export const DEFAULT_TEAM_BOOTSTRAP_TOKEN_REF = credentialRef('DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN')
 export const DEFAULT_TEAM_CREDENTIAL_MASTER_KEY_REF = credentialRef('DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY')
 export const DEFAULT_TEAM_CREDENTIAL_BROKER_API_KEY_REF = credentialRef('DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY')
+export const DEFAULT_TEAM_INVITE_TOKEN_MASTER_KEY_REF = credentialRef('DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY')
 
 interface InitializableTeamStore extends TeamStore {
   initialize(): Promise<void>
@@ -29,11 +37,16 @@ interface InitializableTeamStore extends TeamStore {
 
 export interface TeamRuntimeDependencies {
   readonly credentials?: Pick<CredentialProvider, 'resolve'>
-  readonly createPostgresStore?: (connectionString: string) => InitializableTeamStore
+  readonly createPostgresStore?: (
+    connectionString: string,
+    inviteCipher: TeamInviteCipher,
+  ) => InitializableTeamStore
   /** Host-only test/adapter seam; never sourced from plugin JSON configuration. */
   readonly broker?: TeamCredentialBroker
   /** Host-only managed-KMS seam; when omitted a KEK is resolved from DSH credentials. */
   readonly keyEncryptionProvider?: TeamKeyEncryptionProvider
+  /** Host-only invitation-KMS seam. The returned Team service owns its lifecycle. */
+  readonly inviteKeyEncryptionProvider?: TeamInviteKeyEncryptionProvider
   /** Host-only HTTP seam used by a remote credential broker client. */
   readonly fetch?: typeof fetch
 }
@@ -52,6 +65,10 @@ export async function createTeamServiceFromConfig(
     | 'credentialBroker'
     | 'credentialBrokerBaseUrl'
     | 'credentialBrokerApiKeyRef'
+    | 'bootstrapTokenRef'
+    | 'inviteTokenMasterKeyRef'
+    | 'inviteTokenPreviousMasterKeyRef'
+    | 'inviteEnvelopeSweepIntervalMs'
   >,
   dependencies: TeamRuntimeDependencies = {},
 ): Promise<TeamService> {
@@ -61,9 +78,10 @@ export async function createTeamServiceFromConfig(
     }
     return initializeTeamService(new TeamService({
       ...(dependencies.broker === undefined ? {} : { broker: dependencies.broker }),
-    }))
+    }), config.inviteEnvelopeSweepIntervalMs)
   }
 
+  validateInviteKeyReferences(config)
   const credentials = dependencies.credentials
   if (credentials === undefined) throw new Error('DSH credential service is required for PostgreSQL Team storage')
   const ref = config.databaseUrlRef === undefined
@@ -74,15 +92,25 @@ export async function createTeamServiceFromConfig(
     throw new Error(`Team database credential ${String(ref)} is not configured`)
   }
 
-  const store = (dependencies.createPostgresStore ?? (connectionString => new PostgresTeamStore({ connectionString })))(resolved.value)
+  let inviteKeyEncryptionProvider: TeamInviteKeyEncryptionProvider | undefined
+  let store: InitializableTeamStore | undefined
   let service: TeamService | undefined
   try {
+    inviteKeyEncryptionProvider = dependencies.inviteKeyEncryptionProvider
+      ?? await resolveInviteKeyEncryptionProvider(config, credentials)
+    const inviteCipher = new TeamInviteCipher({ keyEncryptionProvider: inviteKeyEncryptionProvider })
+    store = (dependencies.createPostgresStore
+      ?? ((connectionString, cipher) => new PostgresTeamStore({ connectionString, inviteCipher: cipher })))(
+        resolved.value,
+        inviteCipher,
+      )
     await store.initialize()
     let broker = dependencies.broker
     if (broker === undefined) {
       if (!(store instanceof PostgresTeamStore)) {
         throw new Error('PostgreSQL Team credential storage requires PostgresTeamStore or an injected credential broker')
       }
+      const postgresStore = store
       const onStatusChange = async (
         teamId: string,
         accountId: string,
@@ -90,7 +118,7 @@ export async function createTeamServiceFromConfig(
         lastError?: string,
         expectedStatus?: Parameters<TeamStore['setContributionAccountStatus']>[4],
       ) => {
-        await store.setContributionAccountStatus(teamId, accountId, status, lastError, expectedStatus)
+        await postgresStore.setContributionAccountStatus(teamId, accountId, status, lastError, expectedStatus)
       }
       if (config.credentialBroker === 'remote') {
         broker = new RemoteTeamCredentialBroker({
@@ -103,7 +131,7 @@ export async function createTeamServiceFromConfig(
         const keyEncryptionProvider = dependencies.keyEncryptionProvider
           ?? await resolveLocalKeyEncryptionProvider(config, credentials)
         broker = new LocalTeamCredentialBroker({
-          storage: new PostgresTeamEnvelopeCredentialBackend({ pool: store.pool, keyEncryptionProvider }),
+          storage: new PostgresTeamEnvelopeCredentialBackend({ pool: postgresStore.pool, keyEncryptionProvider }),
           onStatusChange,
         })
       }
@@ -111,17 +139,55 @@ export async function createTeamServiceFromConfig(
     const router = store instanceof PostgresTeamStore
       ? new PostgresTeamRequestRouter({ pool: store.pool })
       : undefined
-    service = new TeamService({
+    service = new InviteKeyOwningTeamService({
       store,
       ...(router === undefined ? {} : { router }),
       broker,
-    })
+    }, inviteKeyEncryptionProvider)
     await service.reconcileContributionAuthorizations()
+    service.startCapacityMonitoring()
+    service.startInviteEnvelopeSweeping(config.inviteEnvelopeSweepIntervalMs === undefined
+      ? {}
+      : { intervalMs: config.inviteEnvelopeSweepIntervalMs })
     return service
   } catch (error: unknown) {
-    if (service === undefined) await store.dispose().catch(() => undefined)
+    if (service === undefined) {
+      await store?.dispose().catch(() => undefined)
+      await Promise.resolve(inviteKeyEncryptionProvider?.dispose?.()).catch(() => undefined)
+    }
     else await service.dispose().catch(() => undefined)
     throw error
+  }
+}
+
+class InviteKeyOwningTeamService extends TeamService {
+  private disposal: Promise<void> | undefined
+
+  constructor(
+    options: ConstructorParameters<typeof TeamService>[0],
+    private readonly inviteKeyEncryptionProvider: TeamInviteKeyEncryptionProvider,
+  ) {
+    super(options)
+  }
+
+  override dispose(): Promise<void> {
+    this.disposal ??= this.disposeOwnedResources()
+    return this.disposal
+  }
+
+  private async disposeOwnedResources(): Promise<void> {
+    let failure: unknown
+    try {
+      await super.dispose()
+    } catch (error: unknown) {
+      failure = error
+    }
+    try {
+      await this.inviteKeyEncryptionProvider.dispose?.()
+    } catch (error: unknown) {
+      failure ??= error
+    }
+    if (failure !== undefined) throw failure
   }
 }
 
@@ -135,9 +201,16 @@ async function resolveRemoteBrokerApiKey(
   return (await credentials.resolve(ref))?.value
 }
 
-async function initializeTeamService(service: TeamService): Promise<TeamService> {
+async function initializeTeamService(
+  service: TeamService,
+  inviteEnvelopeSweepIntervalMs?: number,
+): Promise<TeamService> {
   try {
     await service.reconcileContributionAuthorizations()
+    service.startCapacityMonitoring()
+    service.startInviteEnvelopeSweeping(inviteEnvelopeSweepIntervalMs === undefined
+      ? {}
+      : { intervalMs: inviteEnvelopeSweepIntervalMs })
     return service
   } catch (error: unknown) {
     await service.dispose().catch(() => undefined)
@@ -170,6 +243,81 @@ async function resolveLocalKeyEncryptionProvider(
   if (previousRef === ref) throw new Error('Team current and previous credential encryption key references must differ')
   const previous = await resolveAesKeyEncryptionProvider(previousRef, credentials)
   return new TeamKeyEncryptionKeyring(primary, [previous])
+}
+
+async function resolveInviteKeyEncryptionProvider(
+  config: Pick<TeamConfig, 'inviteTokenMasterKeyRef' | 'inviteTokenPreviousMasterKeyRef'>,
+  credentials: Pick<CredentialProvider, 'resolve'>,
+): Promise<TeamInviteKeyEncryptionProvider> {
+  const ref = config.inviteTokenMasterKeyRef === undefined
+    ? DEFAULT_TEAM_INVITE_TOKEN_MASTER_KEY_REF
+    : credentialRef(config.inviteTokenMasterKeyRef)
+  const providers: Aes256GcmTeamInviteKeyEncryptionProvider[] = []
+  try {
+    const primary = await resolveAesInviteKeyEncryptionProvider(ref, credentials)
+    providers.push(primary)
+    const previousName = config.inviteTokenPreviousMasterKeyRef?.trim()
+    if (previousName === undefined || previousName.length === 0) return primary
+    const previous = await resolveAesInviteKeyEncryptionProvider(credentialRef(previousName), credentials)
+    providers.push(previous)
+    return new TeamInviteKeyEncryptionKeyring(primary, [previous])
+  } catch (error: unknown) {
+    await Promise.allSettled(providers.map(provider => Promise.resolve(provider.dispose())))
+    throw error
+  }
+}
+
+async function resolveAesInviteKeyEncryptionProvider(
+  ref: CredentialRef,
+  credentials: Pick<CredentialProvider, 'resolve'>,
+): Promise<Aes256GcmTeamInviteKeyEncryptionProvider> {
+  const resolved = await credentials.resolve(ref)
+  if (resolved === undefined || resolved.value.trim().length === 0) {
+    throw new Error(`Team invitation encryption key ${String(ref)} is not configured`)
+  }
+  const key = decodeTeamInviteMasterKey(resolved.value.trim())
+  try {
+    return new Aes256GcmTeamInviteKeyEncryptionProvider(key)
+  } finally {
+    key.fill(0)
+  }
+}
+
+function validateInviteKeyReferences(
+  config: Pick<TeamConfig,
+    | 'databaseUrlRef'
+    | 'credentialMasterKeyRef'
+    | 'credentialPreviousMasterKeyRef'
+    | 'credentialBrokerApiKeyRef'
+    | 'bootstrapTokenRef'
+    | 'inviteTokenMasterKeyRef'
+    | 'inviteTokenPreviousMasterKeyRef'
+  >,
+): void {
+  const current = normalizedReference(
+    config.inviteTokenMasterKeyRef,
+    String(DEFAULT_TEAM_INVITE_TOKEN_MASTER_KEY_REF),
+  )
+  const previous = config.inviteTokenPreviousMasterKeyRef?.trim()
+  const reserved = [
+    normalizedReference(config.databaseUrlRef, String(DEFAULT_TEAM_DATABASE_URL_REF)),
+    normalizedReference(config.credentialMasterKeyRef, String(DEFAULT_TEAM_CREDENTIAL_MASTER_KEY_REF)),
+    config.credentialPreviousMasterKeyRef?.trim(),
+    normalizedReference(config.credentialBrokerApiKeyRef, String(DEFAULT_TEAM_CREDENTIAL_BROKER_API_KEY_REF)),
+    normalizedReference(config.bootstrapTokenRef, String(DEFAULT_TEAM_BOOTSTRAP_TOKEN_REF)),
+  ].filter((value): value is string => value !== undefined && value.length > 0)
+  if (reserved.includes(current) || (previous !== undefined && previous.length > 0 && reserved.includes(previous))) {
+    throw new Error('Team invitation encryption key reference must differ from every other Team secret reference')
+  }
+  if (previous !== undefined && previous.length > 0 && previous === current) {
+    throw new Error('Team current and previous invitation encryption key references must differ')
+  }
+}
+
+function normalizedReference(value: string | undefined, fallback: string): string {
+  const normalized = (value ?? fallback).trim()
+  if (normalized.length === 0) throw new Error('Team secret reference must not be empty')
+  return normalized
 }
 
 async function resolveAesKeyEncryptionProvider(

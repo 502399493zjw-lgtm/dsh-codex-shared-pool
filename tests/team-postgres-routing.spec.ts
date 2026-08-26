@@ -1,12 +1,25 @@
 import { DataType, newDb } from 'pg-mem'
 import type { Pool as PgPool } from 'pg'
 import { describe, expect, it } from 'vitest'
+import { TeamInviteCipher } from '../src/team/invite-cipher.ts'
+import { Aes256GcmTeamInviteKeyEncryptionProvider } from '../src/team/invite-key-encryption.ts'
 import { PostgresTeamRequestRouter } from '../src/team/postgres-routing.ts'
-import { PostgresTeamStore } from '../src/team/postgres-store.ts'
+import {
+  POSTGRES_TEAM_MIGRATION_12_LOCK_SQL,
+  POSTGRES_TEAM_MIGRATION_20_LOCK_SQL,
+  PostgresTeamStore,
+} from '../src/team/postgres-store.ts'
 import { TeamRouteCapacityError } from '../src/team/routing.ts'
 
 function testPool(): PgPool {
   const memory = newDb({ autoCreateForeignKeyIndices: true, noAstCoverageCheck: true })
+  memory.public.interceptQueries((query) => {
+    const normalized = query.trim()
+    return normalized === POSTGRES_TEAM_MIGRATION_12_LOCK_SQL
+      || normalized === POSTGRES_TEAM_MIGRATION_20_LOCK_SQL
+      ? []
+      : null
+  })
   memory.public.registerFunction({
     name: 'pg_advisory_xact_lock',
     args: [DataType.integer, DataType.integer],
@@ -23,10 +36,19 @@ function testPool(): PgPool {
   return new adapter.Pool() as unknown as PgPool
 }
 
+function testStore(pool: PgPool): PostgresTeamStore {
+  return new PostgresTeamStore({
+    pool,
+    inviteCipher: new TeamInviteCipher({
+      keyEncryptionProvider: new Aes256GcmTeamInviteKeyEncryptionProvider(Buffer.alloc(32, 0x5a)),
+    }),
+  })
+}
+
 describe('PostgreSQL Team request routing', () => {
   it('shares concurrency and reset-window request caps across router instances', async () => {
     const pool = testPool()
-    const store = new PostgresTeamStore({ pool })
+    const store = testStore(pool)
     const boot = await store.bootstrap('Friends', 'Owner')
     const owner = await store.authenticateApiKey(boot.apiKey)
     if (owner === undefined) throw new Error('owner should authenticate')
@@ -71,7 +93,7 @@ describe('PostgreSQL Team request routing', () => {
 
   it('persists session affinity across routers and excludes own use from shared concurrency', async () => {
     const pool = testPool()
-    const store = new PostgresTeamStore({ pool })
+    const store = testStore(pool)
     const boot = await store.bootstrap('Friends', 'Owner')
     const owner = await store.authenticateApiKey(boot.apiKey)
     if (owner === undefined) throw new Error('owner should authenticate')
@@ -148,7 +170,7 @@ describe('PostgreSQL Team request routing', () => {
   it('isolates identical session ids between different Team members', async () => {
     const pool = testPool()
     try {
-      const store = new PostgresTeamStore({ pool })
+      const store = testStore(pool)
       const boot = await store.bootstrap('Friends', 'Owner')
       const owner = await store.authenticateApiKey(boot.apiKey)
       if (owner === undefined) throw new Error('owner should authenticate')
@@ -196,7 +218,7 @@ describe('PostgreSQL Team request routing', () => {
   it('unbinds only the failed member session before selecting a replacement account', async () => {
     const pool = testPool()
     try {
-      const store = new PostgresTeamStore({ pool })
+      const store = testStore(pool)
       const boot = await store.bootstrap('Friends', 'Owner')
       const owner = await store.authenticateApiKey(boot.apiKey)
       if (owner === undefined) throw new Error('owner should authenticate')

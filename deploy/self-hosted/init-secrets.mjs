@@ -65,6 +65,7 @@ export async function initializeSelfHostedSecrets(rootDir) {
     const brokerDatabasePassword = randomBytes(24).toString('hex')
     const bootstrapToken = randomBytes(32).toString('base64url')
     const credentialMasterKey = randomBytes(32).toString('base64')
+    const inviteMasterKey = randomBytes(32).toString('base64')
     const brokerApiKey = randomBytes(32).toString('base64url')
     const migrationDatabaseUrl = `postgres://dsh_team_migrator:${postgresPassword}@postgres:5432/dsh_codex_shared_pool`
     const teamHostDatabaseUrl = `postgres://dsh_team_host_login:${teamHostDatabasePassword}@postgres:5432/dsh_codex_shared_pool`
@@ -83,6 +84,7 @@ export async function initializeSelfHostedSecrets(rootDir) {
     await writePrivateFile(hostTempPath, envDocument([
       ['DSH_CODEX_SHARED_POOL_DATABASE_URL', teamHostDatabaseUrl],
       ['DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN', bootstrapToken],
+      ['DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY', inviteMasterKey],
       ['DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY', brokerApiKey],
     ]))
     await writePrivateFile(brokerTempPath, envDocument([

@@ -1,7 +1,11 @@
 import { DataType, newDb } from 'pg-mem'
 import type { Pool as PgPool } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { PostgresTeamStore } from '../src/team/postgres-store.ts'
+import {
+  POSTGRES_TEAM_MIGRATION_12_LOCK_SQL,
+  POSTGRES_TEAM_MIGRATION_20_LOCK_SQL,
+  PostgresTeamStore,
+} from '../src/team/postgres-store.ts'
 import {
   MemoryTeamTrafficGuard,
   PostgresTeamTrafficGuard,
@@ -95,6 +99,13 @@ describe('memory Team API-key traffic guard', () => {
 
 function testPool(): PgPool {
   const memory = newDb({ autoCreateForeignKeyIndices: true, noAstCoverageCheck: true })
+  memory.public.interceptQueries((query) => {
+    const normalized = query.trim()
+    return normalized === POSTGRES_TEAM_MIGRATION_12_LOCK_SQL
+      || normalized === POSTGRES_TEAM_MIGRATION_20_LOCK_SQL
+      ? []
+      : null
+  })
   memory.public.registerFunction({
     name: 'pg_advisory_xact_lock',
     args: [DataType.integer, DataType.integer],
@@ -192,7 +203,10 @@ describe('PostgreSQL Team API-key traffic guard', () => {
     const replacement = await guard.acquire(setup.owner.keyId)
     await replacement.finish('neutral')
 
-    await setup.store.revokeApiKey(setup.owner, setup.owner.keyId)
+    const alternate = await setup.store.issueApiKey(setup.owner, 'Owner backup')
+    const alternateAuth = await setup.store.authenticateApiKey(alternate.token)
+    if (alternateAuth === undefined) throw new Error('alternate Owner key should authenticate')
+    await setup.store.revokeApiKey(alternateAuth, setup.owner.keyId)
     await expect(guard.acquire(setup.owner.keyId)).rejects.toMatchObject({
       reason: 'revoked',
       status: 401,

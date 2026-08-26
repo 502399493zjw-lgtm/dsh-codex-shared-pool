@@ -79,7 +79,10 @@ export interface OpenAICodexSettingsInjected {
 }
 
 /** Props delivered by the settings slot renderer. */
-export type OpenAICodexSettingsProps = Partial<OpenAICodexSettingsInjected>
+export interface OpenAICodexSettingsProps extends Partial<OpenAICodexSettingsInjected> {
+  /** Suppress the child heading when rendered inside the subscription-pool tabs. */
+  readonly embedded?: boolean
+}
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minWidth: 0, maxWidth: 1040 }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
@@ -290,7 +293,7 @@ async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Pro
 type AccountDialog = 'rename' | 'remove'
 
 /** OpenAI Codex account status, global allocation priority, and OAuth actions. */
-export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
+export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
@@ -573,7 +576,11 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   }
 
   return (
-    <section className="dsh-codex-settings" style={pageStyle} aria-labelledby="openai-codex-settings-title">
+    <section
+      className="dsh-codex-settings"
+      style={pageStyle}
+      {...embedded ? { 'aria-label': t('localTab') } : { 'aria-labelledby': 'openai-codex-settings-title' }}
+    >
       <style>{`
         .dsh-codex-settings, .dsh-codex-settings * { box-sizing: border-box; }
         .dsh-codex-settings button, .dsh-codex-settings input, .dsh-codex-settings select { font: inherit; }
@@ -667,10 +674,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           .dsh-codex-settings *, .dsh-codex-settings *::before, .dsh-codex-settings *::after { transition: none !important; }
         }
       `}</style>
-      <div>
+      {embedded ? null : <div>
         <h2 id="openai-codex-settings-title" style={titleStyle}>{t('title')}</h2>
         <p style={{ ...bodyStyle, marginTop: 6 }}>{t('intro')}</p>
-      </div>
+      </div>}
 
       <div className="dsh-codex-workspace">
         <aside className="dsh-codex-profile-list" aria-label={t('accountList')}>

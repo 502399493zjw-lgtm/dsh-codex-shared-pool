@@ -4,9 +4,12 @@ import { pathToFileURL } from 'node:url'
 
 const TEAM_PATH = '/plugins/dsh-codex-shared-pool/team'
 const MANAGEMENT_PATH = '/plugins/dsh-codex-shared-pool/team-client'
+const MANAGEMENT_SESSION_PATH = `${MANAGEMENT_PATH}/session`
+const MANAGEMENT_CAPABILITY_HEADER = 'x-dsh-team-management-capability'
 const MAX_RESPONSE_BYTES = 1024 * 1024
 const DEFAULT_TEAM_NAME = 'Team Web Smoke'
 const DEFAULT_OWNER_NAME = 'Smoke Owner'
+const SMOKE_INVITE_LABEL = 'Team Web Smoke invitation'
 const REVOKED_INVITE_PROBE_NAME = 'Revoked Invite Probe'
 const INVITE_EXPIRES_IN_MS = 24 * 60 * 60 * 1000
 
@@ -108,41 +111,71 @@ function validateStatus(value, expectedConfigured, baseUrl) {
   }
 }
 
-function validateBootstrap(value, teamName, ownerName) {
-  const result = record(value, 'Team bootstrap response')
-  const team = record(result.team, 'Team bootstrap response')
-  const member = record(result.member, 'Team bootstrap response')
-  const teamId = requiredString(team, 'id', 'Team bootstrap response')
-  const ownerMemberId = requiredString(member, 'id', 'Team bootstrap response')
-  if (team.name !== teamName || team.status !== 'active') {
-    throw new Error('invalid Team bootstrap response: Team mismatch')
+function validateManagementSession(value) {
+  const session = record(value, 'Team management session')
+  const capability = requiredString(session, 'capability', 'Team management session')
+  if (!/^dsh_tm_[A-Za-z0-9_-]{43}$/u.test(capability)) {
+    throw new Error('invalid Team management session: capability mismatch')
   }
-  if (
-    member.teamId !== teamId
-    || member.displayName !== ownerName
-    || member.role !== 'owner'
-    || member.status !== 'active'
-  ) {
-    throw new Error('invalid Team bootstrap response: active Owner missing')
+  if (!Number.isInteger(session.expiresAt) || session.expiresAt <= Date.now()) {
+    throw new Error('invalid Team management session: expiry mismatch')
   }
-  if (typeof result.apiKey !== 'string' || !/^dsh_team_[A-Za-z0-9_-]{16,}$/u.test(result.apiKey)) {
-    throw new Error('invalid Team bootstrap response: one-time Team API key missing')
-  }
-  return { teamId, ownerMemberId, apiKey: result.apiKey }
+  return capability
 }
 
-function validateConnection(value, expected) {
-  const result = record(value, 'Team connection response')
-  const team = record(result.team, 'Team connection response')
-  const member = record(result.member, 'Team connection response')
-  if (team.id !== expected.teamId || team.status !== 'active') {
-    throw new Error('invalid Team connection response: Team mismatch')
+function createManagementClient(fetch, baseUrl) {
+  const provenanceHeaders = {
+    origin: baseUrl.origin,
+    'sec-fetch-site': 'same-origin',
   }
-  if (member.id !== expected.ownerMemberId || member.teamId !== expected.teamId || member.role !== 'owner') {
-    throw new Error('invalid Team connection response: Owner mismatch')
+  let capability
+  const get = (path, label, options = {}) => request(fetch, baseUrl, path, label, {
+    ...options,
+    headers: { ...provenanceHeaders, ...options.headers },
+  })
+  const post = async (path, label, body, options = {}) => {
+    if (capability === undefined) {
+      capability = validateManagementSession(await request(
+        fetch,
+        baseUrl,
+        MANAGEMENT_SESSION_PATH,
+        'Team management session',
+        { method: 'POST', headers: provenanceHeaders, body: {} },
+      ))
+    }
+    return request(fetch, baseUrl, path, label, {
+      ...options,
+      method: 'POST',
+      headers: {
+        ...provenanceHeaders,
+        ...options.headers,
+        [MANAGEMENT_CAPABILITY_HEADER]: capability,
+      },
+      body,
+    })
   }
-  rejectSecretFields(result, 'Team connection response')
-  rejectSecretValues(result, [expected.apiKey], 'Team connection response')
+  return { get, post }
+}
+
+function validateInitialOverview(value, teamName, ownerName, secrets) {
+  const overview = record(value, 'Team management overview')
+  const team = record(overview.team, 'Team management overview')
+  const currentMember = record(overview.currentMember, 'Team management overview')
+  const teamId = requiredString(team, 'id', 'Team management overview')
+  const ownerMemberId = requiredString(currentMember, 'id', 'Team management overview')
+  if (team.name !== teamName || team.status !== 'active') {
+    throw new Error('invalid Team management overview: Team mismatch')
+  }
+  if (
+    currentMember.teamId !== teamId
+    || currentMember.displayName !== ownerName
+    || currentMember.role !== 'owner'
+    || currentMember.status !== 'active'
+  ) {
+    throw new Error('invalid Team management overview: active Owner missing')
+  }
+  validateOverview(overview, { teamId, ownerMemberId }, secrets)
+  return { teamId, ownerMemberId }
 }
 
 function validateOverview(value, expected, secrets, expectedPendingInviteId) {
@@ -208,11 +241,12 @@ function validateRejectedJoin(value, inviteToken) {
   rejectSecretValues(result, [inviteToken], 'revoked invite probe')
 }
 
-async function disconnect(fetch, baseUrl) {
-  const value = record(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/disconnect`, 'Team disconnect', {
-    method: 'POST',
-    body: { revokeRemote: true },
-  }), 'Team disconnect response')
+async function disconnect(management) {
+  const value = record(await management.post(
+    `${MANAGEMENT_PATH}/disconnect`,
+    'Team disconnect',
+    { revokeRemote: true },
+  ), 'Team disconnect response')
   if (value.disconnected !== true || value.remoteRevoked !== true) {
     throw new Error('invalid Team disconnect response')
   }
@@ -222,56 +256,48 @@ async function disconnect(fetch, baseUrl) {
 export async function runTeamWebSmoke(options = {}) {
   const fetch = options.fetch ?? globalThis.fetch
   const baseUrl = new URL(options.baseUrl ?? process.env.DSH_WEB_URL ?? 'http://127.0.0.1:3099/')
-  const bootstrapToken = (options.bootstrapToken ?? process.env.DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN)?.trim()
   const teamName = options.teamName ?? DEFAULT_TEAM_NAME
   const ownerName = options.ownerName ?? DEFAULT_OWNER_NAME
   if (typeof fetch !== 'function') throw new Error('fetch is unavailable')
   if (!isLoopback(baseUrl.hostname)) throw new Error('Team Web smoke requires a loopback DSH_WEB_URL')
-  if (!bootstrapToken || bootstrapToken.length < 16) {
-    throw new Error('DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN is missing or too short')
-  }
+  const management = createManagementClient(fetch, baseUrl)
 
-  let connected = false
+  let keyConfigured = false
   let cleanedUp = false
   let result
   let failure
   try {
-    validateStatus(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/status`, 'initial Team management status'), false, baseUrl)
+    validateStatus(await management.get(`${MANAGEMENT_PATH}/status`, 'initial Team management status'), true, baseUrl)
+    keyConfigured = true
+    const secrets = []
+    const ownerTeam = validateInitialOverview(
+      await management.get(`${MANAGEMENT_PATH}/overview`, 'initial Team management overview'),
+      teamName,
+      ownerName,
+      secrets,
+    )
 
-    const bootstrap = validateBootstrap(await request(fetch, baseUrl, `${TEAM_PATH}/bootstrap`, 'Team bootstrap', {
-      method: 'POST',
-      headers: { 'x-dsh-bootstrap-token': bootstrapToken },
-      body: { teamName, ownerName },
-      allowedStatuses: [201],
-    }), teamName, ownerName)
-    const secrets = [bootstrapToken, bootstrap.apiKey]
-
-    const connection = await request(fetch, baseUrl, `${MANAGEMENT_PATH}/connect`, 'Team connection', {
-      method: 'POST',
-      body: { apiKey: bootstrap.apiKey },
-    })
-    connected = true
-    validateConnection(connection, bootstrap)
-    validateStatus(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/status`, 'connected Team management status'), true, baseUrl)
-    validateOverview(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/overview`, 'initial Team management overview'), bootstrap, secrets)
-
-    const createdInvite = validateCreatedInvite(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/invites`, 'Team invite creation', {
-      method: 'POST',
-      body: { expiresInMs: INVITE_EXPIRES_IN_MS },
-      allowedStatuses: [201],
-    }), bootstrap.teamId, bootstrap.ownerMemberId, secrets)
+    const createdInvite = validateCreatedInvite(await management.post(
+      `${MANAGEMENT_PATH}/invites`,
+      'Team invite creation',
+      { label: SMOKE_INVITE_LABEL, expiresInMs: INVITE_EXPIRES_IN_MS },
+      {
+        allowedStatuses: [201],
+      },
+    ), ownerTeam.teamId, ownerTeam.ownerMemberId, secrets)
     secrets.push(createdInvite.inviteToken)
     validateOverview(
-      await request(fetch, baseUrl, `${MANAGEMENT_PATH}/overview`, 'Team management overview after invite creation'),
-      bootstrap,
+      await management.get(`${MANAGEMENT_PATH}/overview`, 'Team management overview after invite creation'),
+      ownerTeam,
       secrets,
       createdInvite.inviteId,
     )
 
-    validateRevokedInvite(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/invites/revoke`, 'Team invite revocation', {
-      method: 'POST',
-      body: { inviteId: createdInvite.inviteId },
-    }), { ...bootstrap, ...createdInvite, secrets })
+    validateRevokedInvite(await management.post(
+      `${MANAGEMENT_PATH}/invites/revoke`,
+      'Team invite revocation',
+      { inviteId: createdInvite.inviteId },
+    ), { ...ownerTeam, ...createdInvite, secrets })
 
     validateRejectedJoin(await request(fetch, baseUrl, `${TEAM_PATH}/join`, 'revoked invite probe', {
       method: 'POST',
@@ -279,22 +305,22 @@ export async function runTeamWebSmoke(options = {}) {
       allowedStatuses: [404],
     }), createdInvite.inviteToken)
     validateOverview(
-      await request(fetch, baseUrl, `${MANAGEMENT_PATH}/overview`, 'Team management overview after invite revocation'),
-      bootstrap,
+      await management.get(`${MANAGEMENT_PATH}/overview`, 'Team management overview after invite revocation'),
+      ownerTeam,
       secrets,
     )
     result = {
-      teamId: bootstrap.teamId,
-      ownerMemberId: bootstrap.ownerMemberId,
+      teamId: ownerTeam.teamId,
+      ownerMemberId: ownerTeam.ownerMemberId,
       inviteId: createdInvite.inviteId,
     }
   } catch (error) {
     failure = error
   } finally {
-    if (connected) {
+    if (keyConfigured) {
       try {
-        await disconnect(fetch, baseUrl)
-        validateStatus(await request(fetch, baseUrl, `${MANAGEMENT_PATH}/status`, 'disconnected Team management status'), false, baseUrl)
+        await disconnect(management)
+        validateStatus(await management.get(`${MANAGEMENT_PATH}/status`, 'disconnected Team management status'), false, baseUrl)
         cleanedUp = true
       } catch (error) {
         if (failure === undefined) failure = error
@@ -313,5 +339,5 @@ if (invokedPath !== undefined && import.meta.url === pathToFileURL(invokedPath).
     throw new Error('usage: smoke-team-web.mjs --confirm-test-data (requires a disposable Team-enabled stock DSH)')
   }
   await runTeamWebSmoke()
-  console.log('Team-enabled stock DSH Web smoke passed and removed its Team API key')
+  console.log('Team-enabled stock DSH Web smoke passed and removed its preconfigured Owner Team key')
 }

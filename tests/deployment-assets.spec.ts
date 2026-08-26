@@ -27,6 +27,7 @@ describe('self-hosted deployment assets', () => {
       'deploy/host/Dockerfile',
       'deploy/host/Dockerfile.dockerignore',
       'deploy/host/smoke-live-sharing.mjs',
+      'deploy/host/smoke-live-team-routing.mjs',
       'deploy/host/smoke-multi-team.mjs',
       'deploy/host/team-host.patch.yml',
       'deploy/postgres/init-runtime-logins.sh',
@@ -74,8 +75,14 @@ describe('self-hosted deployment assets', () => {
       )
       expect(migration).not.toHaveProperty('DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN')
       expect(migration).not.toHaveProperty('DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY')
+      expect(migration).not.toHaveProperty('DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY')
       expect(host).not.toHaveProperty('DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY')
+      expect(Buffer.from(host.DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY, 'base64')).toHaveLength(32)
       expect(Buffer.from(broker.DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY, 'base64')).toHaveLength(32)
+      expect(broker).not.toHaveProperty('DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY')
+      expect(host.DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY).not.toBe(
+        broker.DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY,
+      )
       expect(host.DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY).toBe(
         broker.DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY,
       )
@@ -116,11 +123,28 @@ describe('self-hosted deployment assets', () => {
     expect(dockerfile).toMatch(/USER node/u)
     expect(dockerfile).toContain('deploy/host/smoke-multi-team.mjs')
     expect(dockerfile).toContain('deploy/host/smoke-live-sharing.mjs')
+    expect(dockerfile).toContain('deploy/host/smoke-live-team-routing.mjs')
     expect(dockerfile).toContain('lib/team-migrate-bin.js')
     expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]*127\.0\.0\.1/u)
     expect(dockerfile).toMatch(/ENTRYPOINT \["dsh", "--profile", "web"/u)
     expect(dockerfile).toMatch(/"--host", "127\.0\.0\.1", "--port", "3081"/u)
     expect(dockerfile).not.toMatch(/"--host", "0\.0\.0\.0"/u)
+  })
+
+  it('ships the guarded two-contributor live routing command', async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { scripts?: Record<string, string> }
+    const runner = await readFile(
+      new URL('../deploy/host/smoke-live-team-routing.mjs', import.meta.url),
+      'utf8',
+    )
+
+    expect(packageJson.scripts?.['smoke:team-live-routing']).toBe(
+      'node deploy/host/smoke-live-team-routing.mjs',
+    )
+    expect(runner).toContain('--confirm-two-contributor-live-openai-test-data')
+    expect(runner).toMatch(/if \(options\.confirmed !== true\)/u)
   })
 
   it('keeps the self-hosted plan on rc.8 while preserving rc.7 observations as history', async () => {
@@ -147,6 +171,7 @@ describe('self-hosted deployment assets', () => {
       /credentialBrokerApiKeyRef:\s*DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY/u,
     )
     expect(patch).not.toMatch(/credentialMasterKeyRef/u)
+    expect(patch).toMatch(/inviteTokenMasterKeyRef:\s*DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY/u)
     expect(patch).toMatch(/bootstrapTokenRef:\s*DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN/u)
     expect(patch).not.toMatch(/postgres:\/\//u)
 
@@ -183,6 +208,7 @@ describe('self-hosted deployment assets', () => {
     expect(brokerService).toMatch(/no-new-privileges:true/u)
     expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN\s*:/u)
     expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY\s*:/u)
+    expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY\s*:/u)
     expect(compose).not.toMatch(/--trusted-host|DSH_TEAM_TRUSTED_HOST/u)
   })
 
@@ -409,7 +435,7 @@ describe('self-hosted deployment assets', () => {
         return Response.json({
           account: {
             id: 'account-live', teamId: 'team-live', ownerMemberId: 'member-owner', label: 'Live Codex contribution',
-            status: 'authorizing', personalReservePercent: 10, maxSharedRequestsPerWindow: null,
+            status: 'authorizing', personalReservePercent: 10, maxSharedRequestsPerWindow: null, dailySharedCreditLimit: null,
             maxSharedConcurrency: 1, allowedModels: [], createdAt: 3, updatedAt: 3,
           },
           method: 'device_code',
@@ -432,7 +458,7 @@ describe('self-hosted deployment assets', () => {
           contributions: [{
             id: 'account-live', teamId: 'team-live', ownerMemberId: 'member-owner', label: 'Live Codex contribution',
             status: overviewReads === 1 ? 'authorizing' : 'active', personalReservePercent: 10,
-            maxSharedRequestsPerWindow: null, maxSharedConcurrency: 1, allowedModels: [], createdAt: 3, updatedAt: 3,
+            maxSharedRequestsPerWindow: null, dailySharedCreditLimit: null, maxSharedConcurrency: 1, allowedModels: [], createdAt: 3, updatedAt: 3,
           }],
         })
       }
@@ -454,18 +480,32 @@ describe('self-hosted deployment assets', () => {
       }
       if (url.endsWith('/usage')) {
         expect(authorization).toBe(`Bearer ${friendKey}`)
-        return Response.json({ events: [{
-          id: 'usage-live',
-          teamId: 'team-live',
-          consumerMemberId: 'member-friend',
-          upstreamOwnerMemberId: 'member-owner',
-          upstreamAccountId: 'account-live',
-          model: 'gpt-5.4',
-          unit: 'request',
-          status: 'succeeded',
-          startedAt: 4,
-          finishedAt: 5,
-        }] })
+        return Response.json({
+          events: [{
+            id: 'usage-live',
+            teamId: 'team-live',
+            consumerMemberId: 'member-friend',
+            upstreamOwnerMemberId: 'member-owner',
+            upstreamAccountId: 'account-live',
+            model: 'gpt-5.4',
+            unit: 'request',
+            status: 'succeeded',
+            credits: 125,
+            creditsFormulaVersion: 'credits-v1',
+            startedAt: 4,
+            finishedAt: 5,
+          }],
+          aggregates: {
+            generatedAt: 86_400_000,
+            last24HoursStartedAt: 0,
+            last7DaysStartedAt: 0,
+            accountTotals24Hours: [{ upstreamAccountId: 'account-live', requestCount: 1, measuredRequestCount: 1, credits: 125 }],
+            memberDaily7Days: [{
+              upstreamAccountId: 'account-live', consumerMemberId: 'member-friend', dayStartedAt: 0,
+              requestCount: 1, measuredRequestCount: 1, credits: 125,
+            }],
+          },
+        })
       }
       if (url.endsWith('/status')) {
         expect(authorization).toBe(`Bearer ${ownerKey}`)
@@ -733,5 +773,17 @@ describe('self-hosted deployment assets', () => {
     expect(controlPlanePlan).not.toMatch(/separate database roles[\s\S]*remain explicit deployment-hardening work/iu)
     expect(selfHostedPlan).toMatch(/four mode-`0600` secret files/iu)
     expect(selfHostedPlan).not.toMatch(/atomic three-file secret generation/iu)
+  })
+
+  it('ships the Unicode data copyright and permission notice with the npm package', async () => {
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { files?: string[] }
+    const notice = await readFile(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8')
+
+    expect(packageJson.files).toContain('THIRD_PARTY_NOTICES.md')
+    expect(notice).toMatch(/Unicode License V3/u)
+    expect(notice).toMatch(/Copyright © 1991-2026 Unicode, Inc\./u)
+    expect(notice).toMatch(/Permission is hereby granted, free of charge/iu)
   })
 })

@@ -5,6 +5,7 @@
       enabled: true
       storage: postgres
       databaseUrlRef: DSH_CODEX_SHARED_POOL_DATABASE_URL
+      inviteTokenMasterKeyRef: DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY
       credentialBroker: remote
       credentialBrokerBaseUrl: http://127.0.0.1:8788/v1/dsh-team-credential-broker
       credentialBrokerApiKeyRef: DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY

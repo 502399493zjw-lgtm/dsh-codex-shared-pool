@@ -1,0 +1,1485 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Team 工作区交互 Demo</title>
+  <!--
+    假设：这是桌面设置区中的高保真交互稿，重点验证信息架构与关键流程，不连接真实服务。
+    设计理由：Team 级信息按用量 / 成员 / 邀请码分开；个人账号共享沿用前置账号管理入口，不在 Team 设置里重复，身份展示与成员关系操作收口到 Team 头部。
+    占位说明：姓名、费用、Token、邀请码说明和时间均为 fixture，不代表线上状态或账单。
+  -->
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #141514;
+      --shell: #1d1f1e;
+      --rail: #191b1a;
+      --surface: #242624;
+      --surface-raised: #292b29;
+      --line: #363936;
+      --line-strong: #494d49;
+      --ink: #f1f2ee;
+      --muted: #a9ada7;
+      --faint: #8c928c;
+      --accent: #9db9ff;
+      --accent-strong: #b9ccff;
+      --accent-soft: rgba(157, 185, 255, .12);
+      --positive: #75c99a;
+      --warning: #e0b866;
+      --negative: #ec8888;
+      --shadow: 0 28px 80px rgba(0, 0, 0, .32);
+      --rail-width: 232px;
+      font-family: "Avenir Next", "Noto Sans SC", "PingFang SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { min-width: 320px; background: var(--canvas); }
+
+    html.dialog-open, html.dialog-open body { overflow: hidden; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, select { font: inherit; }
+
+    button {
+      min-height: 44px;
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    button:disabled { cursor: not-allowed; opacity: .42; }
+
+    h1, h2, h3, p { text-wrap: pretty; }
+
+    h1, h2, h3 { text-wrap: balance; }
+
+    .prototype-bar {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-bottom: 1px solid #292b29;
+      background: #171817;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .02em;
+    }
+
+    .prototype-bar strong { color: #d9dcd7; font-weight: 650; }
+
+    #app { min-height: calc(100vh - 34px); }
+
+    .workspace {
+      display: grid;
+      width: min(1440px, calc(100vw - 40px));
+      min-height: calc(100vh - 78px);
+      grid-template-columns: var(--rail-width) minmax(0, 1fr);
+      margin: 20px auto 24px;
+      overflow: hidden;
+      border: 1px solid #303330;
+      border-radius: 18px;
+      background: var(--shell);
+      box-shadow: var(--shadow);
+    }
+
+    .rail {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: var(--rail);
+      padding: 27px 18px 22px;
+    }
+
+    .rail-kicker {
+      margin: 0 12px 2px;
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .rail-title {
+      margin: 0 12px 28px;
+      font-size: 22px;
+      font-weight: 650;
+      letter-spacing: -.03em;
+    }
+
+    .rail-label {
+      margin: 0 12px 8px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .rail-nav { display: grid; gap: 3px; }
+
+    .rail-button {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      justify-content: space-between;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+      transition: background 120ms ease, color 120ms ease;
+    }
+
+    .rail-button:hover { background: #232523; color: var(--ink); }
+
+    .rail-button[aria-current="page"] {
+      background: #2a2d2a;
+      color: var(--ink);
+    }
+
+    .rail-button[aria-current="page"]::after {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      content: "";
+    }
+
+
+    .rail-foot {
+      margin-top: auto;
+      padding: 18px 12px 0;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .main { min-width: 0; padding: 38px 52px 72px; }
+
+    .page { width: min(100%, 940px); margin: 0 auto; }
+
+    .breadcrumb {
+      margin: 0 0 16px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .team-header { position: relative; margin-bottom: 34px; }
+
+    .team-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 28px;
+    }
+
+    .team-name {
+      margin: 0;
+      font-size: clamp(28px, 3vw, 38px);
+      font-weight: 620;
+      letter-spacing: -.045em;
+      line-height: 1.18;
+    }
+
+    .team-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 18px;
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .status-copy { display: inline-flex; align-items: center; gap: 8px; }
+
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--positive); }
+
+    .status-dot.paused { background: var(--warning); }
+
+    .status-dot.dissolved { background: var(--negative); }
+
+    .header-action {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      padding: 0 15px;
+      background: transparent;
+      color: #e3e5e0;
+    }
+
+    .header-action:hover { background: var(--surface); }
+
+    .menu {
+      position: absolute;
+      z-index: 20;
+      top: 54px;
+      right: 0;
+      width: 286px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: #252725;
+      box-shadow: 0 20px 55px rgba(0, 0, 0, .42);
+    }
+
+    .menu-group { padding: 12px; }
+
+    .menu-group + .menu-group { border-top: 1px solid var(--line); }
+
+    .menu-label {
+      margin: 0 8px 5px;
+      color: var(--faint);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .08em;
+    }
+
+    .menu-note { margin: 6px 8px 4px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .menu button {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      justify-content: space-between;
+      border-radius: 7px;
+      padding: 8px;
+      background: transparent;
+      text-align: left;
+    }
+
+    .menu button:hover { background: #303330; }
+
+    .menu .danger { color: var(--negative); }
+
+    .pending-banner, .pause-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin: 22px 0 0;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      padding: 14px 2px;
+      color: #dfe1dc;
+      font-size: 13px;
+    }
+
+    .pending-banner strong, .pause-banner strong { color: var(--warning); }
+
+    .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .section-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 12px;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 620;
+      letter-spacing: -.025em;
+    }
+
+    .section-heading p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .section-heading > .primary {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
+    .primary, .secondary, .quiet, .danger-button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      padding: 0 15px;
+      font-weight: 590;
+    }
+
+    .primary { background: var(--accent); color: #111724; }
+
+    .primary:hover { background: var(--accent-strong); }
+
+    .secondary { border: 1px solid var(--line-strong); background: transparent; }
+
+    .secondary:hover { background: var(--surface-raised); }
+
+    .quiet { min-height: 36px; padding: 0 10px; background: transparent; color: var(--muted); }
+
+    .quiet:hover { background: var(--surface-raised); color: var(--ink); }
+
+    .danger-button { background: #963f43; color: white; }
+
+    .danger-button:hover { background: #ac4a4e; }
+
+    .text-danger { color: var(--negative); }
+
+    .list { margin-top: 18px; border-top: 1px solid var(--line-strong); }
+
+    .list-row {
+      position: relative;
+      display: grid;
+      min-height: 74px;
+      grid-template-columns: minmax(0, 1fr) minmax(140px, auto) 48px;
+      align-items: center;
+      gap: 20px;
+      border-bottom: 1px solid var(--line);
+      padding: 13px 2px;
+    }
+
+    .list-row.two-column { grid-template-columns: minmax(0, 1fr) auto; }
+
+    .invite-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+
+    .invite-actions .quiet, .invite-actions .secondary { min-height: 44px; }
+
+    .row-title {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-weight: 570;
+    }
+
+    .row-detail { color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+    .role { color: #d4d7d1; font-size: 13px; text-align: right; white-space: nowrap; }
+
+    .more {
+      width: 44px;
+      min-height: 44px;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 19px;
+      letter-spacing: .1em;
+    }
+
+    .more:hover { background: var(--surface-raised); color: var(--ink); }
+
+    .row-menu {
+      position: absolute;
+      z-index: 10;
+      top: 58px;
+      right: 0;
+      width: 150px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      padding: 6px;
+      background: #292b29;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .4);
+    }
+
+    .row-menu button { width: 100%; border-radius: 6px; background: transparent; color: var(--negative); }
+
+    .row-menu button:hover { background: #353735; }
+
+    .notice {
+      margin: 18px 0 22px;
+      border-top: 1px solid color-mix(in oklch, var(--warning) 55%, var(--line));
+      border-bottom: 1px solid color-mix(in oklch, var(--warning) 55%, var(--line));
+      padding: 13px 2px;
+      color: #d9d5c7;
+      font-size: 13px;
+    }
+
+    .usage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 28px;
+      margin-top: 22px;
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+    }
+
+    .usage-grid.single { grid-template-columns: minmax(0, 1fr); }
+
+    .usage-group { min-width: 0; padding: 26px 0 28px; }
+
+    .usage-group + .usage-group { border-left: 1px solid var(--line); padding-left: 28px; }
+
+    .usage-group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+    .usage-group h3 { margin: 0; font-size: 16px; font-weight: 620; }
+
+    .usage-status {
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .usage-status.partial,
+    .usage-status.unpriced { border-color: color-mix(in oklch, var(--warning) 45%, var(--line)); color: #d9c693; }
+
+    .usage-primary { padding: 26px 0 22px; }
+
+    .usage-primary span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+
+    .usage-primary strong {
+      display: block;
+      overflow-wrap: anywhere;
+      font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      font-size: clamp(26px, 3.1vw, 32px);
+      font-weight: 520;
+      letter-spacing: -.04em;
+      line-height: 1.1;
+    }
+
+    .metric-list { margin: 0; border-top: 1px solid var(--line); }
+
+    .metric-row { display: flex; align-items: baseline; justify-content: space-between; gap: 22px; border-top: 1px solid var(--line); padding: 11px 0; }
+
+    .metric-row dt { color: var(--muted); font-size: 13px; }
+
+    .metric-row dd { margin: 0; font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 14px; }
+
+    .usage-unavailable { margin-top: 20px; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); padding: 38px 0; }
+
+    .usage-unavailable h3 { margin: 0 0 6px; font-size: 17px; }
+
+    .usage-unavailable button { margin-top: 16px; }
+
+    .empty { padding: 58px 0; border-top: 1px solid var(--line-strong); text-align: center; }
+
+    .empty h3 { margin: 0 0 6px; font-size: 17px; }
+
+    .empty p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .overlay {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      background: rgba(5, 6, 5, .72);
+      backdrop-filter: blur(5px);
+    }
+
+    .dialog {
+      width: min(100%, 510px);
+      max-height: min(760px, calc(100vh - 44px));
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: #242624;
+      box-shadow: 0 26px 80px rgba(0, 0, 0, .52);
+    }
+
+    .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px 26px 18px; }
+
+    .dialog-header h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+
+    .dialog-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+
+    .dialog-body { padding: 4px 26px 24px; }
+
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--line); padding: 16px 26px 20px; }
+
+    .close { width: 44px; min-height: 44px; border-radius: 8px; background: transparent; color: var(--muted); font-size: 20px; }
+
+    .close:hover { background: var(--surface-raised); color: var(--ink); }
+
+    .field { display: grid; gap: 8px; margin-top: 16px; }
+
+    .field label { color: #d8dbd5; font-size: 13px; font-weight: 570; }
+
+    .field small { color: var(--faint); font-size: 12px; line-height: 1.55; }
+
+    .field input, .field select {
+      width: 100%;
+      min-height: 46px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 0 13px;
+      background: #1b1d1b;
+      color: var(--ink);
+    }
+
+    .code {
+      margin: 18px 0 10px;
+      border: 1px dashed #5a5f59;
+      border-radius: 8px;
+      padding: 17px;
+      background: #1b1d1b;
+      color: var(--accent-strong);
+      font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      font-size: 17px;
+      letter-spacing: .08em;
+      text-align: center;
+      user-select: all;
+    }
+
+    .warning-copy { color: #e0c98f; }
+
+    .code-note { color: var(--muted); }
+
+    .consequence-list { margin: 14px 0 0; padding-left: 19px; color: var(--muted); font-size: 13px; }
+
+    .join-shell {
+      display: grid;
+      min-height: calc(100vh - 34px);
+      place-items: center;
+      padding: 52px 20px 110px;
+    }
+
+    .join-panel { width: min(100%, 610px); }
+
+    .join-kicker { margin: 0 0 10px; color: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+
+    .join-panel h1 { margin: 0; font-size: clamp(30px, 5vw, 44px); line-height: 1.2; letter-spacing: -.045em; }
+
+    .join-intro { margin: 12px 0 30px; color: var(--muted); }
+
+    .join-content { border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); padding: 26px 0; }
+
+    .preview-lines { display: grid; gap: 0; margin-bottom: 18px; }
+
+    .preview-line { display: flex; justify-content: space-between; gap: 28px; border-bottom: 1px solid var(--line); padding: 11px 0; }
+
+    .preview-line span:first-child { color: var(--faint); font-size: 13px; }
+
+    .preview-line strong { text-align: right; font-weight: 570; }
+
+    .join-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+
+    .scenario {
+      position: fixed;
+      z-index: 90;
+      right: 18px;
+      bottom: 18px;
+      width: min(920px, calc(100vw - 36px));
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(31, 33, 31, .96);
+      box-shadow: 0 16px 44px rgba(0, 0, 0, .4);
+    }
+
+    .scenario-inner { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; overflow-x: visible; }
+
+    .scenario-label { flex: 0 0 auto; margin-right: 3px; color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+
+    .scenario button {
+      flex: 0 0 auto;
+      min-height: 34px;
+      border-radius: 7px;
+      padding: 0 10px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .scenario button:hover, .scenario button.active { background: #373a37; color: var(--ink); }
+
+    .toast {
+      position: fixed;
+      z-index: 120;
+      left: 50%;
+      bottom: 82px;
+      transform: translateX(-50%);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: #303330;
+      color: var(--ink);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
+      font-size: 13px;
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (max-width: 900px) {
+      .workspace { width: min(100% - 24px, 760px); grid-template-columns: 1fr; }
+      .rail {
+        display: flex;
+        flex-flow: row wrap;
+        align-items: center;
+        gap: 4px 16px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 16px 20px;
+      }
+      .rail-kicker, .rail-label, .rail-foot { display: none; }
+      .rail-title { flex: 0 0 100%; margin: 0 12px 4px; }
+      .rail-nav { display: flex; min-width: 0; overflow-x: auto; }
+      .rail-button { width: auto; flex: 0 0 auto; }
+      .rail-button[aria-current="page"]::after { display: none; }
+      .main { padding: 34px 28px 88px; }
+      .scenario { position: static; width: auto; margin: 16px 12px 20px; }
+    }
+
+    @media (max-width: 620px) {
+      .prototype-bar { justify-content: flex-start; padding: 0 20px; }
+      .prototype-bar span { display: none; }
+      .workspace { width: 100%; min-height: calc(100vh - 34px); margin: 0; border: 0; border-radius: 0; }
+      .rail { display: block; padding: 14px 20px 12px; }
+      .rail-title { margin: 0 0 6px; }
+      .rail-button { padding: 8px 12px; }
+      .main { padding: 28px 20px 48px; }
+      .team-heading, .section-heading { align-items: stretch; flex-direction: column; }
+      .header-action, .section-heading .primary { width: 100%; }
+      .menu { position: static; width: 100%; margin-top: 12px; }
+      .list-row { grid-template-columns: minmax(0, 1fr) auto 44px; gap: 10px; }
+      .list-row.two-column { grid-template-columns: 1fr; }
+      .invite-actions { justify-content: flex-start; }
+      .invite-actions button { flex: 1 1 132px; }
+      .usage-grid { grid-template-columns: 1fr; gap: 0; }
+      .usage-group + .usage-group { border-top: 1px solid var(--line); border-left: 0; padding-left: 0; }
+      .pending-banner, .pause-banner { align-items: flex-start; flex-direction: column; }
+      .dialog-actions, .join-actions { flex-direction: column-reverse; }
+      .dialog-actions button, .join-actions button { width: 100%; }
+      .scenario { position: static; width: auto; margin: 16px 20px 20px; }
+      .scenario button { min-height: 44px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-bar"><strong>界面概念稿</strong><span>数字均为 fixture，仅用于交互验证，不是账单</span></div>
+  <main id="app"></main>
+  <div id="overlay-root"></div>
+  <div id="toast-root"></div>
+
+  <script>
+    const TEAM_NAME = '周末造物局'
+    const TRANSFER_TTL_MS = 86_400_000
+    // 仅模拟服务端保存的邀请码密文；不属于 Browser state，也不会在初始 DOM 中渲染。
+    const mockServerInviteVault = new Map([
+      ['invite-product', 'TEAM-7M2K-H9QR-4NP6']
+    ])
+    const state = {
+      role: 'owner',
+      status: 'active',
+      view: 'usage',
+      overlay: null,
+      rowMenu: null,
+      toast: '',
+      // Browser state 只保存无秘密 metadata；明文只在用户主动查看时短暂出现。
+      invites: [
+        { id: 'invite-product', label: '产品设计协作', created: '8 月 21 日 15:36', expires: '8 月 28 日 15:36', status: 'pending', expired: false, revoked: false, revealable: true },
+        { id: 'invite-legacy', label: '旧版协作邀请', created: '8 月 20 日 09:10', expires: '8 月 27 日 09:10', status: 'pending', expired: false, revoked: false, revealable: false }
+      ],
+      revealedInviteId: null,
+      revealedInviteCode: '',
+      members: [
+        { id: 'edison', name: 'Edison Zhong', role: 'owner', eligibleForOwnership: false },
+        { id: 'alice', name: 'Alice', role: 'member', eligibleForOwnership: true },
+        { id: 'lin', name: '小林', role: 'member', eligibleForOwnership: false }
+      ],
+      currentMemberId: 'edison',
+      pendingTransfer: null,
+      pendingTransferExpiresAt: null,
+      personalByMemberId: {
+        edison: {
+          usage: {
+            complete: { estimatedCost: 'US$ 5.88', tokens: '3.9M', requests: '39', tokenObserved: '39 / 39', pricedObserved: '39 / 39' },
+            partial: { estimatedCost: 'US$ 4.72', tokens: '3.1M', requests: '39', tokenObserved: '31 / 39', pricedObserved: '31 / 39' },
+            unpriced: { estimatedCost: '—', tokens: '0.7M', requests: '7', tokenObserved: '7 / 7', pricedObserved: '0 / 7' },
+            unmeasured: { estimatedCost: '—', tokens: '—', requests: '7', tokenObserved: '0 / 7', pricedObserved: '0 / 7' },
+            zero: { estimatedCost: 'US$ 0.00', tokens: '0', requests: '0', tokenObserved: '0 / 0', pricedObserved: '0 / 0' }
+          }
+        },
+        alice: {
+          usage: {
+            complete: { estimatedCost: 'US$ 3.26', tokens: '2.2M', requests: '24', tokenObserved: '24 / 24', pricedObserved: '24 / 24' },
+            partial: { estimatedCost: 'US$ 2.61', tokens: '1.7M', requests: '24', tokenObserved: '19 / 24', pricedObserved: '19 / 24' },
+            unpriced: { estimatedCost: '—', tokens: '0.3M', requests: '3', tokenObserved: '3 / 3', pricedObserved: '0 / 3' },
+            unmeasured: { estimatedCost: '—', tokens: '—', requests: '3', tokenObserved: '0 / 3', pricedObserved: '0 / 3' },
+            zero: { estimatedCost: 'US$ 0.00', tokens: '0', requests: '0', tokenObserved: '0 / 0', pricedObserved: '0 / 0' }
+          }
+        },
+        lin: {
+          usage: {
+            complete: { estimatedCost: 'US$ 2.14', tokens: '1.5M', requests: '18', tokenObserved: '18 / 18', pricedObserved: '18 / 18' },
+            partial: { estimatedCost: 'US$ 1.72', tokens: '1.2M', requests: '18', tokenObserved: '15 / 18', pricedObserved: '15 / 18' },
+            unpriced: { estimatedCost: '—', tokens: '0.2M', requests: '2', tokenObserved: '2 / 2', pricedObserved: '0 / 2' },
+            unmeasured: { estimatedCost: '—', tokens: '—', requests: '2', tokenObserved: '0 / 2', pricedObserved: '0 / 2' },
+            zero: { estimatedCost: 'US$ 0.00', tokens: '0', requests: '0', tokenObserved: '0 / 0', pricedObserved: '0 / 0' }
+          }
+        }
+      },
+      usageMode: 'complete',
+      disconnected: false,
+      localConnectionCleared: false,
+      joinStage: 'input',
+      joinCode: '',
+      joinName: '',
+      joinInviteId: null
+    }
+
+    let returnFocusSelector = ''
+    let revealExpiryTimer = null
+
+    function escapeHtml(value) {
+      const escapedCharacters = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+      return String(value).replace(/[&<>"']/g, character => escapedCharacters[character])
+    }
+
+    function clearRevealedInvite() {
+      window.clearTimeout(revealExpiryTimer)
+      revealExpiryTimer = null
+      state.revealedInviteId = null
+      state.revealedInviteCode = ''
+    }
+
+    function shouldClearRevealedInvite(patch) {
+      const viewChanged = Object.hasOwn(patch, 'view') && patch.view !== state.view
+      const fixtureIdentityChanged = Object.hasOwn(patch, 'role') || Object.hasOwn(patch, 'currentMemberId') || Object.hasOwn(patch, 'disconnected') || Object.hasOwn(patch, 'localConnectionCleared')
+      return viewChanged || fixtureIdentityChanged
+    }
+
+    function setState(patch) {
+      if (shouldClearRevealedInvite(patch)) clearRevealedInvite()
+      Object.assign(state, patch)
+      render()
+    }
+
+    function showToast(message) {
+      state.toast = message
+      renderToast()
+      window.clearTimeout(showToast.timer)
+      showToast.timer = window.setTimeout(() => {
+        state.toast = ''
+        renderToast()
+      }, 2200)
+    }
+
+    function finishDialog(patch = {}) {
+      const selector = returnFocusSelector
+      clearRevealedInvite()
+      Object.assign(state, patch, { overlay: null })
+      render()
+      window.requestAnimationFrame(() => {
+        const preferred = selector ? document.querySelector(selector) : null
+        const fallback = document.querySelector('[data-terminal-state] h1, [data-workspace-view] h2, [data-workspace-view] h1, [data-action="toggle-team-menu"]')
+        const focusTarget = preferred || fallback
+        if (focusTarget && !focusTarget.matches('button, input, select, a[href], [tabindex]')) focusTarget.tabIndex = -1
+        focusTarget?.focus()
+        returnFocusSelector = ''
+      })
+    }
+
+    function closeOverlay() {
+      finishDialog({ rowMenu: null })
+    }
+
+    function currentPersonal() {
+      return state.personalByMemberId[state.currentMemberId]
+    }
+
+    function pendingTransferRecord() {
+      if (!state.pendingTransfer || !Number.isFinite(state.pendingTransferExpiresAt)) return null
+      if (Date.now() >= state.pendingTransferExpiresAt) return null
+      return { targetMemberId: state.pendingTransfer, expiresAt: state.pendingTransferExpiresAt }
+    }
+
+    function formatTransferExpiry(expiresAt) {
+      return new Intl.DateTimeFormat('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false
+      }).format(new Date(expiresAt))
+    }
+
+    function validateDisplayNameForDemo(rawName) {
+      const original = String(rawName)
+      const forbidden = /[\p{Control}\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u
+      const normalized = original.trim().normalize('NFKC')
+      if (forbidden.test(original) || forbidden.test(normalized) || [...normalized].length < 1 || [...normalized].length > 120) {
+        return { error: '名称须为 1–120 个字符，且不能包含控制或不可见字符。' }
+      }
+      // 原型只模拟常见重名响应；正式唯一性由服务端按 Unicode 15.1 NFKC_Casefold 强制执行。
+      const comparisonValue = normalized.toLowerCase()
+      const duplicate = state.members.some(member => member.name.normalize('NFKC').toLowerCase() === comparisonValue)
+      if (duplicate) return { error: '这个成员名称已被使用，请换一个名称。' }
+      return { value: normalized }
+    }
+
+    function focusOpenMenu(menuId) {
+      window.requestAnimationFrame(() => document.querySelector(`#${menuId} [role="menuitem"]`)?.focus())
+    }
+
+    function moveMenuFocus(event) {
+      const menu = event.target.closest('[role="menu"]')
+      if (!menu) return false
+      const items = [...menu.querySelectorAll('[role="menuitem"]:not([disabled])')]
+      if (!items.length) return false
+      const currentIndex = items.indexOf(document.activeElement)
+      let nextIndex
+      if (event.key === 'ArrowDown') nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length
+      else if (event.key === 'ArrowUp') nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length
+      else if (event.key === 'Home') nextIndex = 0
+      else if (event.key === 'End') nextIndex = items.length - 1
+      else return false
+      event.preventDefault()
+      items[nextIndex].focus()
+      return true
+    }
+
+    function roleLabel() { return state.role === 'owner' ? 'Team Owner' : '成员' }
+
+    function statusLabel() {
+      if (state.status === 'paused') return '已暂停'
+      if (state.status === 'dissolved') return '已解散'
+      return '运行中'
+    }
+
+    function renderRail() {
+      return `
+        <aside class="rail" aria-label="Team 导航">
+          <p class="rail-kicker">Settings</p>
+          <h2 class="rail-title">Team</h2>
+          <p class="rail-label">工作区</p>
+          <nav class="rail-nav" aria-label="Team 工作区">
+            <button class="rail-button" data-action="switch-view" data-view="usage" aria-current="${state.view === 'usage' ? 'page' : 'false'}">用量</button>
+            <button class="rail-button" data-action="switch-view" data-view="members" aria-current="${state.view === 'members' ? 'page' : 'false'}">成员</button>
+            ${state.role === 'owner' ? `<button class="rail-button" data-action="switch-view" data-view="invites" aria-current="${state.view === 'invites' ? 'page' : 'false'}">邀请码</button>` : ''}
+          </nav>
+          <p class="rail-foot">演示数据仅用于界面评审，不代表真实 Team 状态。</p>
+        </aside>`
+    }
+
+    function renderTeamMenu() {
+      if (state.overlay !== 'team-menu') return ''
+      if (state.role !== 'owner') {
+        return `
+          <div class="menu" id="team-menu" role="menu" aria-label="Team 管理">
+            <div class="menu-group">
+              <p class="menu-label">成员关系</p>
+              <button class="danger" data-action="leave-team" role="menuitem"><span>退出 Team</span><span>移除自己的访问权</span></button>
+            </div>
+          </div>`
+      }
+      return `
+        <div class="menu" id="team-menu" role="menu" aria-label="Team 管理">
+          <div class="menu-group">
+            <p class="menu-label">Team 运行</p>
+            ${state.status === 'paused'
+              ? '<button data-action="resume-team" role="menuitem"><span>恢复 Team</span><span>继续服务</span></button>'
+              : '<button data-action="pause-team" role="menuitem"><span>暂停 Team</span><span>低资源休眠</span></button>'}
+          </div>
+          <div class="menu-group">
+            <p class="menu-label">所有权</p>
+            ${pendingTransferRecord()
+              ? '<p class="menu-note">已有转让请求待确认，请先在页面上方撤销。</p>'
+              : '<button data-action="transfer-owner" role="menuitem"><span>转让 Team Owner</span><span>两步确认</span></button>'}
+          </div>
+          <div class="menu-group">
+            <p class="menu-label">Team 生命周期</p>
+            <button class="danger" data-action="dissolve-team" role="menuitem"><span>永久解散 Team</span><span>不可恢复</span></button>
+            <p class="menu-note">Team Owner 不能直接退出。请先将所有权转让给一名成员，或者解散 Team。</p>
+          </div>
+        </div>`
+    }
+
+    function renderTransferBanner() {
+      const transfer = pendingTransferRecord()
+      if (!transfer) return ''
+      const target = state.members.find(member => member.id === transfer.targetMemberId && member.role === 'member')
+      if (!target) return ''
+      const targetName = escapeHtml(target.name)
+      const expiry = escapeHtml(formatTransferExpiry(transfer.expiresAt))
+      if (state.role === 'owner') {
+        return `<div class="pending-banner"><span>等待「${targetName}」确认接任 Team Owner。确认前你仍是 Team Owner；请求将在 24 小时后自动到期（${expiry}）。</span><button class="quiet" data-action="revoke-transfer">撤销请求</button></div>`
+      }
+      if (state.currentMemberId === target.id) {
+        const owner = state.members.find(member => member.role === 'owner')
+        const ownerName = escapeHtml(owner?.name || '当前 Team Owner')
+        return `<div class="pending-banner"><span><strong>所有权邀请</strong> 「${ownerName}」邀请你接任 Team Owner；请求将在 24 小时后自动到期（${expiry}）。</span><div class="inline-actions"><button class="quiet" data-action="reject-transfer">拒绝</button><button class="secondary" data-action="accept-transfer">接受并成为 Team Owner</button></div></div>`
+      }
+      return ''
+    }
+
+    function renderHeader() {
+      return `
+        <header class="team-header">
+          <p class="breadcrumb">设置 / Team</p>
+          <div class="team-heading">
+            <div>
+              <h1 class="team-name">${TEAM_NAME}</h1>
+              <p class="team-meta">
+                <span class="status-copy"><span class="status-dot ${state.status}"></span>${statusLabel()}</span>
+                <span>${roleLabel()}</span>
+                <span>${state.members.length} 位成员</span>
+              </p>
+            </div>
+            ${state.status !== 'dissolved' ? '<button class="header-action" data-action="toggle-team-menu" aria-haspopup="menu" aria-expanded="' + (state.overlay === 'team-menu') + '" aria-controls="team-menu"><span>Team 管理</span><span>···</span></button>' : ''}
+          </div>
+          ${renderTeamMenu()}
+          ${renderTransferBanner()}
+        </header>`
+    }
+
+    function renderUsageGroup(title, values) {
+      const status = state.usageMode === 'complete'
+        ? ''
+        : state.usageMode === 'partial'
+          ? `部分数据 · Token ${values.tokenObserved} · 费用 ${values.pricedObserved}`
+          : state.usageMode === 'unpriced'
+            ? `Token 已计量 ${values.tokenObserved} · 费用已计量 ${values.pricedObserved}`
+          : state.usageMode === 'unmeasured'
+            ? `暂无计量数据 · ${values.requests} 次请求`
+            : '暂无请求'
+      return `
+        <section class="usage-group">
+          <div class="usage-group-header"><h3>${title}</h3>${status ? `<span class="usage-status ${state.usageMode}">${status}</span>` : ''}</div>
+          <div class="usage-primary"><span>预估费用（USD）</span><strong>${values.estimatedCost}</strong></div>
+          <dl class="metric-list">
+            <div class="metric-row"><dt>Token 用量</dt><dd>${values.tokens}</dd></div>
+            <div class="metric-row"><dt>请求次数</dt><dd>${values.requests}</dd></div>
+          </dl>
+        </section>`
+    }
+
+    function renderUsage() {
+      const pauseNotice = state.status === 'paused'
+        ? '<div class="notice">Team 已暂停。暂停前已准入的请求完成结算后，用量仍可能更新。</div>'
+        : ''
+      const heading = '<div class="section-heading"><div><h2>用量</h2><p>最近 24 小时 · 按请求准入时间统计</p></div></div>'
+      if (state.usageMode === 'unavailable') {
+        return `
+          <section data-workspace-view="usage">
+            ${heading}${pauseNotice}
+            <div class="usage-unavailable"><h3>暂时无法获取用量</h3><button class="secondary" data-action="retry-usage">重新获取</button></div>
+          </section>`
+      }
+      const teamUsage = {
+        complete: { estimatedCost: 'US$ 18.42', tokens: '12.6M', requests: '126', tokenObserved: '126 / 126', pricedObserved: '126 / 126' },
+        partial: { estimatedCost: 'US$ 14.83', tokens: '10.2M', requests: '126', tokenObserved: '102 / 126', pricedObserved: '98 / 126' },
+        unpriced: { estimatedCost: '—', tokens: '1.2M', requests: '12', tokenObserved: '12 / 12', pricedObserved: '0 / 12' },
+        unmeasured: { estimatedCost: '—', tokens: '—', requests: '12', tokenObserved: '0 / 12', pricedObserved: '0 / 12' },
+        zero: { estimatedCost: 'US$ 0.00', tokens: '0', requests: '0', tokenObserved: '0 / 0', pricedObserved: '0 / 0' }
+      }
+      const personalUsage = currentPersonal().usage[state.usageMode]
+      return `
+        <section data-workspace-view="usage">
+          ${heading}${pauseNotice}
+          <div class="usage-grid ${state.role === 'owner' ? '' : 'single'}">
+            ${state.role === 'owner' ? renderUsageGroup('Team 总用量', teamUsage[state.usageMode]) : ''}
+            ${renderUsageGroup('我的用量', personalUsage)}
+          </div>
+        </section>`
+    }
+
+    function orderedMembers() {
+      return [...state.members].sort((a, b) => (a.role === 'owner' ? -1 : b.role === 'owner' ? 1 : 0))
+    }
+
+    function renderMemberRow(member) {
+      const isMe = member.id === state.currentMemberId
+      const canManage = state.role === 'owner' && member.role === 'member'
+      const ownerRoleCopy = isMe ? 'Team Owner · 我' : 'Team Owner'
+      const memberRoleCopy = isMe ? '成员 · 我' : '成员'
+      const label = member.role === 'owner' ? ownerRoleCopy : memberRoleCopy
+      const safeName = escapeHtml(member.name)
+      const safeId = escapeHtml(member.id)
+      return `
+        <div class="list-row">
+          <div class="row-title">${safeName}</div>
+          <div class="role">${label}</div>
+          ${canManage ? `<button class="more" aria-label="管理 ${safeName}" data-action="member-menu" data-member-id="${safeId}" aria-haspopup="menu" aria-expanded="${state.rowMenu === member.id}" aria-controls="member-menu-${safeId}">···</button>` : '<span></span>'}
+          ${state.rowMenu === member.id ? `<div class="row-menu" id="member-menu-${safeId}" role="menu" aria-label="管理 ${safeName}"><button data-action="remove-member" data-member-id="${safeId}" role="menuitem">移出 Team</button></div>` : ''}
+        </div>`
+    }
+
+    function renderMembers() {
+      return `
+        <section data-workspace-view="members">
+          <div class="section-heading"><div><h2>成员</h2><p>${state.members.length} 位活跃成员。Team Owner 固定显示在首位。</p></div>${state.role === 'owner' ? '<button class="primary" data-action="go-invites">邀请成员</button>' : ''}</div>
+          <div class="list" aria-label="成员列表">${orderedMembers().map(renderMemberRow).join('')}</div>
+        </section>`
+    }
+
+    function activeInvites() {
+      return state.invites.filter(invite => invite.status === 'pending' && !invite.expired && !invite.revoked)
+    }
+
+    function revealInviteSecret(inviteId, overlay) {
+      const inviteCode = mockServerInviteVault.get(inviteId)
+      const invite = activeInvites().find(item => item.id === inviteId)
+      if (!inviteCode || !invite?.revealable) return false
+      clearRevealedInvite()
+      state.revealedInviteId = inviteId
+      state.revealedInviteCode = inviteCode
+      state.overlay = overlay
+      state.rowMenu = null
+      render()
+      revealExpiryTimer = window.setTimeout(() => {
+        if (state.revealedInviteId !== inviteId) return
+        finishDialog()
+        showToast('为保护邀请码，明文显示已自动关闭')
+      }, 60_000)
+      return true
+    }
+
+    function deleteInviteSecret(inviteId) {
+      mockServerInviteVault.delete(inviteId)
+      if (state.revealedInviteId === inviteId) clearRevealedInvite()
+    }
+
+    function deleteAllInviteSecrets() {
+      mockServerInviteVault.clear()
+      clearRevealedInvite()
+    }
+
+    function consumeInvite(inviteId) {
+      clearRevealedInvite()
+      if (!inviteId) return
+      deleteInviteSecret(inviteId)
+      state.invites = state.invites.map(invite => invite.id === inviteId ? { ...invite, status: 'used' } : invite)
+    }
+
+    function renderInvites() {
+      const invites = activeInvites()
+      return `
+        <section data-workspace-view="invites">
+          <div class="section-heading"><div><h2>邀请码</h2><p>每个邀请码只能成功加入一名成员。列表不直接展示完整码；Team Owner 可按需查看和复制有效邀请码。</p></div><button class="primary" data-action="create-invite" ${state.status !== 'active' ? 'disabled' : ''}>生成邀请码</button></div>
+          ${state.status === 'paused' ? '<div class="notice"><strong>Team 已暂停。</strong> 暂停期间不能生成或使用邀请码，但仍可查看或撤销。以下邀请码会继续自然到期；恢复后，届时仍有效的邀请码可继续使用。</div>' : ''}
+          ${invites.length ? `<div class="list" aria-label="有效邀请码">${invites.map(invite => {
+            const safeInviteId = escapeHtml(invite.id)
+            const safeInviteLabel = escapeHtml(invite.label)
+            return `
+              <div class="list-row two-column">
+                <div><div class="row-title">${safeInviteLabel}</div><div class="row-detail">创建于 ${invite.created} · 到期于 ${invite.expires}${state.status === 'paused' ? ' · 暂停期间不可用' : ''}</div></div>
+                <div class="invite-actions">${invite.revealable
+                  ? `<button class="secondary" data-action="reveal-invite" data-invite-id="${safeInviteId}" aria-haspopup="dialog" aria-label="查看 ${safeInviteLabel} 的完整邀请码">查看邀请码</button>`
+                  : '<span class="row-detail">旧邀请码无法查看，请撤销后重新生成</span>'}<button class="quiet text-danger" data-action="revoke-invite" data-invite-id="${safeInviteId}" aria-haspopup="dialog">撤销</button></div>
+              </div>`
+          }).join('')}</div>` : '<div class="empty"><h3>暂无有效邀请码</h3><p>每个邀请码只能成功加入一名成员。</p></div>'}
+        </section>`
+    }
+
+    function renderLeftTeam() {
+      return `
+        <section class="join-shell" data-terminal-state="left">
+          <div class="join-panel">
+            <p class="join-kicker">Team membership</p>
+            <h1>你已退出「${TEAM_NAME}」</h1>
+            <p class="join-intro">你的成员身份已经终止，这个 Team 的用量和成员信息不再可见。重新加入需要 Team Owner 提供新的邀请码。</p>
+            <div class="join-content"><div class="join-actions"><button class="primary" data-action="start-new-join">使用新邀请码加入</button></div></div>
+          </div>
+        </section>`
+    }
+
+    function renderDissolvedTerminal() {
+      if (state.localConnectionCleared) {
+        return `
+          <section class="join-shell" data-terminal-state="dissolved-cleared">
+            <div class="join-panel">
+              <p class="join-kicker">Local connection cleared</p>
+              <h1>本机 Team 连接已清除</h1>
+              <p class="join-intro">已解散 Team 的本机连接信息已清除，不会恢复成员身份或 Team 数据。</p>
+              <div class="join-content"><div class="join-actions"><button class="primary" data-action="start-new-join">使用邀请码加入另一个 Team</button></div></div>
+            </div>
+          </section>`
+      }
+      return `
+        <section class="join-shell" data-terminal-state="dissolved">
+          <div class="join-panel">
+            <p class="join-kicker">Team dissolved</p>
+            <h1>「${TEAM_NAME}」已永久解散</h1>
+            <p class="join-intro">所有成员身份和邀请码均已终止，Team 不会再接收新请求。此状态不是暂停，无法恢复。</p>
+            <div class="join-content"><div class="join-actions"><button class="secondary" data-action="clear-dissolved-connection">清除本机连接</button></div></div>
+          </div>
+        </section>`
+    }
+
+    function renderWorkspaceView() {
+      if (state.view === 'usage') return renderUsage()
+      if (state.view === 'invites' && state.role === 'owner') return renderInvites()
+      return renderMembers()
+    }
+
+    function renderWorkspace() {
+      if (state.disconnected) return renderLeftTeam()
+      if (state.status === 'dissolved') return renderDissolvedTerminal()
+      return `
+        <div class="workspace">
+          ${renderRail()}
+          <section class="main"><div class="page">${renderHeader()}${renderWorkspaceView()}</div></section>
+        </div>`
+    }
+
+    function renderJoin() {
+      let content = ''
+      if (state.joinStage === 'input') {
+        content = `
+          <div data-join-stage="input">
+            <div class="field"><label for="invite-code">邀请码</label><input id="invite-code" autocomplete="off" placeholder="粘贴 Team Owner 发给你的一次性邀请码" value="${escapeHtml(state.joinCode)}"><small>邀请码只用于本次预览；预览不会消耗邀请码。</small></div>
+            <div class="join-actions"><button class="primary" data-action="preview-invite">预览邀请</button></div>
+          </div>`
+      } else if (state.joinStage === 'preview') {
+        content = `
+          <div data-join-stage="preview">
+            <div class="preview-lines">
+              <div class="preview-line"><span>Team</span><strong>${TEAM_NAME}</strong></div>
+              <div class="preview-line"><span>邀请说明</span><strong>产品设计协作</strong></div>
+              <div class="preview-line"><span>有效期</span><strong>8 月 28 日 15:36</strong></div>
+              <div class="preview-line"><span>运行状态</span><strong>${statusLabel()}</strong></div>
+            </div>
+            ${state.status === 'paused' ? '<div class="notice"><strong>Team 已暂停，暂时不能加入。</strong> Team Owner 恢复后，只要邀请码仍未到期且未撤销，就可以继续加入。</div>' : ''}
+            <div class="field"><label for="join-name">你的显示名称</label><input id="join-name" maxlength="120" placeholder="例如：Alice" value="${escapeHtml(state.joinName)}"><small>请输入 Team Owner 能识别的名称；名称不代表经过验证的身份。</small></div>
+            <p>你将以成员身份加入。</p>
+            <div class="join-actions"><button class="secondary" data-action="cancel-join-preview">返回</button><button class="primary" data-action="confirm-join" ${state.status === 'paused' ? 'disabled' : ''}>以成员身份加入</button></div>
+          </div>`
+      } else if (state.joinStage === 'uncertain') {
+        content = `
+          <div data-join-stage="uncertain">
+            <h2>正在确认是否已加入 Team</h2>
+            <p class="join-intro">连接中断后，结果可能已经提交。请恢复同一次加入操作，或取消并等待远端确认。</p>
+            <div class="join-actions"><button class="secondary" data-action="cancel-uncertain-join">取消加入</button><button class="primary" data-action="resume-join">恢复加入</button></div>
+          </div>`
+      } else if (state.joinStage === 'canceling') {
+        content = `
+          <div data-join-stage="canceling">
+            <h2>正在取消并确认结果</h2>
+            <p class="join-intro">正在等待远端确认这次加入没有留下成员身份。在结果明确前，请勿清除本机记录或重新提交邀请码。</p>
+            <div class="join-actions"><button class="secondary" disabled>正在确认…</button></div>
+          </div>`
+      } else if (state.joinStage === 'canceled') {
+        content = `
+          <div data-join-stage="canceled">
+            <h2>已确认未加入 Team</h2>
+            <p class="join-intro">远端已确认这次操作没有创建成员身份，你现在可以安全地重新开始。</p>
+            <div class="join-actions"><button class="primary" data-action="restart-join">重新输入邀请码</button></div>
+          </div>`
+      } else {
+        content = `
+          <div data-join-stage="success">
+            <h2>已加入「${TEAM_NAME}」</h2>
+            <p class="join-intro">你现在是成员，可以查看自己的 Team 用量和成员列表。</p>
+            <div class="join-actions"><button class="primary" data-action="enter-team">进入 Team</button></div>
+          </div>`
+      }
+      return `
+        <section class="join-shell" data-workspace-view="join">
+          <div class="join-panel">
+            <p class="join-kicker">Join a Team</p>
+            <h1>加入 Team</h1>
+            <p class="join-intro">先安全预览邀请，再确认你的显示名称与成员身份。</p>
+            <div class="join-content">${content}</div>
+          </div>
+        </section>`
+    }
+
+    function renderScenario() {
+      return `
+        <aside class="scenario" aria-label="原型场景">
+          <div class="scenario-inner">
+            <span class="scenario-label">原型场景</span>
+            <button class="${state.role === 'owner' && state.view !== 'join' ? 'active' : ''}" aria-pressed="${state.role === 'owner' && state.view !== 'join'}" data-demo-role="owner" data-action="demo-role" data-role="owner">Owner</button>
+            <button class="${state.role === 'member' && state.view !== 'join' ? 'active' : ''}" aria-pressed="${state.role === 'member' && state.view !== 'join'}" data-demo-role="member" data-action="demo-role" data-role="member">成员</button>
+            <button class="${state.status === 'active' ? 'active' : ''}" aria-pressed="${state.status === 'active'}" data-team-status="active" data-action="demo-status" data-status="active">运行中</button>
+            <button class="${state.status === 'paused' ? 'active' : ''}" aria-pressed="${state.status === 'paused'}" data-team-status="paused" data-action="demo-status" data-status="paused">已暂停</button>
+            <button class="${state.usageMode === 'complete' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'complete' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="complete">完整数据</button>
+            <button class="${state.usageMode === 'partial' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'partial' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="partial">部分数据</button>
+            <button class="${state.usageMode === 'unpriced' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'unpriced' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="unpriced">价格未知</button>
+            <button class="${state.usageMode === 'unmeasured' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'unmeasured' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="unmeasured">无计量</button>
+            <button class="${state.usageMode === 'zero' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'zero' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="zero">零请求</button>
+            <button class="${state.usageMode === 'unavailable' && state.view === 'usage' ? 'active' : ''}" aria-pressed="${state.usageMode === 'unavailable' && state.view === 'usage'}" data-action="demo-usage-mode" data-usage-mode="unavailable">获取失败</button>
+            <button class="${state.view === 'join' && state.joinStage !== 'uncertain' ? 'active' : ''}" aria-pressed="${state.view === 'join' && state.joinStage !== 'uncertain'}" data-action="demo-join">加入演示</button>
+            <button class="${state.view === 'join' && state.joinStage === 'uncertain' ? 'active' : ''}" aria-pressed="${state.view === 'join' && state.joinStage === 'uncertain'}" data-action="demo-uncertain">加入不确定</button>
+          </div>
+        </aside>`
+    }
+
+    function dialogShell(title, subtitle, body, actions) {
+      return `<div class="overlay" data-action="overlay-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"><header class="dialog-header"><div><h2 id="dialog-title">${title}</h2>${subtitle ? `<p>${subtitle}</p>` : ''}</div><button class="close" data-action="close-dialog" aria-label="关闭">×</button></header><div class="dialog-body">${body}</div><footer class="dialog-actions">${actions}</footer></section></div>`
+    }
+
+    function renderOverlay() {
+      let html = ''
+      if (state.overlay === 'pause') {
+        html = dialogShell('暂停 Team？', '这是可恢复的低资源休眠。', '<p>暂停后，Team 不再接收新请求，也不能加入新成员。现有成员和设置会保留，正在进行的请求不会被中断。</p>', '<button class="secondary" data-action="close-dialog">取消</button><button class="primary" data-action="confirm-pause">确认暂停</button>')
+      } else if (state.overlay === 'resume') {
+        html = dialogShell('恢复 Team？', '恢复后会重新开放 Team 服务。', '<p>Team 会重新接收共享请求；仍在有效期内的邀请码也可以继续用于加入。</p>', '<button class="secondary" data-action="close-dialog">取消</button><button class="primary" data-action="confirm-resume">确认恢复</button>')
+      } else if (state.overlay === 'transfer') {
+        const candidates = state.members.filter(member => member.role === 'member' && member.eligibleForOwnership)
+        const body = candidates.length
+          ? `<div class="field"><label for="transfer-member">选择可接任成员</label><select id="transfer-member">${candidates.map(member => `<option value="${escapeHtml(member.id)}">${escapeHtml(member.name)}</option>`).join('')}</select><small>这里只列出服务端确认拥有有效 Team 设备凭据的成员。请求 24 小时后自动到期；对方接受后，你会变为成员，全部尚未使用的邀请码会失效。显示名称不代表经过验证的身份，请先通过可信渠道确认成员身份。</small></div>`
+          : '<p>当前没有可以接任 Team Owner 的成员。请先邀请成员，或者解散 Team。</p>'
+        const actions = candidates.length
+          ? '<button class="secondary" data-action="close-dialog">取消</button><button class="primary" data-action="confirm-transfer">发送转让请求</button>'
+          : '<button class="secondary" data-action="close-dialog">关闭</button>'
+        html = dialogShell('转让 Team Owner', '对方接受前，你仍是 Team Owner。', body, actions)
+      } else if (state.overlay === 'dissolve') {
+        html = dialogShell(`永久解散「${TEAM_NAME}」？`, '此操作不可恢复。', `<p>所有成员都会立即无法访问 Team，全部邀请码会失效，Team 不再接收新请求。</p><ul class="consequence-list"><li>${state.members.length} 位成员失去访问</li><li>${activeInvites().length} 个有效邀请码失效</li><li>全部 Team 设备凭据会立即撤销</li><li>所有成员共享的账号停止承接新请求</li></ul><div class="field"><label for="dissolve-name">输入完整 Team 名称以确认</label><input id="dissolve-name" autocomplete="off" placeholder="${TEAM_NAME}"></div>`, '<button class="secondary" data-action="close-dialog">取消</button><button class="danger-button" data-action="confirm-dissolve" disabled>永久解散 Team</button>')
+      } else if (state.overlay === 'remove-member') {
+        const member = state.members.find(item => item.id === state.rowMenu)
+        html = dialogShell(`将「${member ? escapeHtml(member.name) : '该成员'}」移出 Team？`, '此操作无法撤销。', '<p>该成员会立即无法访问 Team；其提供给 Team 的账号也会停止接收新请求。正在进行的请求不会被中断。</p>', '<button class="secondary" data-action="close-dialog">取消</button><button class="danger-button" data-action="confirm-remove-member">移出 Team</button>')
+      } else if (state.overlay === 'create-invite') {
+        html = dialogShell('生成邀请码', '邀请码等同于一次性访问凭据，请只通过可信渠道发送。', '<div class="field"><label for="invite-label">邀请说明</label><input id="invite-label" maxlength="120" placeholder="例如：产品设计协作"><small>持码者可以看到这段说明；请勿填写秘密。</small></div><div class="field"><label for="invite-expiry">有效期</label><select id="invite-expiry"><option>1 天</option><option selected>7 天</option><option>30 天</option></select></div>', '<button class="secondary" data-action="close-dialog">取消</button><button class="primary" data-action="confirm-create-invite">生成邀请码</button>')
+      } else if (state.overlay === 'invite-created') {
+        const invite = activeInvites().find(item => item.id === state.revealedInviteId)
+        if (invite && state.revealedInviteCode) html = dialogShell('邀请码已生成', '请只通过可信渠道发送给目标成员。', `<div class="preview-line"><span>邀请说明</span><strong>${escapeHtml(invite.label)}</strong></div><div class="code" id="visible-invite-code" aria-label="完整邀请码">${escapeHtml(state.revealedInviteCode)}</div><p class="code-note">关闭后仍可从邀请码列表再次查看。</p>`, '<button class="secondary" data-action="close-dialog">完成</button><button class="primary" data-action="copy-invite">复制邀请码</button>')
+      } else if (state.overlay === 'reveal-invite') {
+        const invite = activeInvites().find(item => item.id === state.revealedInviteId)
+        if (invite && state.revealedInviteCode) html = dialogShell('查看邀请码', state.status === 'paused' ? 'Team 已暂停，此邀请码暂时不能使用。' : '请只通过可信渠道发送给目标成员。', `<div class="preview-line"><span>邀请说明</span><strong>${escapeHtml(invite.label)}</strong></div><div class="code" id="visible-invite-code" aria-label="完整邀请码">${escapeHtml(state.revealedInviteCode)}</div><p class="code-note">关闭后仍可从邀请码列表再次查看。</p>`, '<button class="secondary" data-action="close-dialog">关闭</button><button class="primary" data-action="copy-invite">复制邀请码</button>')
+      } else if (state.overlay === 'revoke-invite') {
+        html = dialogShell('撤销邀请码？', '已经分享出去的邀请码会立即失效。', '<p>撤销不影响已经加入的成员，且邀请码无法恢复。</p>', '<button class="secondary" data-action="close-dialog">取消</button><button class="danger-button" data-action="confirm-revoke-invite">撤销邀请码</button>')
+      } else if (state.overlay === 'leave') {
+        html = dialogShell(`退出「${TEAM_NAME}」？`, '重新加入需要新的邀请码。', '<p>退出后，你会立即无法访问 Team；你提供给 Team 的账号也会停止接收新请求。</p>', '<button class="secondary" data-action="close-dialog">取消</button><button class="danger-button" data-action="confirm-leave">退出 Team</button>')
+      }
+      document.querySelector('#overlay-root').innerHTML = html
+      const dialog = document.querySelector('#overlay-root .dialog')
+      document.querySelector('#app').inert = Boolean(dialog)
+      document.documentElement.classList.toggle('dialog-open', Boolean(dialog))
+      if (dialog) window.queueMicrotask(() => dialog.querySelector('button:not([disabled]), input:not([disabled]), select:not([disabled])')?.focus())
+    }
+
+    function renderToast() {
+      document.querySelector('#toast-root').innerHTML = state.toast ? `<div class="toast" role="status">${escapeHtml(state.toast)}</div>` : ''
+    }
+
+    function render() {
+      document.querySelector('#app').innerHTML = (state.view === 'join' ? renderJoin() : renderWorkspace()) + renderScenario()
+      renderOverlay()
+      renderToast()
+    }
+
+    document.addEventListener('input', event => {
+      if (event.target.id === 'invite-code') state.joinCode = event.target.value
+      if (event.target.id === 'join-name') state.joinName = event.target.value
+      if (event.target.id === 'dissolve-name') {
+        const button = document.querySelector('[data-action="confirm-dissolve"]')
+        if (button) button.disabled = event.target.value !== TEAM_NAME
+      }
+    })
+
+    document.addEventListener('click', event => {
+      const target = event.target.closest('[data-action]')
+      if (!target) {
+        if (state.overlay === 'team-menu' || state.rowMenu) setState({ overlay: state.overlay === 'team-menu' ? null : state.overlay, rowMenu: null })
+        return
+      }
+      const action = target.dataset.action
+
+      if (action === 'overlay-backdrop' && event.target === target) closeOverlay()
+      if (action === 'close-dialog') closeOverlay()
+      if (action === 'switch-view') setState({ view: target.dataset.view, overlay: null, rowMenu: null })
+      if (action === 'go-invites') setState({ view: 'invites' })
+      if (action === 'toggle-team-menu') {
+        const opening = state.overlay !== 'team-menu'
+        setState({ overlay: opening ? 'team-menu' : null, rowMenu: null })
+        if (opening) focusOpenMenu('team-menu')
+      }
+      if (action === 'pause-team') { returnFocusSelector = '[data-action="toggle-team-menu"]'; setState({ overlay: 'pause' }) }
+      if (action === 'confirm-pause') { finishDialog({ status: 'paused' }); showToast('Team 已暂停') }
+      if (action === 'resume-team') { returnFocusSelector = '[data-action="toggle-team-menu"]'; setState({ overlay: 'resume' }) }
+      if (action === 'confirm-resume') { finishDialog({ status: 'active' }); showToast('Team 已恢复，新请求和仍有效的邀请码现在可以继续使用。') }
+      if (action === 'transfer-owner' && !pendingTransferRecord()) { returnFocusSelector = '[data-action="toggle-team-menu"]'; setState({ overlay: 'transfer', pendingTransfer: null, pendingTransferExpiresAt: null }) }
+      if (action === 'confirm-transfer' && !pendingTransferRecord()) {
+        const select = document.querySelector('#transfer-member')
+        finishDialog({ pendingTransfer: select?.value || null, pendingTransferExpiresAt: Date.now() + TRANSFER_TTL_MS })
+        showToast('转让请求已发送')
+      }
+      if (action === 'revoke-transfer') { setState({ pendingTransfer: null, pendingTransferExpiresAt: null }); showToast('转让请求已撤销') }
+      if (action === 'reject-transfer') { setState({ pendingTransfer: null, pendingTransferExpiresAt: null }); showToast('你已拒绝接任') }
+      if (action === 'accept-transfer') {
+        const transfer = pendingTransferRecord()
+        if (!transfer) {
+          setState({ pendingTransfer: null, pendingTransferExpiresAt: null })
+          showToast('所有权转让请求已到期')
+          return
+        }
+        const targetMemberId = transfer.targetMemberId
+        state.members = state.members.map(member => ({ ...member, role: member.id === targetMemberId ? 'owner' : member.role === 'owner' ? 'member' : member.role }))
+        deleteAllInviteSecrets()
+        setState({ role: 'owner', currentMemberId: targetMemberId, pendingTransfer: null, pendingTransferExpiresAt: null, invites: [], view: 'members' })
+        showToast('你现在是 Team Owner；原有邀请码已失效')
+      }
+      if (action === 'dissolve-team') { returnFocusSelector = '[data-action="toggle-team-menu"]'; setState({ overlay: 'dissolve' }) }
+      if (action === 'confirm-dissolve' && !target.disabled) {
+        deleteAllInviteSecrets()
+        finishDialog({ status: 'dissolved', view: 'members', pendingTransfer: null, pendingTransferExpiresAt: null, localConnectionCleared: false })
+        showToast('Team 已永久解散')
+      }
+      if (action === 'member-menu') {
+        const memberId = target.dataset.memberId
+        const opening = state.rowMenu !== memberId
+        setState({ rowMenu: opening ? memberId : null, overlay: null })
+        if (opening) focusOpenMenu(`member-menu-${memberId}`)
+      }
+      if (action === 'remove-member') { returnFocusSelector = `[data-action="member-menu"][data-member-id="${target.dataset.memberId}"]`; setState({ rowMenu: target.dataset.memberId, overlay: 'remove-member' }) }
+      if (action === 'confirm-remove-member') {
+        const removed = state.members.find(member => member.id === state.rowMenu)
+        state.members = state.members.filter(member => member.id !== state.rowMenu)
+        const removedPendingTarget = state.pendingTransfer === removed?.id
+        finishDialog({
+          rowMenu: null,
+          pendingTransfer: removedPendingTarget ? null : state.pendingTransfer,
+          pendingTransferExpiresAt: removedPendingTarget ? null : state.pendingTransferExpiresAt
+        })
+        showToast(`${removed ? removed.name : '成员'} 已移出 Team`)
+      }
+      if (action === 'create-invite' && state.status === 'active') { returnFocusSelector = '[data-action="create-invite"]'; setState({ overlay: 'create-invite' }) }
+      if (action === 'confirm-create-invite') {
+        const label = document.querySelector('#invite-label')?.value.trim()
+        if (!label) { showToast('请填写邀请说明'); return }
+        const stamp = String(Date.now())
+        const inviteId = `invite-${stamp}`
+        const codeTail = stamp.slice(-8).padStart(8, '0')
+        const inviteCode = `TEAM-${codeTail.slice(0, 4)}-${codeTail.slice(4)}`
+        state.invites.push({ id: inviteId, label, created: '刚刚', expires: document.querySelector('#invite-expiry')?.value === '1 天' ? '1 天后' : document.querySelector('#invite-expiry')?.value === '30 天' ? '30 天后' : '7 天后', status: 'pending', expired: false, revoked: false, revealable: true })
+        mockServerInviteVault.set(inviteId, inviteCode)
+        revealInviteSecret(inviteId, 'invite-created')
+      }
+      if (action === 'copy-invite') {
+        const code = document.querySelector('#visible-invite-code')?.textContent || ''
+        if (!code) return
+        if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {})
+        showToast('邀请码已复制')
+      }
+      if (action === 'reveal-invite' && state.role === 'owner') {
+        const inviteId = target.dataset.inviteId
+        if (!activeInvites().some(invite => invite.id === inviteId)) return
+        returnFocusSelector = `[data-action="reveal-invite"][data-invite-id="${inviteId}"]`
+        revealInviteSecret(inviteId, 'reveal-invite')
+      }
+      if (action === 'revoke-invite') { returnFocusSelector = `[data-action="revoke-invite"][data-invite-id="${target.dataset.inviteId}"]`; setState({ overlay: 'revoke-invite', rowMenu: target.dataset.inviteId }) }
+      if (action === 'confirm-revoke-invite') {
+        const inviteId = state.rowMenu
+        deleteInviteSecret(inviteId)
+        state.invites = state.invites.map(invite => invite.id === inviteId ? { ...invite, revoked: true } : invite)
+        finishDialog({ rowMenu: null })
+        showToast('邀请码已撤销')
+      }
+      if (action === 'leave-team') { returnFocusSelector = '[data-action="leave-team"]'; setState({ overlay: 'leave' }) }
+      if (action === 'confirm-leave') { finishDialog({ disconnected: true }); showToast('你已经退出这个 Team') }
+      if (action === 'preview-invite') {
+        const submittedCode = (state.joinCode || document.querySelector('#invite-code')?.value || '').trim()
+        if (!submittedCode) { showToast('请先粘贴邀请码'); return }
+        const matchedInvite = activeInvites().find(invite => mockServerInviteVault.get(invite.id) === submittedCode)
+        if (!matchedInvite) {
+          setState({ joinStage: 'input', joinCode: '', joinInviteId: null })
+          showToast('邀请码无效或已失效，请向 Team Owner 获取新的邀请码。')
+          return
+        }
+        setState({ joinStage: 'preview', joinCode: '', joinInviteId: matchedInvite.id })
+      }
+      if (action === 'cancel-join-preview') setState({ joinStage: 'input', joinInviteId: null })
+      if (action === 'confirm-join' && state.status === 'active') {
+        if (!state.joinInviteId || !activeInvites().some(invite => invite.id === state.joinInviteId)) {
+          setState({ joinStage: 'input', joinInviteId: null })
+          showToast('邀请码无效或已失效，请向 Team Owner 获取新的邀请码。')
+          return
+        }
+        const displayName = validateDisplayNameForDemo(state.joinName || document.querySelector('#join-name')?.value || '')
+        if (displayName.error) { showToast(displayName.error); return }
+        state.joinName = displayName.value
+        consumeInvite(state.joinInviteId)
+        setState({ joinStage: 'success', joinInviteId: null })
+      }
+      if (action === 'resume-join') {
+        consumeInvite(state.joinInviteId)
+        setState({ joinStage: 'success', joinInviteId: null })
+      }
+      if (action === 'cancel-uncertain-join') {
+        setState({ joinStage: 'canceling' })
+        window.setTimeout(() => {
+          if (state.joinStage === 'canceling') setState({ joinStage: 'canceled', joinCode: '', joinName: '', joinInviteId: null })
+        }, 900)
+      }
+      if (action === 'restart-join') setState({ joinStage: 'input', joinCode: '', joinName: '', joinInviteId: null })
+      if (action === 'start-new-join') setState({ disconnected: false, localConnectionCleared: false, status: 'active', view: 'join', joinStage: 'input', joinCode: '', joinName: '', joinInviteId: null })
+      if (action === 'clear-dissolved-connection') setState({ localConnectionCleared: true })
+      if (action === 'enter-team') {
+        const joinedName = state.joinName.trim() || 'Alice'
+        const existing = state.members.find(member => member.id === 'alice')
+        if (existing) existing.name = joinedName
+        setState({ role: 'member', currentMemberId: 'alice', view: 'usage', joinStage: 'input', joinInviteId: null, disconnected: false })
+      }
+      if (action === 'demo-role') {
+        const owner = target.dataset.role === 'owner'
+        const ownerMember = state.members.find(member => member.role === 'owner') || state.members[0]
+        const pendingTargetId = pendingTransferRecord()?.targetMemberId
+        const ordinaryMember = state.members.find(member => member.id === pendingTargetId) || state.members.find(member => member.role === 'member')
+        setState({ role: owner ? 'owner' : 'member', currentMemberId: owner ? ownerMember?.id : ordinaryMember?.id, view: state.view === 'invites' || state.view === 'join' ? 'usage' : state.view, status: state.status === 'dissolved' ? 'active' : state.status, overlay: null, rowMenu: null, disconnected: false, localConnectionCleared: false })
+      }
+      if (action === 'demo-status') setState({ status: target.dataset.status, overlay: null, disconnected: false, localConnectionCleared: false })
+      if (action === 'demo-usage-mode') setState({ view: 'usage', usageMode: target.dataset.usageMode, overlay: null, disconnected: false, localConnectionCleared: false })
+      if (action === 'retry-usage') { setState({ usageMode: 'complete' }); showToast('用量已更新') }
+      if (action === 'demo-join') setState({ view: 'join', status: state.status === 'dissolved' ? 'active' : state.status, joinStage: 'input', joinCode: '', joinName: '', joinInviteId: null, overlay: null, disconnected: false, localConnectionCleared: false })
+      if (action === 'demo-uncertain') setState({ view: 'join', status: state.status === 'dissolved' ? 'active' : state.status, joinStage: 'uncertain', joinInviteId: null, overlay: null, disconnected: false, localConnectionCleared: false })
+    })
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden || !state.revealedInviteCode) return
+      const secretDialogOpen = state.overlay === 'invite-created' || state.overlay === 'reveal-invite'
+      clearRevealedInvite()
+      if (secretDialogOpen) state.overlay = null
+      render()
+    })
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && state.overlay === 'team-menu') {
+        event.preventDefault()
+        setState({ overlay: null })
+        window.requestAnimationFrame(() => document.querySelector('[data-action="toggle-team-menu"]')?.focus())
+        return
+      }
+
+      if (event.key === 'Escape' && state.rowMenu && !state.overlay) {
+        event.preventDefault()
+        const memberId = state.rowMenu
+        setState({ rowMenu: null })
+        window.requestAnimationFrame(() => document.querySelector(`[data-action="member-menu"][data-member-id="${memberId}"]`)?.focus())
+        return
+      }
+
+      if (event.key === 'Escape' && state.overlay) {
+        event.preventDefault()
+        closeOverlay()
+        return
+      }
+
+      if (moveMenuFocus(event)) return
+
+      const dialog = document.querySelector('#overlay-root .dialog')
+      if (event.key !== 'Tab' || !dialog) return
+      const focusable = [...dialog.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled])')]
+      if (!focusable.length) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    })
+
+    render()
+  </script>
+</body>
+</html>

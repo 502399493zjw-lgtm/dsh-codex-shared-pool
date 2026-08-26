@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import type { TeamManagementMemberSummary } from '../src/shared/team-management.ts'
+import type {
+  TeamManagementContributionSummary,
+  TeamManagementMemberSummary,
+} from '../src/shared/team-management.ts'
 import type { TeamMemberSummary } from '../src/team/types.ts'
 import {
   canRevokeTeamInvite,
   canMemberLeaveTeam,
+  canRemoveTeamMember,
   canTransferTeamOwnership,
+  groupTeamContributions,
   parseContributionProtectionDraft,
 } from '../src/client/team/team-settings-contract.ts'
 import { en, zh } from '../src/client/team/locales.ts'
@@ -41,17 +46,17 @@ describe('Team Settings departure contract', () => {
   it('distinguishes Team departure from disconnecting one Host in both locales', () => {
     expect(en.leaveTeam).toBe('Leave Team')
     expect(en.leaveTeamHint).toContain('all of your Team keys')
-    expect(en.ownerLeaveUnavailable).toContain('transfer ownership')
+    expect(en.ownerLeaveUnavailable).toMatch(/transfer ownership/iu)
     expect(zh.leaveTeam).toBe('退出 Team')
     expect(zh.leaveTeamHint).toContain('所有 Team key')
-    expect(zh.ownerLeaveUnavailable).toContain('转移所有权')
+    expect(zh.ownerLeaveUnavailable).toContain('转让所有权')
   })
 })
 
 describe('Team Settings invite-revocation contract', () => {
-  it('offers revocation only to operators for pending invites', () => {
+  it('offers revocation only to the Owner for pending invites', () => {
     expect(canRevokeTeamInvite('owner', 'pending')).toBe(true)
-    expect(canRevokeTeamInvite('admin', 'pending')).toBe(true)
+    expect(canRevokeTeamInvite('admin', 'pending')).toBe(false)
     expect(canRevokeTeamInvite('member', 'pending')).toBe(false)
     expect(canRevokeTeamInvite('owner', 'accepted')).toBe(false)
     expect(canRevokeTeamInvite('owner', 'expired')).toBe(false)
@@ -59,9 +64,9 @@ describe('Team Settings invite-revocation contract', () => {
   })
 
   it('explains that revocation immediately invalidates the token in both locales', () => {
-    expect(en.revokeInvite).toBe('Revoke invite')
+    expect(en.revokeInvite).toBe('Revoke invite token')
     expect(en.pendingInviteExpires).toContain('{time}')
-    expect(zh.revokeInvite).toBe('撤销邀请')
+    expect(zh.revokeInvite).toBe('撤销邀请码')
     expect(zh.pendingInviteExpires).toContain('{time}')
   })
 })
@@ -71,7 +76,7 @@ describe('Team Settings ownership-transfer contract', () => {
 
   it('offers transfer only when the Host marks an active same-Team non-owner as eligible', () => {
     expect(canTransferTeamOwnership(owner, managementMember())).toBe(true)
-    expect(canTransferTeamOwnership(owner, managementMember({ role: 'admin' }))).toBe(true)
+    expect(canTransferTeamOwnership(owner, managementMember({ role: 'admin' }))).toBe(false)
     expect(canTransferTeamOwnership(owner, managementMember({ canReceiveOwnership: false }))).toBe(false)
     expect(canTransferTeamOwnership(owner, managementMember({ id: owner.id }))).toBe(false)
     expect(canTransferTeamOwnership(owner, managementMember({ status: 'suspended' }))).toBe(false)
@@ -84,16 +89,31 @@ describe('Team Settings ownership-transfer contract', () => {
 
   it('explains the role swap and preserved keys/contribution ownership in both locales', () => {
     expect(en.transferOwnership).toBe('Transfer ownership')
-    expect(en.transferOwnershipHint).toContain('Admin')
+    expect(en.transferOwnershipHint).toContain('Member')
     expect(en.transferOwnershipWarning).toContain('Team keys')
     expect(en.transferOwnershipWarning).toContain('contribution ownership')
     expect(en.ownerLeaveUnavailable).not.toContain('not available')
 
     expect(zh.transferOwnership).toBe('转移所有权')
-    expect(zh.transferOwnershipHint).toContain('Admin')
+    expect(zh.transferOwnershipHint).toContain('成员')
     expect(zh.transferOwnershipWarning).toContain('Team key')
     expect(zh.transferOwnershipWarning).toContain('贡献账号归属')
     expect(zh.ownerLeaveUnavailable).not.toContain('尚未提供')
+  })
+})
+
+describe('Team Settings member-management contract', () => {
+  const owner = member({ id: 'owner-1', role: 'owner' })
+  const admin = member({ id: 'admin-1', role: 'admin' })
+  const teammate = managementMember({ id: 'member-2', role: 'member' })
+
+  it('lets only Owners remove non-Owners, never themselves', () => {
+    expect(canRemoveTeamMember(owner, teammate)).toBe(true)
+    expect(canRemoveTeamMember(owner, managementMember({ id: 'admin-1', role: 'admin' }))).toBe(true)
+    expect(canRemoveTeamMember(admin, teammate)).toBe(false)
+    expect(canRemoveTeamMember(admin, managementMember({ id: 'admin-2', role: 'admin' }))).toBe(false)
+    expect(canRemoveTeamMember(owner, managementMember({ id: owner.id }))).toBe(false)
+    expect(canRemoveTeamMember(owner, managementMember({ role: 'owner' }))).toBe(false)
   })
 })
 
@@ -135,5 +155,35 @@ describe('Team Settings contribution-protection contract', () => {
       requestCap: '',
       models: 'm'.repeat(121),
     })).toEqual({ ok: false, field: 'allowedModels' })
+  })
+})
+
+describe('Team Settings contribution grouping', () => {
+  const contribution = (id: string, ownerMemberId: string, status: TeamManagementContributionSummary['status']): TeamManagementContributionSummary => ({
+    id,
+    teamId: 'team-1',
+    ownerMemberId,
+    label: id,
+    status,
+    personalReservePercent: 20,
+    maxSharedRequestsPerWindow: null,
+    maxSharedConcurrency: 1,
+    allowedModels: [],
+    createdAt: 1,
+    updatedAt: 1,
+  })
+
+  it('groups only the current member contributions and hides every teammate credential', () => {
+    const groups = groupTeamContributions([
+      contribution('mine-active', 'member-1', 'active'),
+      contribution('mine-paused', 'member-1', 'paused'),
+      contribution('mine-reauth', 'member-1', 'reauth_required'),
+      contribution('friend-active', 'member-2', 'active'),
+      contribution('friend-paused', 'member-2', 'paused'),
+      contribution('revoked', 'member-1', 'revoked'),
+    ], 'member-1')
+
+    expect(groups.shared.map(account => account.id)).toEqual(['mine-active'])
+    expect(groups.unshared.map(account => account.id)).toEqual(['mine-paused', 'mine-reauth'])
   })
 })

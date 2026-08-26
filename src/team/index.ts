@@ -3,6 +3,8 @@ export type {
   TeamRequestAdmission,
   TeamRequestAdmissionInput,
   TeamRequestCapacitySignal,
+  TeamCapacityMonitoringOptions,
+  TeamInviteEnvelopeSweepingOptions,
   TeamServiceOptions,
 } from './service.ts'
 export { LocalTeamCredentialBroker } from './credentials.ts'
@@ -35,8 +37,16 @@ export {
 export { projectTeamQuota, TeamCapacityProvider } from './capacity.ts'
 export { createTeamGatewayHandler, registerTeamGatewayRoute } from './gateway.ts'
 export { registerTeamManagementRoutes } from './management-routes.ts'
-export type { TeamManagementRouteOptions } from './management-routes.ts'
-export { MemoryTeamStore } from './store.ts'
+export type { TeamManagementRouteOptions, TeamManagementRouteSecurity } from './management-routes.ts'
+export {
+  MemoryTeamStore,
+  TeamDissolutionRecoveryRateLimitError,
+  TeamDissolvedError,
+  TeamDissolutionUnavailableError,
+  TeamDisplayNameMigrationUnavailableError,
+  TeamInviteRevealRateLimitError,
+  TeamLifecycleConflictError,
+} from './store.ts'
 export { PostgresTeamStore, POSTGRES_TEAM_MIGRATIONS } from './postgres-store.ts'
 export {
   POSTGRES_TEAM_RUNTIME_ROLES_SQL,
@@ -54,6 +64,7 @@ export {
   DEFAULT_TEAM_CREDENTIAL_BROKER_API_KEY_REF,
   DEFAULT_TEAM_CREDENTIAL_MASTER_KEY_REF,
   DEFAULT_TEAM_DATABASE_URL_REF,
+  DEFAULT_TEAM_INVITE_TOKEN_MASTER_KEY_REF,
   resolveTeamBootstrapToken,
 } from './runtime.ts'
 export { TeamRequestRouter, TeamRouteCapacityError } from './routing.ts'
@@ -76,14 +87,24 @@ export {
   TEAM_CONTRIBUTION_UPDATE_PATH,
   TEAM_CONTRIBUTION_REVOKE_PATH,
   TEAM_INVITES_PATH,
+  TEAM_INVITES_PREVIEW_PATH,
+  TEAM_INVITES_REVEAL_PATH,
   TEAM_INVITES_REVOKE_PATH,
   TEAM_JOIN_PATH,
   TEAM_KEYS_PATH,
   TEAM_KEYS_REVOKE_PATH,
   TEAM_CURRENT_KEY_REVOKE_PATH,
+  TEAM_DISSOLVE_PATH,
+  TEAM_DISSOLVE_RESULT_PATH,
+  TEAM_DISSOLVE_ACK_PATH,
+  TEAM_CONNECTION_TERMINAL_PATH,
   TEAM_MEMBERS_LEAVE_PATH,
+  TEAM_OWNERSHIP_TRANSFER_ACCEPT_PATH,
   TEAM_OWNERSHIP_TRANSFER_PATH,
+  TEAM_OWNERSHIP_TRANSFER_REJECT_PATH,
+  TEAM_OWNERSHIP_TRANSFER_REVOKE_PATH,
   TEAM_OVERVIEW_PATH,
+  TEAM_DISPLAY_NAME_MIGRATION_ACK_PATH,
   TEAM_PATH_PREFIX,
   TEAM_USAGE_PATH,
   TEAM_RESPONSES_PATH,
@@ -117,7 +138,7 @@ export type {
 } from './envelope-credentials.ts'
 export type { TeamCapacityProviderOptions } from './capacity.ts'
 export type { TeamGatewayOptions } from './gateway.ts'
-export type { TeamAuthContext, TeamStore } from './store.ts'
+export type { TeamAuthContext, TeamDissolutionRecoveryAction, TeamStore } from './store.ts'
 export type { PostgresTeamMigration, PostgresTeamStoreOptions } from './postgres-store.ts'
 export type { PostgresTeamRequestRouterOptions } from './postgres-routing.ts'
 export type {
@@ -133,11 +154,17 @@ export type {
   TeamApiKeySummary,
   TeamBootstrapResult,
   TeamInviteResult,
+  TeamInviteRevealAuditEventSummary,
+  TeamInviteRevealResult,
+  TeamInvitePreview,
   TeamInviteSummary,
   TeamJoinResult,
   TeamMemberDepartureResult,
   TeamMemberSummary,
+  TeamOwnershipTransferAcceptanceResult,
   TeamOwnershipTransferResult,
+  TeamOwnershipTransferStatus,
+  TeamOwnershipTransferSummary,
   TeamContributionAccountPatch,
   TeamContributionAccountSummary,
   TeamContributionCapacityBucketId,
@@ -145,6 +172,13 @@ export type {
   TeamContributionCapacityReason,
   TeamContributionCapacitySummary,
   TeamContributionStatus,
+  TeamConnectionTerminal,
+  TeamConnectionTerminalCode,
+  TeamDissolutionInput,
+  TeamDissolutionResult,
+  TeamDisplayNameMigrationAcknowledgement,
+  TeamDisplayNameMigrationNotice,
+  TeamLifecycleTransitionInput,
   TeamOAuthDeviceChallenge,
   TeamOAuthStartResult,
   TeamOverview,

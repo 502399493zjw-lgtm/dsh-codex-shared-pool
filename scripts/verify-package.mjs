@@ -11,6 +11,7 @@ const deploymentPackageFiles = [
   'deploy/host/Dockerfile',
   'deploy/host/Dockerfile.dockerignore',
   'deploy/host/smoke-live-sharing.mjs',
+  'deploy/host/smoke-live-team-routing.mjs',
   'deploy/host/smoke-multi-team.mjs',
   'deploy/host/team-host.patch.yml',
   'deploy/postgres/init-runtime-logins.sh',
@@ -29,12 +30,18 @@ assert.equal(packageJson.bin?.['dsh-codex-team-migrate'], 'lib/team-migrate-bin.
 assert.equal(packageJson.dsh?.client?.platform, 'web')
 assert.equal(packageJson.dependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.0-rc.8')
 assert.match(packageJson.dependencies?.pg ?? '', /^\^8\./u)
+assert.ok(packageJson.files?.includes('THIRD_PARTY_NOTICES.md'))
 assert.deepEqual(
   packageJson.files?.filter(path => path.startsWith('deploy/')),
   deploymentPackageFiles,
   'deployment files must use an explicit allowlist so runtime secrets cannot enter the package',
 )
 assert.doesNotMatch(packageJson.files?.join('\n') ?? '', /\.secrets|\.env|deploy\/\*\*/u)
+
+const thirdPartyNotices = await readFile(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url), 'utf8')
+assert.match(thirdPartyNotices, /Unicode License V3/u)
+assert.match(thirdPartyNotices, /Copyright © 1991-2026 Unicode, Inc\./u)
+assert.match(thirdPartyNotices, /Permission is hereby granted, free of charge/iu)
 
 const patch = await readFile(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 assert.match(patch, /id:\s*codex-shared-pool/u)
@@ -47,6 +54,7 @@ assert.match(client, /factory:\s*\(require\)\s*=>\s*\{/u)
 assert.match(client, /plugins\/dsh-openai-codex\/quota/u)
 assert.match(client, /TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH/u)
 assert.match(client, /TEAM_MANAGEMENT_INVITES_REVOKE_PATH/u)
+assert.match(client, /TEAM_MANAGEMENT_INVITES_REVEAL_PATH/u)
 assert.match(client, /\/oauth\/reauthorize/u)
 assert.match(client, /Sign in again/u)
 assert.match(client, /重新授权/u)
@@ -84,6 +92,8 @@ assert.match(hostBundle, /TEAM_MEMBERS_LEAVE_PATH/u)
 assert.match(hostBundle, /TEAM_OWNERSHIP_TRANSFER_PATH/u)
 assert.match(hostBundle, /TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_PATH/u)
 assert.match(hostBundle, /TEAM_MANAGEMENT_INVITES_REVOKE_PATH/u)
+assert.match(hostBundle, /TEAM_INVITES_REVEAL_PATH/u)
+assert.match(hostBundle, /TEAM_MANAGEMENT_INVITES_REVEAL_PATH/u)
 assert.match(hostBundle, /TEAM_CONTRIBUTIONS_PATH/u)
 assert.match(hostBundle, /TEAM_CONTRIBUTION_OAUTH_START_PATH/u)
 assert.match(hostBundle, /TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH/u)
@@ -102,6 +112,7 @@ assert.match(hostBundle, /TeamKeyEncryptionKeyring/u)
 assert.match(hostBundle, /PostgresTeamStore/u)
 assert.match(hostBundle, /PostgresTeamRequestRouter/u)
 assert.match(hostBundle, /DSH_CODEX_SHARED_POOL_DATABASE_URL/u)
+assert.match(hostBundle, /DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY/u)
 assert.match(hostBundle, /DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN/u)
 assert.match(hostBundle, /DSH_CODEX_SHARED_POOL_TEAM_API_KEY/u)
 assert.match(hostBundle, /team-client-v1/u)
@@ -150,6 +161,13 @@ assert.match(hostTypes, /TEAM_OWNERSHIP_TRANSFER_PATH/u)
 assert.match(hostTypes, /TeamOwnershipTransferResult/u)
 assert.match(hostTypes, /TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_PATH/u)
 assert.match(hostTypes, /TEAM_MANAGEMENT_INVITES_REVOKE_PATH/u)
+assert.match(hostTypes, /TEAM_INVITES_REVEAL_PATH/u)
+assert.match(hostTypes, /TeamInviteRevealResult/u)
+assert.match(hostTypes, /TeamInviteRevealAuditEventSummary/u)
+assert.match(hostTypes, /TeamInviteEnvelopeSweepingOptions/u)
+assert.match(hostTypes, /TeamInviteRevealRateLimitError/u)
+assert.match(hostTypes, /TEAM_MANAGEMENT_INVITES_REVEAL_PATH/u)
+assert.match(hostTypes, /TeamManagementInviteRevealResult/u)
 assert.match(hostTypes, /TeamManagementOwnershipTransferResult/u)
 assert.match(hostTypes, /TeamManagementMemberSummary/u)
 assert.match(hostTypes, /TeamContributionCapacitySummary/u)
@@ -160,6 +178,7 @@ const managementTypes = await readFile(
   'utf8',
 )
 assert.match(managementTypes, /canReceiveOwnership/u)
+assert.match(managementTypes, /TeamManagementInviteRevealResult/u)
 
 const brokerDockerfile = await readFile(new URL('../deploy/broker/Dockerfile', import.meta.url), 'utf8')
 assert.match(brokerDockerfile, /lib\/team-broker-bin\.js/u)

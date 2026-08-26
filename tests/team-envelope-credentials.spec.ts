@@ -13,11 +13,22 @@ import type {
   TeamWrappedKey,
 } from '../src/team/envelope-credentials.ts'
 import { OPENAI_CODEX_PROVIDER } from '../src/store.ts'
-import { PostgresTeamStore } from '../src/team/postgres-store.ts'
+import {
+  POSTGRES_TEAM_MIGRATION_12_LOCK_SQL,
+  POSTGRES_TEAM_MIGRATION_20_LOCK_SQL,
+  PostgresTeamStore,
+} from '../src/team/postgres-store.ts'
 import { LocalTeamCredentialBroker } from '../src/team/credentials.ts'
 
 function testPool(): PgPool {
   const memory = newDb({ autoCreateForeignKeyIndices: true, noAstCoverageCheck: true })
+  memory.public.interceptQueries((query) => {
+    const normalized = query.trim()
+    return normalized === POSTGRES_TEAM_MIGRATION_12_LOCK_SQL
+      || normalized === POSTGRES_TEAM_MIGRATION_20_LOCK_SQL
+      ? []
+      : null
+  })
   memory.public.registerFunction({
     name: 'pg_advisory_xact_lock',
     args: [DataType.integer, DataType.integer],
@@ -149,6 +160,35 @@ describe('PostgreSQL Team envelope credential backend', () => {
     await expect(backend.open({ teamId: account.teamId, accountId: account.id }).listProfiles()).resolves.toEqual([])
     await expect(backend.open({ teamId: second.teamId, accountId: second.id }).read(OPENAI_CODEX_PROVIDER))
       .resolves.toEqual(oauth('second'))
+    await pool.end()
+  })
+
+  it('hides residual credentials and rejects late writes after Team dissolution while cleanup stays available', async () => {
+    const { pool, account, backend } = await fixture()
+    const store = backend.open({ teamId: account.teamId, accountId: account.id })
+    await store.addProfile('Owner', oauth('terminal'))
+    await pool.query(`
+      UPDATE teams
+      SET status = 'dissolved', lifecycle_revision = lifecycle_revision + 1, dissolved_at = 2
+      WHERE id = $1
+    `, [account.teamId])
+
+    await expect(pool.query(
+      'SELECT COUNT(*) AS count FROM team_contribution_credentials WHERE account_id = $1',
+      [account.id],
+    )).resolves.toMatchObject({ rows: [{ count: 1 }] })
+    await expect(store.read(OPENAI_CODEX_PROVIDER)).resolves.toBeUndefined()
+    await expect(store.listProfiles()).resolves.toEqual([])
+    await expect(store.modify(OPENAI_CODEX_PROVIDER, current => ({
+      ...(current ?? oauth('late')),
+      access: 'late-access-secret',
+    }))).rejects.toThrow(/credential.*unavailable/iu)
+
+    await expect(backend.delete({ teamId: account.teamId, accountId: account.id })).resolves.toBeUndefined()
+    await expect(pool.query(
+      'SELECT COUNT(*) AS count FROM team_contribution_credentials WHERE account_id = $1',
+      [account.id],
+    )).resolves.toMatchObject({ rows: [{ count: 0 }] })
     await pool.end()
   })
 

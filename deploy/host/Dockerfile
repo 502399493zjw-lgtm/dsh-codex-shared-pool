@@ -34,6 +34,7 @@ COPY --chown=node:node deploy/host/team-host.patch.yml /etc/dsh/team-host.patch.
 COPY --chown=node:node deploy/host/bootstrap.mjs /opt/dsh/deploy/host/bootstrap.mjs
 COPY --chown=node:node deploy/host/smoke-multi-team.mjs /opt/dsh/deploy/host/smoke-multi-team.mjs
 COPY --chown=node:node deploy/host/smoke-live-sharing.mjs /opt/dsh/deploy/host/smoke-live-sharing.mjs
+COPY --chown=node:node deploy/host/smoke-live-team-routing.mjs /opt/dsh/deploy/host/smoke-live-team-routing.mjs
 
 USER node
 RUN dsh plugin --profile web add /tmp/plugin.tgz \

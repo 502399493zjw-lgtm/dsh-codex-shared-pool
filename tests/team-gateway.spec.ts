@@ -16,7 +16,11 @@ import { createTeamGatewayHandler, registerTeamGatewayRoute } from '../src/team/
 import { createTeamCodexBearer } from '../src/team/client.ts'
 import { TeamService } from '../src/team/service.ts'
 import { MemoryTeamStore } from '../src/team/store.ts'
-import { PostgresTeamStore } from '../src/team/postgres-store.ts'
+import {
+  POSTGRES_TEAM_MIGRATION_12_LOCK_SQL,
+  POSTGRES_TEAM_MIGRATION_20_LOCK_SQL,
+  PostgresTeamStore,
+} from '../src/team/postgres-store.ts'
 import { TeamTrafficGuardError } from '../src/team/traffic-guard.ts'
 import type { TeamTrafficGuard } from '../src/team/traffic-guard.ts'
 import type { OpenAICodexUsage } from '../src/usage.ts'
@@ -69,6 +73,16 @@ function rawRequest(method: string, body: Buffer | undefined, headers: Record<st
   return stream
 }
 
+function chunkedResponse(chunks: readonly string[], contentType: string): Response {
+  const encoder = new TextEncoder()
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+      controller.close()
+    },
+  }), { status: 200, headers: { 'content-type': contentType } })
+}
+
 async function response(
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
   req: IncomingMessage,
@@ -107,6 +121,13 @@ function disconnectableResponse(): { readonly res: ServerResponse; close: () => 
 
 function postgresTestPool(): PgPool {
   const memory = newDb({ autoCreateForeignKeyIndices: true, noAstCoverageCheck: true })
+  memory.public.interceptQueries((query) => {
+    const normalized = query.trim()
+    return normalized === POSTGRES_TEAM_MIGRATION_12_LOCK_SQL
+      || normalized === POSTGRES_TEAM_MIGRATION_20_LOCK_SQL
+      ? []
+      : null
+  })
   memory.public.registerFunction({
     name: 'pg_advisory_xact_lock',
     args: [DataType.integer, DataType.integer],
@@ -180,6 +201,89 @@ describe('Team Responses gateway', () => {
     expect(JSON.stringify(events)).not.toContain('private prompt')
   })
 
+  it('returns an explicit capacity response when a contributor daily Credits limit blocks admission', async () => {
+    const broker = new GatewayBroker()
+    const store = new MemoryTeamStore()
+    const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.updateContributionAccount(owner, account.id, { dailySharedCreditLimit: 49_999 })
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+
+    const result = await response(createTeamGatewayHandler(service), request('POST', {
+      model: 'gpt-5-codex', input: [], stream: true,
+    }, { authorization: `Bearer ${joined.apiKey}`, 'content-type': 'application/json' }))
+
+    expect(result.status).toBe(429)
+    expect(JSON.parse(result.body)).toMatchObject({
+      code: 'TEAM_CAPACITY_UNAVAILABLE',
+      reasons: ['daily_shared_credits_reached'],
+    })
+    expect(broker.forwarded).toHaveLength(0)
+  })
+
+  it('captures chunk-split streamed Responses usage while forwarding bytes unchanged', async () => {
+    const payload = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":120,"input_tokens_details":{"cached_tokens":40},"output_tokens":10}}}\n\n'
+    const broker = new GatewayBroker()
+    vi.spyOn(broker, 'forwardResponses').mockResolvedValueOnce(chunkedResponse([
+      payload.slice(0, 17),
+      payload.slice(17, 71),
+      payload.slice(71),
+    ], 'text/event-stream'))
+    const store = new MemoryTeamStore()
+    const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+
+    const result = await response(createTeamGatewayHandler(service), request('POST', {
+      model: 'gpt-5-codex', input: [], stream: true,
+    }, { authorization: `Bearer ${boot.apiKey}`, 'content-type': 'application/json' }))
+
+    expect(result.body).toBe(payload)
+    expect(await store.listUsageEvents(owner, 10)).toMatchObject([{
+      status: 'succeeded',
+      credits: 130,
+      creditsFormulaVersion: 'credits-v1',
+    }])
+  })
+
+  it('captures non-stream Responses usage and ignores malformed numeric metadata', async () => {
+    const broker = new GatewayBroker()
+    vi.spyOn(broker, 'forwardResponses')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'response-1',
+        usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 20 }, output_tokens: 5 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 'response-2',
+        usage: { input_tokens: -1, output_tokens: 'secret-not-a-number' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const store = new MemoryTeamStore()
+    const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+    const handler = createTeamGatewayHandler(service)
+    const headers = { authorization: `Bearer ${boot.apiKey}`, 'content-type': 'application/json' }
+
+    await response(handler, request('POST', { model: 'gpt-5-codex', input: [], stream: false }, headers))
+    await response(handler, request('POST', { model: 'gpt-5-codex', input: [], stream: false }, headers))
+
+    const events = await store.listUsageEvents(owner, 10)
+    expect(events[1]).toMatchObject({ credits: 105, creditsFormulaVersion: 'credits-v1' })
+    expect(events[0]).not.toHaveProperty('credits')
+    expect(JSON.stringify(events)).not.toContain('secret-not-a-number')
+  })
+
   it('accepts the Host-only Codex bearer wrapper used by the Team client adapter', async () => {
     const broker = new GatewayBroker()
     const store = new MemoryTeamStore()
@@ -248,6 +352,41 @@ describe('Team Responses gateway', () => {
     expect(first).toEqual(second)
     expect(first).toMatchObject({ healthy: true, remainingPercent: 80, resetAt: 50_000 })
     expect(broker.usageReads).toBe(1)
+  })
+
+  it('waits for an in-flight forced refresh instead of admitting from stale cached usage', async () => {
+    const broker = new GatewayBroker()
+    const provider = new TeamCapacityProvider(broker, { now: () => 1_000, ttlMs: 15_000 })
+    const ref = { teamId: 'team-1', accountId: 'account-1' }
+    await expect(provider.read(ref, 'gpt-5-codex')).resolves.toMatchObject({
+      healthy: true,
+      remainingPercent: 80,
+    })
+
+    let finishRefresh: ((usage: OpenAICodexUsage) => void) | undefined
+    const readUsage = vi.spyOn(broker, 'readUsage').mockImplementationOnce(() => new Promise(resolve => {
+      finishRefresh = resolve
+    }))
+    const refreshing = provider.refresh(ref, 'gpt-5-codex')
+    await Promise.resolve()
+
+    let admissionReadSettled = false
+    const admissionRead = provider.read(ref, 'gpt-5-codex').then(result => {
+      admissionReadSettled = true
+      return result
+    })
+    await Promise.resolve()
+    expect(admissionReadSettled).toBe(false)
+
+    finishRefresh?.({
+      rateLimits: [{
+        id: 'codex',
+        windows: [{ remainingPercent: 0, windowSeconds: 18_000, resetsAt: 60_000 }],
+      }],
+    })
+    await expect(refreshing).resolves.toMatchObject({ healthy: true, remainingPercent: 0 })
+    await expect(admissionRead).resolves.toMatchObject({ healthy: true, remainingPercent: 0 })
+    expect(readUsage).toHaveBeenCalledTimes(1)
   })
 
   it('settles an admitted request as failed when the broker cannot reach upstream', async () => {

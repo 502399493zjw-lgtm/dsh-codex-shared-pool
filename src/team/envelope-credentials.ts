@@ -26,6 +26,18 @@ const MAX_WRAPPED_KEY_BYTES = 196_608
 const MAX_WRAPPED_KEY_METADATA_BYTES = 49_152
 
 /** Public so tests can assert SQL shape without overstating pg-mem lock semantics. */
+export const POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL = `
+  SELECT status FROM teams
+  WHERE id = $1
+  FOR UPDATE
+`
+
+export const POSTGRES_CREDENTIAL_CONTRIBUTION_MUTATION_LOCK_SQL = `
+  SELECT status FROM team_contributions
+  WHERE team_id = $1 AND id = $2
+  FOR UPDATE
+`
+
 export const POSTGRES_CREDENTIAL_MUTATION_LOCK_SQL = `
   SELECT * FROM team_contribution_credentials
   WHERE team_id = $1 AND account_id = $2
@@ -228,13 +240,23 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
     while (true) {
       const page = cursor === undefined
         ? await this.options.pool.query<CredentialEnvelopeIdentity>(`
-            SELECT team_id, account_id FROM team_contribution_credentials
-            ORDER BY team_id, account_id LIMIT $1
+            SELECT credential.team_id, credential.account_id
+            FROM team_contribution_credentials AS credential
+            INNER JOIN teams AS team ON team.id = credential.team_id
+            INNER JOIN team_contributions AS contribution
+              ON contribution.team_id = credential.team_id AND contribution.id = credential.account_id
+            WHERE team.status IN ('active', 'paused') AND contribution.status <> 'revoked'
+            ORDER BY credential.team_id, credential.account_id LIMIT $1
           `, [batchSize])
         : await this.options.pool.query<CredentialEnvelopeIdentity>(`
-            SELECT team_id, account_id FROM team_contribution_credentials
-            WHERE team_id > $1 OR (team_id = $1 AND account_id > $2)
-            ORDER BY team_id, account_id LIMIT $3
+            SELECT credential.team_id, credential.account_id
+            FROM team_contribution_credentials AS credential
+            INNER JOIN teams AS team ON team.id = credential.team_id
+            INNER JOIN team_contributions AS contribution
+              ON contribution.team_id = credential.team_id AND contribution.id = credential.account_id
+            WHERE team.status IN ('active', 'paused') AND contribution.status <> 'revoked'
+              AND (credential.team_id > $1 OR (credential.team_id = $1 AND credential.account_id > $2))
+            ORDER BY credential.team_id, credential.account_id LIMIT $3
           `, [cursor.team_id, cursor.account_id, batchSize])
       if (page.rows.length === 0) break
 
@@ -251,13 +273,20 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
   }
 
   async readDocument(ref: TeamCredentialRef): Promise<CredentialDocument> {
+    const safeRef = validatedRef(ref)
     const result = await this.options.pool.query<CredentialEnvelopeRow>(`
-      SELECT * FROM team_contribution_credentials
-      WHERE team_id = $1 AND account_id = $2
-    `, [ref.teamId, ref.accountId])
+      SELECT credential.*
+      FROM team_contribution_credentials AS credential
+      INNER JOIN teams AS team ON team.id = credential.team_id
+      INNER JOIN team_contributions AS contribution
+        ON contribution.team_id = credential.team_id AND contribution.id = credential.account_id
+      WHERE credential.team_id = $1 AND credential.account_id = $2
+        AND team.status IN ('active', 'paused')
+        AND contribution.status <> 'revoked'
+    `, [safeRef.teamId, safeRef.accountId])
     const row = result.rows[0]
     if (row === undefined) return emptyDocument()
-    const opened = await this.decryptRow(ref, row)
+    const opened = await this.decryptRow(safeRef, row)
     try {
       return opened.document
     } finally {
@@ -269,21 +298,23 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
     ref: TeamCredentialRef,
     transform: (document: CredentialDocument) => Promise<MutationResult<T>> | MutationResult<T>,
   ): Promise<T> {
+    const safeRef = validatedRef(ref)
     const client = await this.options.pool.connect()
     let dek: Buffer | undefined
     try {
       await client.query('BEGIN')
-      const selected = await client.query<CredentialEnvelopeRow>(POSTGRES_CREDENTIAL_MUTATION_LOCK_SQL, [ref.teamId, ref.accountId])
+      await this.lockWritableCredentialScope(client, safeRef)
+      const selected = await client.query<CredentialEnvelopeRow>(POSTGRES_CREDENTIAL_MUTATION_LOCK_SQL, [safeRef.teamId, safeRef.accountId])
       const row = selected.rows[0]
       const opened: { document: CredentialDocument; dek?: Buffer } = row === undefined
         ? { document: emptyDocument() }
-        : await this.decryptRow(ref, row)
+        : await this.decryptRow(safeRef, row)
       dek = opened.dek
       const mutation = await transform(opened.document)
       if (mutation.changed) {
         const validated = parseDocument(opened.document)
         if (dek === undefined) dek = randomBytes(AES_KEY_BYTES)
-        await this.writeEnvelope(client, ref, row, validated, dek)
+        await this.writeEnvelope(client, safeRef, row, validated, dek)
       }
       await client.query('COMMIT')
       return mutation.value
@@ -332,6 +363,7 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
     let verification: Buffer | undefined
     try {
       await client.query('BEGIN')
+      await this.lockWritableCredentialScope(client, ref)
       const selected = await client.query<CredentialEnvelopeRow>(
         POSTGRES_CREDENTIAL_MUTATION_LOCK_SQL,
         [ref.teamId, ref.accountId],
@@ -417,6 +449,20 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
       if (written.rowCount !== 1) throw new Error('Team credential envelope identity conflict')
     } finally {
       plaintext.fill(0)
+    }
+  }
+
+  private async lockWritableCredentialScope(client: PoolClient, ref: TeamCredentialRef): Promise<void> {
+    const team = await client.query<LifecycleStatusRow>(POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL, [ref.teamId])
+    if (team.rows[0]?.status !== 'active' && team.rows[0]?.status !== 'paused') {
+      throw credentialUnavailableError()
+    }
+    const contribution = await client.query<LifecycleStatusRow>(
+      POSTGRES_CREDENTIAL_CONTRIBUTION_MUTATION_LOCK_SQL,
+      [ref.teamId, ref.accountId],
+    )
+    if (contribution.rows[0] === undefined || contribution.rows[0].status === 'revoked') {
+      throw credentialUnavailableError()
     }
   }
 
@@ -553,6 +599,10 @@ interface CredentialEnvelopeRow extends QueryResultRow {
 interface CredentialEnvelopeIdentity extends QueryResultRow {
   account_id: string
   team_id: string
+}
+
+interface LifecycleStatusRow extends QueryResultRow {
+  status: string
 }
 
 function emptyDocument(): CredentialDocument {
@@ -741,4 +791,8 @@ function replacementKeyError(): Error {
 
 function credentialDecryptionError(): Error {
   return new Error('Team credential cannot be decrypted')
+}
+
+function credentialUnavailableError(): Error {
+  return new Error('Team credential is unavailable')
 }

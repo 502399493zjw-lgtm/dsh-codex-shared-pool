@@ -107,14 +107,16 @@ event; prompt, response, file, OAuth token, and Team-key contents are never
 written to that audit stream.
 
 For a restart-safe control plane, put the PostgreSQL URL, local-only bootstrap
-secret, and a random 32-byte credential-encryption key in the Host credential
-provider (the environment provider is shown here). Plugin configuration
-contains only their references:
+secret, a random 32-byte credential-encryption key, and a separate random
+32-byte invitation-encryption key in the Host credential provider (the
+environment provider is shown here). Plugin configuration contains only their
+references:
 
 ```sh
 export DSH_CODEX_SHARED_POOL_DATABASE_URL='postgres://...'
 export DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN='use-a-local-secret-at-least-16-characters'
 export DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY="$(openssl rand -base64 32)"
+export DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY="$(openssl rand -base64 32)"
 ```
 
 ```yaml
@@ -126,18 +128,22 @@ export DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY="$(openssl rand -base64 32)"
       storage: postgres
       databaseUrlRef: DSH_CODEX_SHARED_POOL_DATABASE_URL
       credentialMasterKeyRef: DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY
+      inviteTokenMasterKeyRef: DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY
       bootstrapTokenRef: DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN
       maxInviteTtlMs: 604800000
 ```
 
 `storage: memory` remains available for tests and disposable local
 development. PostgreSQL schema migrations run automatically at Team service
-startup. Team API keys and invite tokens are stored only as SHA-256 hashes;
-the original values are returned once when created. Revoking an unused invite
-immediately invalidates it and replaces its live hash with a terminal sentinel.
-PostgreSQL mode with the
-default local broker fails startup if the credential master key is missing,
-malformed, or does not decode to exactly 32 bytes.
+startup. Team API keys remain hash-only. Invitation tokens keep both a SHA-256
+lookup digest and an independently envelope-encrypted copy so the current Owner
+can explicitly reveal a still-pending invite again. Accepting, revoking, or
+invalidating an invitation clears its decryptable envelope. PostgreSQL mode
+fails startup if the invitation master key is missing, malformed, or does not
+decode to exactly 32 bytes; the default local broker applies the same checks to
+its separate credential master key. During invitation-key rotation configure
+`inviteTokenPreviousMasterKeyRef` only as a temporary read key until all live
+envelopes have moved to the current key.
 
 ### Self-hosted central Team server
 
@@ -161,8 +167,9 @@ secrets:
   runtime login passwords;
 - `team-migrations.env` gives only the one-shot migrator the schema-owner
   database URL;
-- `team-host.env` gives Team Host its database URL, bootstrap token, and the
-  internal Broker API key, but no credential decryption key;
+- `team-host.env` gives Team Host its database URL, bootstrap token, dedicated
+  invitation master key, and the internal Broker API key, but no credential
+  decryption key;
 - `credential-broker.env` gives only the Broker its envelope master key,
   database URL, and matching internal API key.
 
@@ -242,6 +249,29 @@ has been globally revoked; use the provider's own account controls when that is
 required. The script prints the short-lived device challenge and secret-free
 identifiers, never Team keys, invite tokens, prompts, or response content.
 
+For the stronger two-contributor release gate, authorize two separate account
+credential chains. The runner pauses twice for the human device-code steps,
+then makes exactly three successful minimal Responses requests as Member B:
+first through B's own contribution, then through A's contribution after B is
+paused, and finally through A again with the same session id to prove affinity.
+It pauses the Team and verifies one additional request is rejected before any
+provider attempt or new usage row:
+
+```sh
+docker compose -f deploy/self-hosted/compose.yml exec -T team-host \
+  node /opt/dsh/deploy/host/smoke-live-team-routing.mjs \
+  --confirm-two-contributor-live-openai-test-data
+```
+
+Set `DSH_CODEX_SHARED_POOL_LIVE_SMOKE_MODEL` on the `docker compose exec`
+command when the default `gpt-5.4` is unavailable. The runner retains only a
+paused disposable Team and metadata-only request-attempt rows. Its `finally`
+cleanup revokes both Pool contribution copies, removes Member B, and revokes
+the disposable Owner key. Deleting a Pool credential is not a claim that all
+OpenAI-side sessions or authorizations for the account were globally revoked;
+use the provider's own account controls when global revocation is required.
+The runner never claims exact token, price, or subscription consumption.
+
 This Compose file is a small self-host starter, not a complete public-service
 security posture. It separates the schema-owner, Team Host, and Credential
 Broker database identities, but the included Edge is an API allowlist—not TLS,
@@ -283,7 +313,9 @@ export DSH_CODEX_SHARED_POOL_CREDENTIAL_BROKER_API_KEY="$(openssl rand -base64 4
 ```
 
 Remote mode requires PostgreSQL and deliberately does not resolve
-`credentialMasterKeyRef` in the Team Host. The package exports
+`credentialMasterKeyRef` in the Team Host. It still resolves the independent
+`inviteTokenMasterKeyRef` locally; invitation encryption is never delegated to
+the Credential Broker. The package exports
 `createTeamCredentialBrokerHttpHandler`, `LocalTeamCredentialBroker`, and
 `PostgresTeamEnvelopeCredentialBackend` for the separate broker service. That
 service owns the KEK/KMS identity and credential-table access, while the Team
@@ -316,6 +348,11 @@ checks both fixed workload logins automatically. The runtime Host first checks
 DDL, so the restricted Host role needs only `SELECT` on that migration table.
 For an external deployment, run `dsh-codex-team-migrate` with the schema-owner
 URL before rolling either restricted runtime after every package upgrade.
+For Team settings phase two, upgrades are central-first: finish the database
+migration and replace every central Team Host instance before upgrading client
+Hosts. The migration deliberately keeps the invitation-label default during
+this compatibility window; creating invitations or joining from a new client
+Host against an older central Team Host is not supported.
 
 The protocol has no token-export or arbitrary-URL method. It exposes only
 OAuth start/restart/cancel/status, secret-free usage metadata, revoke, and raw
@@ -446,18 +483,28 @@ are rejected before a key can be sent. The Host re-resolves `apiKeyRef` for
 every request, wraps the opaque key only to satisfy the Codex provider's local
 JWT-shaped account-id check, and the Team gateway unwraps it before checking
 the original stored key hash. The Host never returns a stored Team key to the
-browser. The only browser-held Team key is one the user explicitly enters for
-the one-time existing-key bootstrap flow; it is submitted only to the local
-Host credential provider.
+browser, and the Browser has no raw-key import or connection route. Existing
+Team keys must be provisioned through the Host credential provider. A new
+member joins only by submitting an invitation once; after preview the Browser
+clears the invitation and keeps only a short-lived, process-local opaque join
+handle.
 
-The stock Settings shell also receives a **Codex Team** page through the public
-`settings.section` slot. It talks only to a local same-origin management proxy;
-that Host resolves the member key for each operation and projects the remote
-response before returning it. The page supports invite join, an existing-key
-bootstrap path, member and revocable pending-invite views, Owner transfer, device-code contribution,
+The stock Settings shell receives one **Codex subscription pool** page through
+the public `settings.section` slot. Its **Local** tab keeps the existing
+machine-local account pool, while its **Team** tab talks only to a local
+same-origin management proxy. That Host resolves the member key for each
+operation and projects the remote response before returning it. The proxy
+accepts only the fixed loopback Origin derived from the active stock DSH
+listener and requires a short-lived, process-local management capability for
+writes. The page supports invite join, member and revocable pending-invite
+views, Owner transfer, device-code contribution,
 contributor-owned reserve/cap/model controls, pause/revoke, Team emergency
 pause, owner-only current sharing-capacity diagnostics, real non-owner Team
-departure, and metadata-only recent activity. Raw
+departure, metadata-only recent activity, rolling 24-hour usage totals, and
+seven UTC-day per-member usage charts. Active contributions appear under
+**Shared accounts**; pausing one of your contributions moves it to **Not
+shared** without reusing or changing the Local tab's credential. Usage refreshes
+after mutations and at most once per minute while the Team view is connected. Raw
 credentials, key hashes, contribution-cleanup details, and API key inventories
 are not part of the browser contract.
 
@@ -471,9 +518,9 @@ each isolated Pool credential. Persisted revoked contributions are reconciled
 again on Host startup, so interrupted broker cleanup is retried fail-closed.
 An Owner must transfer ownership before leaving. The target must be a different,
 active member of the same Team with at least one live Team API key. The transfer
-atomically makes the target Owner and the caller Admin, so the caller may then
-leave. Existing Team keys stay valid, and contributions remain owned by their
-original contributors. Settings shows the action only when the local Host has
+atomically makes the target Owner and the former Owner a member, invalidating
+pending invitations. Existing Team keys stay valid, and contributions remain
+owned by their original contributors. Settings shows the action only when the local Host has
 confirmed the target's eligibility from the remote overview; the underlying
 API-key inventory is not forwarded to the Browser. Pool credential deletion
 still does not claim that OpenAI-side sessions or tokens were revoked.
@@ -494,15 +541,18 @@ The data plane has fixed per-key safety defaults of 60 admitted requests per
 minute and four concurrent requests. Eight consecutive provider/auth/quota
 failures open a one-minute circuit. One external request may try at most eight
 upstream accounts after explicit `401`/`403`/`429` hard-limit responses. These
-are process safety controls, not member consumption allocations. Owner/Admin
-can call the status route with
+are process safety controls, not member consumption allocations. Only the Team
+Owner can call the status route with
 `{"status":"paused"}` to stop all new Team admission immediately; existing
 streams are allowed to settle.
 
 Contribution settings include `active`/`paused`/`revoked` state, a
 `personalReservePercent`, an optional request-count cap for the longest
-observed provider quota window, fixed shared concurrency, and an optional model
-allow-list. The reserve check uses the lowest remaining percentage across the
+observed provider quota window, an optional UTC-day shared Credits cap, fixed
+shared concurrency, and an optional model allow-list. The Credits cap is a
+Host-only admission control: the Browser DTO, Team Settings UI, and Browser
+update route do not expose or change it. The reserve check uses
+the lowest remaining percentage across the
 model bucket and individual limit. The request-count cap is a conservative
 safety upper bound, not a claim about exact token cost; if the longest provider
 window has no reset timestamp, capped shared admission fails closed instead of
@@ -527,22 +577,60 @@ browser, including legacy or remote `lastError` values. The same Host-only
 projection is used for OAuth browser routes, CLI/TUI output, search and image
 provider errors, and Responses failures before those messages leave the Host.
 
+Team Credits follow one versioned Wodex-style internal formula using only the
+numeric `usage` object reported by the upstream Responses API:
+
+```text
+credits-v1 = ceil(max(input_tokens - cached_tokens, 0)
+                  + cached_tokens * 0.25
+                  + output_tokens * 4)
+```
+
+They are weighted token units for Team accounting—not money, OpenAI pricing,
+or an exact subscription remaining percentage. The gateway streams upstream
+bytes unchanged and keeps validated numeric usage counters only in the active
+request long enough to calculate Credits. Persistent stores retain the final
+Credits and formula version, not the raw input/cached/output counters; schema
+migration 8 removes the legacy raw-token columns created by migration 7. An
+attempt with missing or malformed usage is
+still counted as one request but adds no Credits. Aggregates count only a
+teammate using a contributor's account; the contributor's own requests do not
+consume that account's daily shared cap.
+
+Before each shared provider attempt the store atomically reserves 50,000
+Credits, then replaces the reservation with the measured `credits-v1` value or
+releases it when no valid usage was observed. The fixed reservation prevents
+parallel Hosts from admitting an unbounded number of requests at the remaining
+edge of a cap. It is not a provider-side hard spend limit: a completed request
+may settle above the reservation and temporarily put the UTC day over its cap,
+after which later shared requests are blocked. A configured daily cap below
+50,000 therefore admits no shared provider attempt. Owner traffic, routing
+reserve percentage, and provider remaining percentage stay separate from this
+ledger.
+
 An active contribution's owner can also see a secret-free current-capacity
 snapshot for each allowed provider bucket: remaining percentage, longest-window
 reset, shared requests counted in that window, shared requests currently in
 flight, and the first routing guard that blocks new sharing. This projection is
-never included for another member's contribution, even for a Team Owner/Admin,
+never included for another member's contribution, even for a Team Owner,
 and both the local Host proxy and Browser parser enforce that ownership boundary
-again. Provider usage reads may be cached for up to 15 seconds and routing counts
-are observational snapshots; admission still rechecks every guard atomically.
+again. Each Host runs a twice-daily idle safety sweep over active contribution
+snapshots with at most four provider reads in parallel. Provider usage reads may
+otherwise be cached for up to 15 seconds on the request path; a request waits for any in-flight
+background refresh before admission, and explicit upstream `401`/`403`/`429`
+responses invalidate the affected account immediately and retry another eligible
+account. An account at zero or at/below its contributor reserve is skipped until
+a later refresh reports usable capacity again. Routing counts are observational
+snapshots; admission still rechecks every guard atomically.
 
 The contributor can repair a `reauth_required` account in place from **Codex
 Team → 重新授权 / Sign in again**. This keeps the contribution ID, owner,
 personal reserve, request cap, shared concurrency, and model allow-list. The
 Host deletes only that contribution's isolated stale credential record before
 starting a fresh device-code login; it never imports a local Codex `auth.json`
-or exposes the resulting credential to the browser. Team administrators may
-revoke a contribution, but cannot reauthorize another member's account.
+or exposes the resulting credential to the browser. A contributor may revoke or
+reauthorize only their own contribution; even the Team Owner cannot manage
+another member's provider credential.
 
 The PostgreSQL mode makes Team, membership, contribution policy, key, invite,
 metadata-only usage state, admission leases, shared concurrency, reset-window
@@ -569,12 +657,11 @@ DSH_TEAM_POSTGRES_TEST_URL='postgres://...' pnpm run test:postgres
 The public CI workflow runs this gate against PostgreSQL 17 in addition to the
 normal unit, build, and package checks. It covers concurrent ownership-transfer
 serialization, emergency-pause ordering, cross-Host credential refresh, online
-key-rewrap, and traffic-admission serialization. The command fails clearly when the URL is absent rather than
-silently skipping real-database evidence.
-The full five-case gate was also run locally on 2026-08-20 against a disposable
-`postgres:17-alpine` database. The two multi-waiter cases validate PostgreSQL's
-queued blocker chain rather than assuming every waiter is directly blocked by
-the control transaction.
+key-rewrap, traffic-admission serialization, and atomic daily Credits admission
+across Host replicas. The command fails clearly when the URL is absent rather
+than silently skipping real-database evidence. The multi-waiter cases validate
+PostgreSQL's queued blocker chain rather than assuming every waiter is directly
+blocked by the control transaction.
 Provider `reset_at` and `reset_after_seconds` evidence is normalized once and
 cached briefly; the window duration is never misused as a reset countdown. The
 fixed per-key guard is process-local only in the intentionally single-process
@@ -665,7 +752,7 @@ pnpm run build
 pnpm run verify:package
 # with a stock DSH Web profile already running:
 pnpm run smoke:web
-# with a disposable Team-enabled stock DSH on 127.0.0.1:3099:
+# with a disposable, Host-preprovisioned Team-enabled stock DSH on 127.0.0.1:3099:
 pnpm run smoke:team-web
 ```
 
@@ -675,13 +762,16 @@ checks the public package shape and plugin-owned route names; it is not a
 substitute for a real stock-DSH installation smoke test. `smoke:web` probes the
 stock web shell and the credential-safe auth, profile, and quota routes without
 printing their response bodies. `smoke:team-web` uses the secret-free
-`tests/fixtures/team-web-smoke.patch.yml` overlay and requires
-`DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN`. It creates an in-memory Team, connects
-the local Browser proxy, creates and revokes an invitation, proves the revoked
-token cannot join, then revokes the temporary Owner key and removes it from the
-local credential store. Run it only against a disposable loopback stock DSH;
-the intentionally inaccessible in-memory Team disappears when that process
-stops.
+`tests/fixtures/team-web-smoke.patch.yml` overlay as the second stage of a
+disposable PostgreSQL-backed setup. Before running it, bootstrap a Team named
+`Team Web Smoke` with Owner `Smoke Owner` through the central Host API, provision
+that one-time Owner Team key only in the Host credential provider, and restart
+stock DSH against the same disposable database. The smoke never submits that
+key through Browser routes: it verifies the Owner projection, obtains a local
+management capability, creates and revokes an invitation, proves the revoked
+token cannot join, then remotely revokes the temporary Owner key and removes
+its local credential. Run it only against a disposable loopback installation;
+the smoke intentionally leaves that Team without its Owner key.
 
 ## Install into DSH
 
@@ -690,8 +780,8 @@ pnpm pack
 dsh plugin --profile web add ./dsh-codex-shared-pool-0.1.0-alpha.0.tgz
 ```
 
-Start the same Web profile, open Settings → OpenAI Codex for local profiles or
-Settings → Codex Team for invite-only sharing. Local profile labels can be
+Start the same Web profile and open Settings → Codex subscription pool. Use
+the Local tab for local profiles or the Team tab for invite-only sharing. Local profile labels can be
 renamed in place without changing the underlying OAuth credential. Use
 **添加账号** to begin local OAuth, or **获取设备码** to contribute through a
 central Team Host. Existing
@@ -703,7 +793,7 @@ earliest provider reset time becomes the new global priority. Unreadable quota
 remains fail-open only if no alternative has proven model capacity, and if every
 profile reports exhausted the existing binding (or the first profile for a new
 session) is retained for the provider to decide. The
-OpenAI Codex settings page keeps at most 100 metadata-only local request
+The Local tab keeps at most 100 metadata-only local request
 receipts in Host process memory and shows the newest three. Each receipt is one
 request attempt—not a token, cost, or exact subscription-consumption metric—and
 is lost when the Host restarts. Ordinal aliases reflect priority order at the

@@ -11,6 +11,7 @@ function account(overrides: Partial<TeamContributionAccountSummary> = {}): TeamC
     status: overrides.status ?? 'active',
     personalReservePercent: overrides.personalReservePercent ?? 20,
     maxSharedRequestsPerWindow: overrides.maxSharedRequestsPerWindow ?? null,
+    dailySharedCreditLimit: overrides.dailySharedCreditLimit ?? null,
     maxSharedConcurrency: overrides.maxSharedConcurrency ?? 1,
     allowedModels: overrides.allowedModels ?? [],
     createdAt: overrides.createdAt ?? 1,

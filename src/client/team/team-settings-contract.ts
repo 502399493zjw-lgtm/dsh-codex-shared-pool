@@ -1,5 +1,12 @@
-import type { TeamManagementMemberSummary } from '../../shared/team-management.ts'
-import type { TeamInviteStatus, TeamMemberSummary, TeamRole } from '../../team/types.ts'
+import type {
+  TeamManagementContributionSummary,
+  TeamManagementMemberSummary,
+} from '../../shared/team-management.ts'
+import type {
+  TeamInviteStatus,
+  TeamMemberSummary,
+  TeamRole,
+} from '../../team/types.ts'
 
 export const MAX_PERSONAL_RESERVE_PERCENT = 99
 export const MAX_SHARED_REQUESTS_PER_WINDOW = 1_000_000
@@ -10,6 +17,28 @@ export interface ContributionProtectionDraft {
   readonly reserve: string
   readonly requestCap: string
   readonly models: string
+}
+
+export interface TeamContributionGroups {
+  readonly shared: readonly TeamManagementContributionSummary[]
+  readonly unshared: readonly TeamManagementContributionSummary[]
+}
+
+/**
+ * The account directory is personal management, not Team inventory. Keep both
+ * groups restricted to the authenticated member even if an upstream response
+ * accidentally contains another contributor's summary.
+ */
+export function groupTeamContributions(
+  contributions: readonly TeamManagementContributionSummary[],
+  currentMemberId: string,
+): TeamContributionGroups {
+  const ownContributions = contributions.filter(account => account.ownerMemberId === currentMemberId)
+  return {
+    shared: ownContributions.filter(account => account.status === 'active'),
+    unshared: ownContributions.filter(account =>
+      account.status !== 'active' && account.status !== 'revoked'),
+  }
 }
 
 export type ContributionProtectionDraftResult = {
@@ -73,7 +102,7 @@ export function canMemberLeaveTeam(role: TeamRole): boolean {
 }
 
 export function canRevokeTeamInvite(role: TeamRole, status: TeamInviteStatus): boolean {
-  return role !== 'member' && status === 'pending'
+  return role === 'owner' && status === 'pending'
 }
 
 export function canTransferTeamOwnership(
@@ -86,5 +115,19 @@ export function canTransferTeamOwnership(
     && candidate.teamId === currentMember.teamId
     && candidate.id !== currentMember.id
     && candidate.status === 'active'
-    && candidate.role !== 'owner'
+    && candidate.role === 'member'
+}
+
+export function canRemoveTeamMember(
+  currentMember: TeamMemberSummary,
+  candidate: TeamManagementMemberSummary,
+): boolean {
+  if (
+    currentMember.status !== 'active'
+    || candidate.teamId !== currentMember.teamId
+    || candidate.id === currentMember.id
+    || candidate.status !== 'active'
+    || candidate.role === 'owner'
+  ) return false
+  return currentMember.role === 'owner'
 }

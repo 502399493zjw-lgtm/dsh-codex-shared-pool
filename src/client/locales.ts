@@ -1,6 +1,10 @@
 /** English copy for the OpenAI Codex settings page. */
 export const en = {
-  nav: 'OpenAI Codex',
+  nav: 'Codex subscription pool',
+  poolTitle: 'Codex subscription pool',
+  poolIntro: 'Use Codex accounts on this device, and separately authorize capacity you choose to share with a Team.',
+  localTab: 'Local',
+  teamTab: 'Team',
   title: 'ChatGPT accounts',
   intro: 'Use your ChatGPT subscription with Codex. No API key or extra setup is required.',
   accounts: 'Quota priority',
@@ -123,7 +127,11 @@ export type OpenAICodexSettingsKey = keyof typeof en
 
 /** Chinese copy for the OpenAI Codex settings page. */
 export const zh: { [Key in OpenAICodexSettingsKey]: string } = {
-  nav: 'OpenAI Codex',
+  nav: 'Codex 订阅池',
+  poolTitle: 'Codex 订阅池',
+  poolIntro: '管理本机使用的 Codex 账号，并单独授权你愿意贡献给团队的账号容量。',
+  localTab: '本机',
+  teamTab: '团队',
   title: 'ChatGPT 账号',
   intro: '使用你的 ChatGPT 订阅即可调用 Codex，无需 API Key 或额外配置。',
   accounts: '额度优先顺序',

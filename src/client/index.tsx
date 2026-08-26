@@ -10,8 +10,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from './compat-slots.d.ts'
-import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
 import type { OpenAICodexSettingsInjected } from './OpenAICodexSettings.tsx'
+import { CodexSubscriptionPoolSettings } from './CodexSubscriptionPoolSettings.tsx'
+import type { CodexSubscriptionPoolSettingsInjected } from './CodexSubscriptionPoolSettings.tsx'
 import { ImagegenToolView } from './ImagegenToolView.tsx'
 import type { ImageLoader } from './ImagegenToolView.tsx'
 import { FastModeModelPreference } from './FastModeModelPreference.tsx'
@@ -19,7 +20,6 @@ import { FastModeTriggerIcon } from './FastModeTriggerIcon.tsx'
 import { en, zh } from './locales.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 import { apply as applyCodexQuota } from './quota/index.ts'
-import { TeamSettings } from './team/TeamSettings.tsx'
 import type { TeamSettingsInjected } from './team/TeamSettings.tsx'
 import { en as teamEn, zh as teamZh } from './team/locales.ts'
 import type { TeamSettingsKey } from './team/locales.ts'
@@ -84,15 +84,8 @@ export function apply(ctx: ClientContext): void {
     id: CODEX_SETTINGS_SECTION_ID,
     order: 15,
     label: () => t('nav'),
-    inject: (): OpenAICodexSettingsInjected => ({ t }),
-  }, OpenAICodexSettings))
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'codex-team',
-    order: 16,
-    label: () => teamT('nav'),
-    inject: (): TeamSettingsInjected => ({ t: teamT }),
-  }, TeamSettings))
+    inject: (): CodexSubscriptionPoolSettingsInjected => ({ localT: t, teamT }),
+  }, CodexSubscriptionPoolSettings))
   ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
     name: 'tool.call.toolview',
     key: 'imagegen',

@@ -1,0 +1,2031 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 订阅池交互原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #151719;
+      --shell: #242629;
+      --panel: #2b2e32;
+      --panel-strong: #31353a;
+      --panel-soft: #272a2e;
+      --line: #44484f;
+      --line-soft: #383c42;
+      --text: #f3f5f7;
+      --muted: #afb5bd;
+      --faint: #7f8791;
+      --blue: #8bb8ff;
+      --blue-strong: #5d91ed;
+      --blue-soft: rgba(93, 145, 237, .14);
+      --green: #50d890;
+      --green-soft: rgba(80, 216, 144, .12);
+      --amber: #f2b95f;
+      --amber-soft: rgba(242, 185, 95, .12);
+      --red: #ff747b;
+      --focus: #a9caff;
+      --radius-xl: 22px;
+      --radius-lg: 14px;
+      --radius-md: 10px;
+      --sidebar: 244px;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+    }
+
+    button, input { font: inherit; }
+
+    button {
+      border: 0;
+      color: inherit;
+      cursor: pointer;
+    }
+
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 2px;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .48;
+    }
+
+    .prototype-note {
+      display: flex;
+      min-height: 34px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-bottom: 1px solid #2d3035;
+      background: #1c1e21;
+      color: #a9b0b8;
+      font-size: 12px;
+      letter-spacing: .01em;
+    }
+
+    .prototype-note strong { color: #d6dbe0; }
+
+    .shell {
+      display: grid;
+      width: min(1500px, calc(100vw - 36px));
+      min-height: calc(100vh - 72px);
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      margin: 18px auto 20px;
+      overflow: hidden;
+      border: 1px solid #35383d;
+      border-radius: var(--radius-xl);
+      background: var(--shell);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, .28);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      border-right: 1px solid var(--line-soft);
+      padding: 28px 18px;
+    }
+
+    .settings-title {
+      margin: 0 14px;
+      font-size: 22px;
+      font-weight: 680;
+      letter-spacing: -.02em;
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .nav-item {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 12px;
+      border-radius: 12px;
+      padding: 11px 14px;
+      background: transparent;
+      color: #d9dde2;
+      text-align: left;
+      transition: background 140ms ease, color 140ms ease;
+    }
+
+    .nav-item:hover { background: #2d3034; }
+    .nav-item.active {
+      background: #4c515a;
+      color: white;
+      box-shadow: inset 3px 0 0 var(--blue);
+    }
+
+    .nav-icon {
+      display: grid;
+      width: 22px;
+      height: 22px;
+      place-items: center;
+      color: currentColor;
+      font-size: 17px;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 42px 54px 64px;
+    }
+
+    .page {
+      width: min(100%, 1040px);
+      margin: 0 auto;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 26px;
+    }
+
+    .eyebrow {
+      margin: 0 0 7px;
+      color: var(--blue);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      font-weight: 680;
+      letter-spacing: -.035em;
+      line-height: 1.2;
+    }
+
+    .intro {
+      max-width: 680px;
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .pool-tabs {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .pool-tab {
+      position: relative;
+      min-width: 56px;
+      padding: 0 2px 12px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .pool-tab:hover { color: var(--text); }
+
+    .pool-tab[aria-selected='true'] { color: var(--text); }
+
+    .pool-tab[aria-selected='true']::after {
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: var(--blue);
+      content: '';
+    }
+
+    .team-context {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 11px 14px;
+      background: var(--panel-soft);
+    }
+
+    .team-context[hidden] { display: none; }
+
+    .team-context-copy {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .team-context-copy strong {
+      font-size: 13px;
+      font-weight: 620;
+    }
+
+    .team-context-copy span:last-child {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .team-chip {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: #292c30;
+      color: #d9dde2;
+      font-size: 12px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 4px rgba(80, 216, 144, .09);
+    }
+
+    .flow {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin-bottom: 28px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--panel-soft);
+    }
+
+    .flow::before {
+      position: absolute;
+      top: 34px;
+      right: 17%;
+      left: 17%;
+      height: 1px;
+      background: #50555c;
+      content: "";
+    }
+
+    .flow-step {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      min-width: 0;
+      align-items: flex-start;
+      gap: 11px;
+      padding: 20px;
+    }
+
+    .flow-step + .flow-step { border-left: 1px solid var(--line-soft); }
+
+    .flow-mark {
+      display: grid;
+      width: 29px;
+      height: 29px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid #59606a;
+      border-radius: 50%;
+      background: var(--panel-soft);
+      color: #aeb5be;
+      font-size: 11px;
+      font-weight: 750;
+    }
+
+    .flow-step.is-active .flow-mark {
+      border-color: var(--blue-strong);
+      background: #345483;
+      color: #fff;
+      box-shadow: 0 0 0 4px rgba(93, 145, 237, .11);
+    }
+
+    .flow-step.is-done .flow-mark {
+      border-color: #3b9b69;
+      background: #236244;
+      color: white;
+    }
+
+    .flow-label {
+      display: block;
+      color: #edf0f3;
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 18px;
+    }
+
+    .flow-hint {
+      display: block;
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .section {
+      border-top: 1px solid var(--line-soft);
+      padding: 25px 0 28px;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 15px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 670;
+      letter-spacing: -.015em;
+    }
+
+    .section-copy {
+      max-width: 690px;
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .ghost-button, .outline-button, .primary-button, .danger-button {
+      display: inline-flex;
+      min-height: 36px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-radius: 9px;
+      padding: 8px 13px;
+      font-size: 13px;
+      font-weight: 620;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+
+    .ghost-button {
+      background: transparent;
+      color: #d5d9de;
+    }
+
+    .ghost-button:hover { background: #363a3f; }
+
+    .outline-button {
+      border: 1px solid #59606a;
+      background: transparent;
+      color: #e1e5e9;
+    }
+
+    .outline-button:hover {
+      border-color: #717984;
+      background: #34383d;
+    }
+
+    .primary-button {
+      background: #e6edf8;
+      color: #20242a;
+    }
+
+    .primary-button:hover {
+      background: #fff;
+      transform: translateY(-1px);
+    }
+
+    .danger-button {
+      border: 1px solid rgba(255, 116, 123, .38);
+      background: rgba(255, 116, 123, .08);
+      color: #ff9ca1;
+    }
+
+    .account-list {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .account {
+      display: grid;
+      min-width: 0;
+      grid-template-columns: minmax(190px, .9fr) minmax(250px, 1.15fr) auto;
+      align-items: center;
+      gap: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 15px 16px;
+      background: var(--panel);
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+
+    .account:hover {
+      border-color: #565c65;
+      background: #2e3236;
+    }
+
+    .account.is-team {
+      border-color: rgba(93, 145, 237, .48);
+      background: linear-gradient(90deg, rgba(93, 145, 237, .08), transparent 44%), var(--panel);
+    }
+
+    .identity {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      flex: 0 0 auto;
+      place-items: center;
+      border: 1px solid #4d535b;
+      border-radius: 11px;
+      background: #35393e;
+      color: #e9edf1;
+      font-size: 13px;
+      font-weight: 750;
+    }
+
+    .account-name {
+      overflow: hidden;
+      margin: 0;
+      color: #f4f6f8;
+      font-size: 14px;
+      font-weight: 650;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .account-meta {
+      margin: 3px 0 0;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .availability {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .pill {
+      display: inline-flex;
+      min-height: 25px;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #4a5058;
+      border-radius: 999px;
+      padding: 4px 9px;
+      color: #c7ccd2;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .pill.blue {
+      border-color: rgba(93, 145, 237, .42);
+      background: var(--blue-soft);
+      color: #afd0ff;
+    }
+
+    .pill.green {
+      border-color: rgba(80, 216, 144, .36);
+      background: var(--green-soft);
+      color: #8fe7b7;
+    }
+
+    .pill.amber {
+      border-color: rgba(242, 185, 95, .35);
+      background: var(--amber-soft);
+      color: #ffd48c;
+    }
+
+    .status-copy {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 18px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .account-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .team-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, .72fr);
+      gap: 12px;
+    }
+
+    .team-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      background: var(--panel);
+    }
+
+    .team-panel h3 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .team-panel p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .rule-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .rule {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      color: #d6dbe0;
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .rule-number {
+      display: grid;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 auto;
+      place-items: center;
+      border-radius: 6px;
+      background: #373c42;
+      color: var(--blue);
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .quota-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 13px;
+      color: #dce0e4;
+      font-size: 12px;
+    }
+
+    .quota-bar {
+      height: 6px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #3b3f44;
+    }
+
+    .quota-fill {
+      width: 74%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--blue-strong);
+    }
+
+    .empty {
+      display: flex;
+      min-height: 104px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px dashed #4a5058;
+      border-radius: var(--radius-lg);
+      color: var(--faint);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .empty strong { color: #cdd2d8; }
+
+    .toast {
+      position: fixed;
+      z-index: 20;
+      right: 28px;
+      bottom: 28px;
+      display: flex;
+      max-width: 360px;
+      align-items: flex-start;
+      gap: 10px;
+      border: 1px solid rgba(80, 216, 144, .38);
+      border-radius: 12px;
+      padding: 12px 14px;
+      background: #27352f;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, .3);
+      color: #e8f7ef;
+      font-size: 12px;
+      line-height: 18px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity 160ms ease, transform 160ms ease;
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      z-index: 10;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 24px;
+      background: rgba(7, 9, 11, .68);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal-backdrop.open { display: grid; }
+
+    .modal {
+      width: min(520px, 100%);
+      overflow: hidden;
+      border: 1px solid #50555d;
+      border-radius: 18px;
+      background: #2b2e32;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, .5);
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 20px 22px 16px;
+    }
+
+    .modal-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 680;
+      letter-spacing: -.02em;
+    }
+
+    .modal-subtitle {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .close-button {
+      width: 32px;
+      height: 32px;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      background: transparent;
+      color: #cdd2d8;
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .close-button:hover { background: #383c41; }
+
+    .modal-body { padding: 21px 22px; }
+
+    .permission-box {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      padding: 14px;
+      background: #272a2e;
+    }
+
+    .permission-side strong {
+      display: block;
+      color: #e8ebee;
+      font-size: 12px;
+    }
+
+    .permission-side span {
+      display: block;
+      margin-top: 3px;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 15px;
+    }
+
+    .arrow {
+      color: var(--blue);
+      font-size: 18px;
+    }
+
+    .safety-note {
+      margin: 14px 0 0;
+      border-left: 2px solid var(--green);
+      padding-left: 11px;
+      color: #bbc1c8;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .safety-note strong { color: #edf0f3; }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: 16px;
+    }
+
+    .field label {
+      color: #d9dde1;
+      font-size: 12px;
+      font-weight: 620;
+    }
+
+    .field input {
+      width: 100%;
+      border: 1px solid #575d65;
+      border-radius: 9px;
+      padding: 10px 12px;
+      background: #24272a;
+      color: white;
+    }
+
+    .waiting {
+      display: flex;
+      min-height: 205px;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+
+    .spinner {
+      width: 34px;
+      height: 34px;
+      margin-bottom: 15px;
+      border: 3px solid #474c53;
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 780ms linear infinite;
+    }
+
+    .waiting strong {
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .waiting p {
+      max-width: 390px;
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .mock-action {
+      margin-top: 16px;
+      color: var(--blue);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 9px;
+      border-top: 1px solid var(--line-soft);
+      padding: 14px 22px;
+    }
+
+    .dsh-codex-team-workspace {
+      display: grid;
+      min-height: 640px;
+      grid-template-columns: minmax(260px, .82fr) minmax(0, 1.45fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+
+    .dsh-codex-team-profile-list {
+      min-width: 0;
+      border-right: 1px solid var(--line);
+      padding: 20px;
+    }
+
+    .dsh-codex-team-list-heading {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .dsh-codex-team-list-heading h2 {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 16px;
+      line-height: 24px;
+      font-weight: 600;
+    }
+
+    .dsh-codex-team-list-heading h2 span {
+      color: var(--faint);
+      font-weight: 500;
+    }
+
+    .compact-button {
+      min-height: 32px;
+      flex: 0 1 auto;
+      padding: 6px 11px;
+      white-space: nowrap;
+    }
+
+    .list-hint {
+      margin: 8px 0 0;
+      color: var(--faint);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .dsh-codex-team-profile-list .account-list {
+      margin-top: 18px;
+      gap: 8px;
+    }
+
+    .account-group + .account-group {
+      margin-top: 18px;
+      border-top: 1px solid var(--line-soft);
+      padding-top: 16px;
+    }
+
+    .account-group-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 0 4px 7px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      line-height: 16px;
+    }
+
+    .account-group-label span {
+      color: var(--faint);
+      font-weight: 500;
+    }
+
+    .dsh-codex-team-profile-item {
+      display: grid;
+      width: 100%;
+      min-height: 58px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: transparent;
+      color: var(--muted);
+      text-align: left;
+    }
+
+    .dsh-codex-team-profile-item:hover { background: #34383d; }
+
+    .dsh-codex-team-profile-item[data-selected='true'] {
+      border-color: var(--blue-strong);
+      background: var(--blue-soft);
+      color: var(--text);
+    }
+
+    .profile-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+    }
+
+    .profile-dot.waiting { background: var(--amber); }
+
+    .profile-identity {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .profile-alias {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+
+    .profile-name {
+      overflow: hidden;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .profile-state {
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+
+    .profile-state.team { color: var(--blue); }
+    .profile-state.waiting { color: var(--amber); }
+
+    .profile-state.contributor {
+      border: 1px solid rgba(139, 184, 255, .3);
+      border-radius: 999px;
+      padding: 2px 7px;
+      background: rgba(93, 145, 237, .1);
+      color: var(--blue);
+    }
+
+    .dsh-codex-team-profile-detail {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      padding: 24px 26px 0;
+    }
+
+    .detail-heading {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .detail-heading h2 {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-size: 20px;
+      line-height: 28px;
+      font-weight: 600;
+    }
+
+    .connection-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .team-action {
+      margin-top: 18px;
+    }
+
+    .team-action > button { min-width: 112px; }
+
+    .team-action p {
+      max-width: 560px;
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+
+    .detail-section {
+      margin-top: 26px;
+      border-top: 1px solid var(--line);
+      padding: 24px 0 28px;
+    }
+
+    .detail-section h3 {
+      margin: 0 0 20px;
+      font-size: 15px;
+      line-height: 22px;
+      font-weight: 600;
+    }
+
+    .quota-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+
+    .detail-section .quota-bar {
+      height: 8px;
+      margin-top: 10px;
+    }
+
+    .usage-section {
+      border-top: 1px solid var(--line);
+      padding: 22px 0 28px;
+    }
+
+    .usage-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .usage-heading h3 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 22px;
+      font-weight: 600;
+    }
+
+    .usage-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .usage-metric {
+      min-width: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: 9px;
+      padding: 11px 12px;
+      background: rgba(255, 255, 255, .018);
+    }
+
+    .usage-metric-label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 16px;
+    }
+
+    .usage-metric-value {
+      display: flex;
+      min-width: 0;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .usage-metric strong {
+      font-size: 26px;
+      line-height: 32px;
+      font-weight: 620;
+      letter-spacing: -.03em;
+    }
+
+    .usage-metric-value > span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .usage-period {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .sharing-limit {
+      margin-top: 12px;
+      border: 1px solid var(--line-soft);
+      border-radius: 9px;
+      padding: 11px 12px 12px;
+      background: rgba(255, 255, 255, .018);
+    }
+
+    .sharing-limit-head,
+    .sharing-limit-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .sharing-limit-head {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 17px;
+    }
+
+    .sharing-limit-head strong {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 620;
+    }
+
+    .sharing-limit .quota-bar { margin-top: 8px; }
+
+    .sharing-limit-meta {
+      margin-top: 7px;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 15px;
+    }
+
+    .credits-formula {
+      margin: 10px 0 0;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 16px;
+    }
+
+    .usage-refresh {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 12px 0 0;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 17px;
+    }
+
+    .usage-refresh .profile-dot {
+      width: 6px;
+      height: 6px;
+    }
+
+    .modal.usage-modal { width: min(680px, 100%); }
+
+    .usage-chart-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .usage-chart-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .usage-chart-legend i {
+      width: 8px;
+      height: 8px;
+      border-radius: 3px;
+      background: var(--blue);
+    }
+
+    .usage-chart-legend .member-1 { background: #72c7a0; }
+    .usage-chart-legend .member-2 { background: #d7a766; }
+
+    .usage-chart {
+      display: grid;
+      height: 250px;
+      grid-template-columns: repeat(7, minmax(42px, 1fr));
+      gap: 12px;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 8px 0;
+    }
+
+    .usage-chart-column {
+      display: grid;
+      height: 100%;
+      grid-template-rows: 20px minmax(0, 1fr) 36px;
+      gap: 5px;
+      text-align: center;
+    }
+
+    .usage-chart-total {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 20px;
+    }
+
+    .usage-chart-track {
+      display: flex;
+      min-height: 0;
+      align-items: flex-end;
+      justify-content: center;
+      border-radius: 5px 5px 0 0;
+      background: linear-gradient(to top, rgba(255,255,255,.035), transparent);
+    }
+
+    .usage-chart-stack {
+      display: flex;
+      width: min(32px, 72%);
+      min-height: 5px;
+      flex-direction: column-reverse;
+      overflow: hidden;
+      border-radius: 5px 5px 2px 2px;
+    }
+
+    .usage-chart-segment { min-height: 2px; background: var(--blue); }
+    .usage-chart-segment.member-1 { background: #72c7a0; }
+    .usage-chart-segment.member-2 { background: #d7a766; }
+
+    .usage-chart-date {
+      display: flex;
+      flex-direction: column;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
+
+    .usage-chart-date small {
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 14px;
+    }
+
+    .usage-chart-note {
+      margin: 14px 0 0;
+      color: var(--faint);
+      font-size: 11px;
+      line-height: 17px;
+    }
+
+    .detail-footer {
+      display: grid;
+      min-height: 60px;
+      grid-template-columns: 1fr 1fr;
+      margin: auto -26px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .detail-footer button {
+      background: transparent;
+      color: var(--blue);
+    }
+
+    .detail-footer button + button { border-left: 1px solid var(--line); }
+    .detail-footer button:hover { background: #34383d; }
+    .detail-footer .danger-link { color: var(--red); }
+
+    .compact-team-note {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 11px;
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px 14px;
+      background: var(--panel);
+    }
+
+    .compact-team-note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 18px;
+    }
+
+    .compact-team-note strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .modal-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+
+    .legend-contract { display: none; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 980px) {
+      .shell { grid-template-columns: 190px minmax(0, 1fr); }
+      .main { padding: 34px 28px 48px; }
+      .dsh-codex-team-workspace { grid-template-columns: minmax(220px, .9fr) minmax(0, 1.2fr); }
+      .account { grid-template-columns: minmax(170px, 1fr) auto; }
+      .availability { grid-column: 1 / -1; grid-row: 2; }
+      .team-card { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 720px) {
+      .prototype-note { padding: 8px 14px; text-align: center; }
+      .shell {
+        width: 100%;
+        min-height: calc(100vh - 42px);
+        grid-template-columns: 1fr;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+      }
+      .sidebar {
+        gap: 16px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+        padding: 18px;
+      }
+      .settings-title { display: none; }
+      .nav {
+        flex-direction: row;
+        overflow-x: auto;
+      }
+      .nav-item {
+        width: auto;
+        flex: 0 0 auto;
+        padding: 9px 11px;
+      }
+      .nav-item:not(.active) .nav-icon { display: none; }
+      .main { padding: 28px 18px 44px; }
+      .page-header { flex-direction: column; }
+      .dsh-codex-team-workspace { grid-template-columns: 1fr; }
+      .dsh-codex-team-profile-list {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .dsh-codex-team-profile-list .account-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
+      }
+      .dsh-codex-team-profile-detail { min-height: 440px; }
+      .compact-team-note { grid-template-columns: auto minmax(0, 1fr); }
+      .compact-team-note button { grid-column: 2; justify-self: start; }
+      .flow { grid-template-columns: 1fr; }
+      .flow::before { display: none; }
+      .flow-step + .flow-step {
+        border-top: 1px solid var(--line-soft);
+        border-left: 0;
+      }
+      .section-head { flex-direction: column; }
+      .account {
+        grid-template-columns: 1fr;
+        gap: 13px;
+      }
+      .availability, .account-actions {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      .account-actions { justify-content: flex-start; }
+      .permission-box { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="prototype-note">
+    <strong>交互原型</strong>
+    <span>所有账号和额度均为脱敏 mock 数据，不会发起真实 OAuth 或模型请求</span>
+  </div>
+
+  <div class="shell">
+    <aside class="sidebar" aria-label="设置导航">
+      <h2 class="settings-title">设置</h2>
+      <nav class="nav">
+        <button class="nav-item"><span class="nav-icon">⚙</span><span>通用设置</span></button>
+        <button class="nav-item"><span class="nav-icon">◉</span><span>模型</span></button>
+        <button class="nav-item"><span class="nav-icon">≡</span><span>插件</span></button>
+        <button class="nav-item active" aria-current="page"><span class="nav-icon">◎</span><span>Codex 订阅池</span></button>
+        <button class="nav-item"><span class="nav-icon">⌬</span><span>Agent 预设</span></button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <div class="page">
+        <header class="page-header">
+          <div>
+            <h1>Codex 订阅池</h1>
+            <p class="intro">管理本机 Codex 账号，并选择哪些账号可供团队使用。</p>
+          </div>
+        </header>
+
+        <div class="pool-tabs" id="pool-tabs" role="tablist" aria-label="订阅池范围">
+          <button class="pool-tab" id="local-tab" role="tab" aria-selected="true" aria-controls="pool-content" data-pool-tab="local">本机</button>
+          <button class="pool-tab" id="team-tab" role="tab" aria-selected="false" aria-controls="pool-content" data-pool-tab="team">团队</button>
+        </div>
+
+        <section class="team-context" id="team-context" aria-label="当前团队" hidden>
+          <div class="team-context-copy"><span class="dot"></span><strong>周末造物局</strong><span>3 位成员</span></div>
+          <button type="button" class="ghost-button">团队设置</button>
+        </section>
+
+        <div class="dsh-codex-team-workspace" id="pool-content" role="tabpanel" aria-labelledby="local-tab">
+          <aside class="dsh-codex-team-profile-list" id="account-list-panel" aria-label="本机账号">
+            <div class="dsh-codex-team-list-heading">
+              <h2><span id="account-list-title">账号</span> <span id="account-count">(3)</span></h2>
+              <button class="outline-button compact-button" id="add-other" aria-label="添加本机 Codex 账号">＋ 添加账号</button>
+            </div>
+            <p class="list-hint" id="account-list-hint">新请求优先使用标为“使用中”的账号。</p>
+            <div class="account-list" id="account-list" aria-live="polite"></div>
+          </aside>
+
+          <section class="dsh-codex-team-profile-detail" id="account-detail" aria-live="polite">
+            <!-- 由原型状态渲染 -->
+          </section>
+        </div>
+
+        <section class="compact-team-note" id="pool-note" aria-label="订阅池使用规则">
+          <span class="dot"></span>
+          <p id="pool-note-copy"><strong>自动切换已开启。</strong>额度不足时优先切换到重置更早的可用账号。</p>
+          <button type="button" class="ghost-button" id="pool-note-action">最近请求</button>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modal-backdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <header class="modal-head">
+        <div>
+          <h2 class="modal-title" id="modal-title">将账号用于 Team</h2>
+          <p class="modal-subtitle" id="modal-subtitle">这会创建一条由 Team 服务单独管理的 OAuth 授权。</p>
+        </div>
+        <button class="close-button" id="close-modal" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body" id="modal-body"></div>
+      <footer class="modal-foot" id="modal-foot"></footer>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status"><span class="dot"></span><span id="toast-copy"></span></div>
+
+  <template class="legend-contract">
+    <span data-account-state="local"></span>
+    <span data-account-state="authorizing"></span>
+    <span data-account-state="team-active"></span>
+  </template>
+
+  <script>
+    const accounts = [
+      {
+        id: 'a', name: '个人账号', detail: '本机正在使用', quota: 74, state: 'team-active', source: 'local',
+        usage: {
+          today: 17,
+          todayCredits: 12480,
+          dailyCreditLimit: 50000,
+          personalReservePercent: 20,
+          days: [
+            { date: '8/14', members: [{ member: 'Mia', requests: 6, credits: 3900 }, { member: '阿周', requests: 3, credits: 2100 }] },
+            { date: '8/15', members: [{ member: 'Mia', requests: 9, credits: 7200 }, { member: '阿周', requests: 5, credits: 3600 }] },
+            { date: '8/16', members: [{ member: 'Mia', requests: 4, credits: 2800 }, { member: '阿周', requests: 8, credits: 6100 }] },
+            { date: '8/17', members: [{ member: 'Mia', requests: 11, credits: 8200 }, { member: '阿周', requests: 2, credits: 1300 }] },
+            { date: '8/18', members: [{ member: 'Mia', requests: 7, credits: 5300 }, { member: '阿周', requests: 6, credits: 4600 }] },
+            { date: '8/19', members: [{ member: 'Mia', requests: 13, credits: 9200 }, { member: '阿周', requests: 4, credits: 2800 }] },
+            { date: '今天', members: [{ member: 'Mia', requests: 12, credits: 8700 }, { member: '阿周', requests: 5, credits: 3780 }] }
+          ]
+        }
+      },
+      { id: 'b', name: '工作账号', detail: '本机可用', quota: 92, state: 'local', source: 'local' },
+      { id: 'c', name: '备用账号', detail: '本机可用', quota: 61, state: 'local', source: 'local' },
+      {
+        id: 'member-mia', name: 'Mia 的账号', detail: '团队共享账号', quota: 48, state: 'team-active', source: 'teammate', ownerName: 'Mia',
+        usage: {
+          today: 11,
+          todayCredits: 7420,
+          dailyCreditLimit: 40000,
+          personalReservePercent: 25,
+          days: [
+            { date: '8/14', members: [{ member: '我', requests: 5, credits: 3500 }, { member: '阿周', requests: 2, credits: 1400 }] },
+            { date: '8/15', members: [{ member: '我', requests: 7, credits: 5200 }, { member: '阿周', requests: 1, credits: 700 }] },
+            { date: '8/16', members: [{ member: '我', requests: 3, credits: 1900 }, { member: '阿周', requests: 4, credits: 3100 }] },
+            { date: '8/17', members: [{ member: '我', requests: 8, credits: 6100 }, { member: '阿周', requests: 2, credits: 1200 }] },
+            { date: '8/18', members: [{ member: '我', requests: 6, credits: 4400 }, { member: '阿周', requests: 3, credits: 2100 }] },
+            { date: '8/19', members: [{ member: '我', requests: 9, credits: 6900 }, { member: '阿周', requests: 4, credits: 2700 }] },
+            { date: '今天', members: [{ member: '我', requests: 8, credits: 5480 }, { member: '阿周', requests: 3, credits: 1940 }] }
+          ]
+        }
+      },
+      {
+        id: 'member-zhou', name: '阿周的账号', detail: '团队共享账号', quota: 87, state: 'team-active', source: 'teammate', ownerName: '阿周',
+        usage: {
+          today: 7,
+          todayCredits: 4960,
+          dailyCreditLimit: 60000,
+          personalReservePercent: 15,
+          days: [
+            { date: '8/14', members: [{ member: '我', requests: 3, credits: 2100 }, { member: 'Mia', requests: 1, credits: 820 }] },
+            { date: '8/15', members: [{ member: '我', requests: 6, credits: 4500 }, { member: 'Mia', requests: 2, credits: 1300 }] },
+            { date: '8/16', members: [{ member: '我', requests: 2, credits: 1200 }, { member: 'Mia', requests: 3, credits: 2400 }] },
+            { date: '8/17', members: [{ member: '我', requests: 7, credits: 5100 }, { member: 'Mia', requests: 2, credits: 1500 }] },
+            { date: '8/18', members: [{ member: '我', requests: 4, credits: 3000 }, { member: 'Mia', requests: 1, credits: 710 }] },
+            { date: '8/19', members: [{ member: '我', requests: 8, credits: 6200 }, { member: 'Mia', requests: 3, credits: 2300 }] },
+            { date: '今天', members: [{ member: '我', requests: 5, credits: 3520 }, { member: 'Mia', requests: 2, credits: 1440 }] }
+          ]
+        }
+      }
+    ]
+
+    let activeAccountId = 'a'
+    let activeLocalAccountId = 'a'
+    let activePoolTab = 'local'
+    let modalMode = 'existing'
+    let modalStage = 'intro'
+    let lastFocused = null
+    let toastTimer = null
+
+    const accountList = document.querySelector('#account-list')
+    const accountDetail = document.querySelector('#account-detail')
+    const accountCount = document.querySelector('#account-count')
+    const accountListPanel = document.querySelector('#account-list-panel')
+    const accountListHint = document.querySelector('#account-list-hint')
+    const addOtherButton = document.querySelector('#add-other')
+    const poolContent = document.querySelector('#pool-content')
+    const poolTabs = Array.from(document.querySelectorAll('[data-pool-tab]'))
+    const teamContext = document.querySelector('#team-context')
+    const poolNote = document.querySelector('#pool-note')
+    const poolNoteCopy = document.querySelector('#pool-note-copy')
+    const poolNoteAction = document.querySelector('#pool-note-action')
+    const backdrop = document.querySelector('#modal-backdrop')
+    const modal = backdrop.querySelector('.modal')
+    const modalTitle = document.querySelector('#modal-title')
+    const modalSubtitle = document.querySelector('#modal-subtitle')
+    const modalBody = document.querySelector('#modal-body')
+    const modalFoot = document.querySelector('#modal-foot')
+    const closeModalButton = document.querySelector('#close-modal')
+    const toast = document.querySelector('#toast')
+    const toastCopy = document.querySelector('#toast-copy')
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;')
+    }
+
+    function formatCredits(value) {
+      return new Intl.NumberFormat('zh-CN').format(value)
+    }
+
+    function formatCompactCredits(value) {
+      if (value < 1000) return String(value)
+      return (Math.round(value / 100) / 10).toFixed(value % 1000 === 0 ? 0 : 1) + 'k'
+    }
+
+    function stateContent(account) {
+      const originLabel = account.source === 'local'
+        ? '本机已登录'
+        : account.source === 'teammate'
+          ? account.ownerName + ' 贡献'
+          : '仅 Team'
+
+      if (account.source === 'teammate') {
+        return {
+          listState: '团队可用',
+          stateClass: 'team',
+          connection: originLabel + ' · Team 可用',
+          copy: '自己的账号额度不足时，才会调度到这个账号。',
+          action: '<button class="outline-button" disabled>由贡献者管理</button>'
+        }
+      }
+
+      if (account.state === 'authorizing') {
+        return {
+          listState: '等待授权',
+          stateClass: 'waiting',
+          connection: '正在等待授权',
+          copy: '浏览器授权尚未完成，可以继续等待或取消。',
+          action: '<button class="outline-button" data-action="resume-auth" data-id="' + account.id + '">查看授权</button>'
+        }
+      }
+      if (account.state === 'team-active') {
+        return {
+          listState: 'Team 可用',
+          stateClass: 'team',
+          connection: originLabel + ' · Team 可用',
+          copy: account.source === 'local'
+            ? '已完成独立授权，本机登录保持不变。'
+            : '这个账号只在当前 Team 中使用。',
+          action: '<button class="danger-button" data-action="stop-sharing" data-id="' + account.id + '">终止共享</button>'
+        }
+      }
+      return {
+        listState: '仅本机',
+        stateClass: '',
+        connection: '本机可用',
+        copy: '需要再次授权后，Team 才能使用这个账号。不会上传本机 auth.json。',
+        action: '<button class="outline-button" data-action="authorize" data-id="' + account.id + '">用于 Team</button>'
+      }
+    }
+
+    function localStateContent(account) {
+      const isActive = account.id === activeLocalAccountId
+      return {
+        listState: isActive ? '使用中' : '',
+        stateClass: isActive ? 'team' : '',
+        connection: '连接正常',
+        copy: isActive
+          ? '新请求会优先使用这个账号；额度不足时自动切换。'
+          : '这个账号可用，但当前不是新请求的首选账号。',
+        action: isActive
+          ? '<button class="outline-button" disabled>正在使用</button>'
+          : '<button class="outline-button" data-action="use-local" data-id="' + account.id + '">使用此账号</button>'
+      }
+    }
+
+    function quotaPercent(account) {
+      return account.quota
+    }
+
+    function accountAlias(index) {
+      return '账号 ' + String.fromCharCode(65 + index)
+    }
+
+    function visibleAccounts() {
+      return activePoolTab === 'local'
+        ? accounts.filter(function(account) { return account.source === 'local' })
+        : accounts
+    }
+
+    function renderAccountButton(account) {
+      const content = activePoolTab === 'local' ? localStateContent(account) : stateContent(account)
+      const alias = account.source === 'teammate' ? account.name : accountAlias(accounts.indexOf(account))
+      const secondary = account.source === 'teammate' ? account.detail : account.name
+      const isShared = activePoolTab === 'team' && (account.source === 'teammate' || account.state !== 'local')
+      const rowState = isShared
+        ? account.source === 'teammate' ? account.ownerName + ' 贡献' : '我贡献'
+        : activePoolTab === 'team' ? '未共享' : content.listState
+      const rowStateClass = isShared ? 'contributor' : content.stateClass
+      return '<button type="button" class="dsh-codex-team-profile-item" data-select-id="' + account.id + '" data-account-id="' + account.id + '" data-account-state="' + account.state + '" data-selected="' + (account.id === activeAccountId) + '">' +
+        '<span class="profile-dot ' + content.stateClass + '"></span>' +
+        '<span class="profile-identity"><span class="profile-alias">' + escapeHtml(alias) + '</span><span class="profile-name">' + escapeHtml(secondary) + '</span></span>' +
+        '<span class="profile-state ' + rowStateClass + '">' + escapeHtml(rowState) + '</span>' +
+      '</button>'
+    }
+
+    function renderTeamAccountGroups(listedAccounts) {
+      const groups = [
+        {
+          label: '共享账号',
+          accounts: listedAccounts.filter(function(account) {
+            return account.source === 'teammate' || account.state !== 'local'
+          })
+        },
+        {
+          label: '未共享账号',
+          accounts: listedAccounts.filter(function(account) {
+            return account.source === 'local' && account.state === 'local'
+          })
+        }
+      ]
+
+      return groups.filter(function(group) { return group.accounts.length > 0 }).map(function(group) {
+        return '<section class="account-group" aria-label="' + group.label + '">' +
+          '<p class="account-group-label">' + group.label + '<span>' + group.accounts.length + '</span></p>' +
+          group.accounts.map(renderAccountButton).join('') +
+        '</section>'
+      }).join('')
+    }
+
+    function renderPoolContext() {
+      const isTeam = activePoolTab === 'team'
+      poolTabs.forEach(function(tab) {
+        tab.setAttribute('aria-selected', String(tab.dataset.poolTab === activePoolTab))
+      })
+      poolContent.setAttribute('aria-labelledby', isTeam ? 'team-tab' : 'local-tab')
+      teamContext.hidden = !isTeam
+      accountListPanel.setAttribute('aria-label', isTeam ? '团队账号' : '本机账号')
+      accountListHint.textContent = isTeam
+        ? '共享账号会标明贡献者；本机账号不会自动共享。'
+        : '新请求优先使用标为“使用中”的账号。'
+      addOtherButton.setAttribute('aria-label', isTeam ? '添加其他 Team 账号' : '添加本机 Codex 账号')
+      poolNote.setAttribute('aria-label', isTeam ? '团队使用规则' : '本机切换规则')
+      poolNoteCopy.innerHTML = isTeam
+        ? '<strong>自己的账号优先。</strong>额度不足时才使用团队的其他可用账号。'
+        : '<strong>自动切换已开启。</strong>额度不足时优先切换到重置更早的可用账号。'
+      poolNoteAction.textContent = isTeam ? '团队设置' : '最近请求'
+    }
+
+    function renderAccounts() {
+      const listedAccounts = visibleAccounts()
+      if (!listedAccounts.some(function(account) { return account.id === activeAccountId })) {
+        activeAccountId = listedAccounts[0] ? listedAccounts[0].id : null
+      }
+
+      renderPoolContext()
+      accountCount.textContent = '(' + listedAccounts.length + ')'
+      accountList.innerHTML = activePoolTab === 'team'
+        ? renderTeamAccountGroups(listedAccounts)
+        : listedAccounts.map(renderAccountButton).join('')
+
+      renderDetail()
+    }
+
+    function renderDetail() {
+      const account = currentAccount()
+      if (!account) {
+        accountDetail.innerHTML = '<div class="empty"><strong>还没有账号</strong><span>添加账号后即可授权给 Team。</span></div>'
+        return
+      }
+
+      const content = activePoolTab === 'local' ? localStateContent(account) : stateContent(account)
+      const percent = quotaPercent(account)
+      const footerActions = activePoolTab === 'local'
+        ? '<button type="button">重命名</button><button type="button" class="danger-link">移除账号</button>'
+        : account.source === 'teammate'
+          ? '<button type="button">查看最近请求</button><button type="button">查看贡献者</button>'
+          : '<button type="button">查看最近请求</button><button type="button">Team 设置</button>'
+      accountDetail.setAttribute('aria-label', account.name)
+      accountDetail.innerHTML =
+        '<div class="detail-heading"><h2>' + escapeHtml(account.name) + '</h2><span class="connection-status"><span class="profile-dot ' + content.stateClass + '"></span>' + content.connection + '</span></div>' +
+        '<div class="team-action">' + content.action + '<p>' + content.copy + '</p></div>' +
+        '<div class="detail-section"><h3>使用额度</h3><div class="quota-line"><span>Codex 每周额度</span><span>剩余 ' + percent + '%</span></div><div class="quota-bar" role="progressbar" aria-valuenow="' + percent + '" aria-valuemin="0" aria-valuemax="100"><div class="quota-fill" style="width:' + percent + '%"></div></div></div>' +
+        renderUsageSection(account) +
+        '<div class="detail-footer">' + footerActions + '</div>'
+    }
+
+    function renderUsageSection(account) {
+      const isShared = activePoolTab === 'team' && (account.source === 'teammate' || account.state !== 'local')
+      if (!isShared || !account.usage) return ''
+
+      const limitPercent = Math.min(100, Math.round(account.usage.todayCredits / account.usage.dailyCreditLimit * 100))
+      const limitOwner = account.source === 'local' ? '由你设置' : '由 ' + account.ownerName + ' 设置'
+
+      return '<section class="usage-section" aria-label="团队使用情况">' +
+        '<div class="usage-heading"><h3>团队使用情况</h3><button class="outline-button compact-button" data-action="view-usage" data-id="' + account.id + '">查看近 7 天</button></div>' +
+        '<span class="usage-period">最近 1 天，不含贡献者本人</span>' +
+        '<div class="usage-metrics">' +
+          '<div class="usage-metric"><span class="usage-metric-label">请求次数</span><div class="usage-metric-value"><strong>' + account.usage.today + '</strong><span>次请求</span></div></div>' +
+          '<div class="usage-metric"><span class="usage-metric-label">已用 Credits</span><div class="usage-metric-value"><strong>' + formatCredits(account.usage.todayCredits) + '</strong><span>Credits</span></div></div>' +
+        '</div>' +
+        '<div class="sharing-limit">' +
+          '<div class="sharing-limit-head"><span>每日共享上限 · ' + limitOwner + '</span><strong>' + formatCredits(account.usage.todayCredits) + ' / ' + formatCredits(account.usage.dailyCreditLimit) + ' Credits</strong></div>' +
+          '<div class="quota-bar" role="progressbar" aria-label="每日共享 Credits" aria-valuenow="' + limitPercent + '" aria-valuemin="0" aria-valuemax="100"><div class="quota-fill" style="width:' + limitPercent + '%"></div></div>' +
+          '<div class="sharing-limit-meta"><span>个人保留线 ' + account.usage.personalReservePercent + '%</span><span>达到任一保护线即停止新共享请求</span></div>' +
+        '</div>' +
+        '<p class="credits-formula">Credits v1：未缓存输入 × 1 + 缓存输入 × 0.25 + 输出（含推理）× 4。按网关收到的实际 Token 结算，不等于订阅剩余百分比或金额。</p>' +
+        '<p class="usage-refresh"><span class="profile-dot"></span>请求完成后更新 · 最长每 1 分钟自动刷新</p>' +
+      '</section>'
+    }
+
+    function currentAccount() {
+      return accounts.find(function(account) { return account.id === activeAccountId })
+    }
+
+    function showModal() {
+      lastFocused = document.activeElement
+      modal.classList.toggle('usage-modal', modalMode === 'usage')
+      backdrop.classList.add('open')
+      backdrop.setAttribute('aria-hidden', 'false')
+      renderModal()
+      closeModalButton.focus()
+    }
+
+    function hideModal() {
+      backdrop.classList.remove('open')
+      backdrop.setAttribute('aria-hidden', 'true')
+      if (lastFocused && typeof lastFocused.focus === 'function') lastFocused.focus()
+    }
+
+    function showToast(message) {
+      toastCopy.textContent = message
+      toast.classList.add('visible')
+      clearTimeout(toastTimer)
+      toastTimer = setTimeout(function() { toast.classList.remove('visible') }, 3200)
+    }
+
+    function openExistingAuthorization(accountId) {
+      activeAccountId = accountId
+      modalMode = 'existing'
+      modalStage = accounts.find(function(account) { return account.id === accountId }).state === 'authorizing' ? 'waiting' : 'intro'
+      showModal()
+    }
+
+    function openOtherAuthorization() {
+      modalMode = 'other'
+      modalStage = 'intro'
+      showModal()
+    }
+
+    function openUsageModal(accountId) {
+      activeAccountId = accountId
+      modalMode = 'usage'
+      modalStage = 'detail'
+      showModal()
+    }
+
+    function renderModal() {
+      const account = currentAccount()
+      if (modalMode === 'usage') {
+        const days = account.usage.days
+        const memberNames = []
+        days.forEach(function(day) {
+          day.members.forEach(function(item) {
+            if (!memberNames.includes(item.member)) memberNames.push(item.member)
+          })
+        })
+        const creditTotals = days.map(function(day) {
+          return day.members.reduce(function(sum, item) { return sum + item.credits }, 0)
+        })
+        const requestTotals = days.map(function(day) {
+          return day.members.reduce(function(sum, item) { return sum + item.requests }, 0)
+        })
+        const maxTotal = Math.max.apply(null, creditTotals.concat([1]))
+        const legend = memberNames.map(function(member, index) {
+          return '<span><i class="member-' + index + '"></i>' + escapeHtml(member) + '</span>'
+        }).join('')
+        const columns = days.map(function(day, dayIndex) {
+          const totalCredits = creditTotals[dayIndex]
+          const totalRequests = requestTotals[dayIndex]
+          const stackHeight = Math.max(5, Math.round(totalCredits / maxTotal * 100))
+          const segments = day.members.map(function(item) {
+            const memberIndex = memberNames.indexOf(item.member)
+            const segmentHeight = totalCredits > 0 ? Math.round(item.credits / totalCredits * 100) : 0
+            return '<span class="usage-chart-segment member-' + memberIndex + '" style="height:' + segmentHeight + '%" title="' + escapeHtml(item.member) + '：' + formatCredits(item.credits) + ' Credits · ' + item.requests + ' 次请求"></span>'
+          }).join('')
+          return '<div class="usage-chart-column"><span class="usage-chart-total" title="' + formatCredits(totalCredits) + ' Credits">' + formatCompactCredits(totalCredits) + '</span><div class="usage-chart-track"><div class="usage-chart-stack" style="height:' + stackHeight + '%">' + segments + '</div></div><span class="usage-chart-date">' + escapeHtml(day.date) + '<small>' + totalRequests + ' 次</small></span></div>'
+        }).join('')
+
+        modalTitle.textContent = '近 7 天团队使用'
+        modalSubtitle.textContent = account.name + ' · 按成员和日期统计'
+        modalBody.innerHTML =
+          '<div class="usage-chart-legend">' + legend + '</div>' +
+          '<div class="usage-chart" role="img" aria-label="' + escapeHtml(account.name) + ' 近 7 天按成员统计的 Credits 柱状图">' + columns + '</div>' +
+          '<p class="usage-chart-note">柱高为已结算 Credits，日期下方保留请求次数；不含贡献者本人。重试会分别计数。网关只保存 Token 计数与 Credits，不保存提示词或回复；Credits 不等于订阅剩余百分比或金额。</p>'
+        modalFoot.innerHTML = '<button class="primary-button" id="close-usage">完成</button>'
+        document.querySelector('#close-usage').addEventListener('click', hideModal)
+        return
+      }
+
+      if (modalStage === 'waiting') {
+        modalTitle.textContent = '等待浏览器授权'
+        modalSubtitle.textContent = modalMode === 'existing'
+          ? '正在为 ' + account.name + ' 创建 Team 独立授权'
+          : '正在添加新的 Team 专用账号'
+        modalBody.innerHTML = '<div class="waiting"><span class="spinner" aria-hidden="true"></span><strong>正在等待浏览器授权…</strong><p>可以关闭浏览器授权页后回到这里，或直接取消。本机账号不会因为取消而受到影响。</p><button class="ghost-button mock-action" id="simulate-success">原型：模拟授权完成</button></div>'
+        modalFoot.innerHTML = '<button class="outline-button" id="cancel-waiting">取消等待</button>'
+        document.querySelector('#simulate-success').addEventListener('click', completeAuthorization)
+        document.querySelector('#cancel-waiting').addEventListener('click', cancelAuthorization)
+        return
+      }
+
+      if (modalMode === 'other') {
+        modalTitle.textContent = '添加其他 Team 账号'
+        modalSubtitle.textContent = '登录一个只供当前 Team 使用的账号。'
+        modalBody.innerHTML =
+          '<div class="field"><label for="other-label">账号备注</label><input id="other-label" value="Team 专用账号" maxlength="40"></div>' +
+          '<p class="safety-note"><strong>需要再次授权。</strong> 登录信息只由 Team 服务保存，其他成员无法查看。</p>'
+        modalFoot.innerHTML = '<button class="ghost-button" id="cancel-intro">取消</button><button class="primary-button" id="begin-oauth">打开 OpenAI 授权</button>'
+      } else {
+        modalTitle.textContent = '将 ' + account.name + ' 用于 Team'
+        modalSubtitle.textContent = '请再次登录这个 OpenAI 账号。'
+        modalBody.innerHTML =
+          '<p class="modal-copy">授权完成后，这个账号可供「周末造物局」使用。你的本机登录保持不变。</p>' +
+          '<p class="safety-note"><strong>不会上传本机 auth.json。</strong> Team 会使用一条新的独立授权。</p>'
+        modalFoot.innerHTML = '<button class="ghost-button" id="cancel-intro">取消</button><button class="primary-button" id="begin-oauth">继续，再次授权</button>'
+      }
+
+      document.querySelector('#cancel-intro').addEventListener('click', hideModal)
+      document.querySelector('#begin-oauth').addEventListener('click', beginAuthorization)
+    }
+
+    function beginAuthorization() {
+      if (modalMode === 'other') {
+        const label = document.querySelector('#other-label').value.trim() || 'Team 专用账号'
+        const id = 'team-' + Date.now()
+        accounts.push({
+          id: id,
+          name: label,
+          detail: '等待首次额度同步',
+          quota: 100,
+          state: 'authorizing',
+          source: 'team'
+        })
+        activeAccountId = id
+      } else {
+        currentAccount().state = 'authorizing'
+      }
+      modalStage = 'waiting'
+      renderAccounts()
+      renderModal()
+    }
+
+    function cancelAuthorization() {
+      const account = currentAccount()
+      if (account.source === 'team') {
+        accounts.splice(accounts.indexOf(account), 1)
+      } else {
+        account.state = 'local'
+      }
+      renderAccounts()
+      hideModal()
+      showToast('已取消等待；本机账号保持不变。')
+    }
+
+    function completeAuthorization() {
+      const account = currentAccount()
+      account.state = 'team-active'
+      if (account.source === 'local') {
+        account.detail = '本机已登录 · Team 授权有效'
+      } else {
+        account.detail = '仅 Team · 授权有效'
+      }
+      renderAccounts()
+      hideModal()
+      showToast(account.name + ' 已可供 Team 使用。')
+    }
+
+    function stopSharing(accountId) {
+      const account = accounts.find(function(item) { return item.id === accountId })
+      account.state = 'local'
+      account.detail = '本机可用'
+      renderAccounts()
+      showToast(account.name + ' 已终止共享，并移到未共享账号。')
+    }
+
+    accountList.addEventListener('click', function(event) {
+      const selected = event.target.closest('button[data-select-id]')
+      if (!selected) return
+      activeAccountId = selected.dataset.selectId
+      renderAccounts()
+    })
+
+    accountDetail.addEventListener('click', function(event) {
+      const button = event.target.closest('button[data-action]')
+      if (!button) return
+      const action = button.dataset.action
+      const id = button.dataset.id
+      if (action === 'use-local') {
+        activeLocalAccountId = id
+        renderAccounts()
+        showToast(accounts.find(function(account) { return account.id === id }).name + ' 已切换为使用中账号。')
+      }
+      if (action === 'authorize' || action === 'resume-auth') openExistingAuthorization(id)
+      if (action === 'stop-sharing') stopSharing(id)
+      if (action === 'view-usage') openUsageModal(id)
+    })
+
+    document.querySelector('#pool-tabs').addEventListener('click', function(event) {
+      const tab = event.target.closest('[data-pool-tab]')
+      if (!tab) return
+      activePoolTab = tab.dataset.poolTab
+      activeAccountId = visibleAccounts()[0] ? visibleAccounts()[0].id : null
+      renderAccounts()
+    })
+
+    addOtherButton.addEventListener('click', function() {
+      if (activePoolTab === 'team') openOtherAuthorization()
+      else showToast('添加本机账号将继续使用 Codex 的登录流程。')
+    })
+    closeModalButton.addEventListener('click', function() {
+      if (modalStage === 'waiting') cancelAuthorization()
+      else hideModal()
+    })
+    backdrop.addEventListener('click', function(event) {
+      if (event.target !== backdrop) return
+      if (modalStage === 'waiting') return
+      hideModal()
+    })
+    document.addEventListener('keydown', function(event) {
+      if (event.key !== 'Escape' || !backdrop.classList.contains('open')) return
+      if (modalStage === 'waiting') cancelAuthorization()
+      else hideModal()
+    })
+
+    renderAccounts()
+  </script>
+</body>
+</html>

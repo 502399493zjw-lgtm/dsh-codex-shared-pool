@@ -5,6 +5,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { zstdDecompressSync } from 'node:zlib'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TeamResponsesForwardRequest } from './credentials.ts'
+import { parseTeamProviderTokenUsage } from './credits.ts'
+import type { TeamProviderTokenUsage } from './credits.ts'
 import { TeamRouteCapacityError } from './routing.ts'
 import type { TeamRouteLease, TeamRouteSettleResult } from './routing.ts'
 import type { TeamService } from './service.ts'
@@ -27,6 +29,9 @@ const DEFAULT_HEARTBEAT_MS = 60_000
 const DEFAULT_MAX_UPSTREAM_ATTEMPTS = 8
 const MAX_MODEL_LENGTH = 128
 const MAX_SESSION_ID_LENGTH = 240
+const MAX_USAGE_JSON_BYTES = 256 * 1024
+const MAX_USAGE_SSE_LINE_CHARS = 64 * 1024
+const MAX_USAGE_SSE_EVENT_CHARS = 128 * 1024
 
 export interface TeamGatewayOptions {
   readonly maxBodyBytes?: number
@@ -171,8 +176,8 @@ export function createTeamGatewayHandler(
         trafficResult = upstream.status >= 500 ? 'failure' : 'success'
         responseStarted = true
         res.writeHead(upstream.status, responseHeaders(upstream.headers))
-        await pipeResponse(upstream, res, abort.signal)
-        await settle(service, admitted.lease, upstream.ok ? 'success' : 'error')
+        const usage = await pipeResponse(upstream, res, abort.signal)
+        await settle(service, admitted.lease, upstream.ok ? 'success' : 'error', usage)
         admitted = undefined
         break
       }
@@ -306,20 +311,155 @@ function responseHeaders(headers: Headers): Record<string, string> {
   return result
 }
 
-async function pipeResponse(response: Response, res: ServerResponse, signal: AbortSignal): Promise<void> {
-  if (response.body === null) { res.end(); return }
+async function pipeResponse(
+  response: Response,
+  res: ServerResponse,
+  signal: AbortSignal,
+): Promise<TeamProviderTokenUsage | undefined> {
+  const observer = new ProviderUsageObserver(response.headers.get('content-type'))
+  if (response.body === null) { res.end(); return observer.finish() }
   const reader = response.body.getReader()
   try {
     while (true) {
       if (signal.aborted) throw signal.reason
       const { done, value } = await reader.read()
       if (done) break
+      observer.observe(value)
       if (!res.write(value)) await waitForDrain(res, signal)
     }
     res.end()
+    return observer.finish()
   } finally {
     reader.releaseLock()
   }
+}
+
+/**
+ * Bounded, Host-only observer for the numeric `usage` subset of Responses
+ * payloads. It never changes forwarded bytes and never retains provider content
+ * after the request settles.
+ */
+class ProviderUsageObserver {
+  private readonly mode: 'sse' | 'json' | 'none'
+  private readonly decoder = new TextDecoder()
+  private readonly jsonChunks: Uint8Array[] = []
+  private jsonBytes = 0
+  private jsonOverflow = false
+  private sseLine = ''
+  private sseDiscardLine = false
+  private readonly sseEventData: string[] = []
+  private sseEventChars = 0
+  private sseDiscardEvent = false
+  private latest: TeamProviderTokenUsage | undefined
+
+  constructor(contentType: string | null) {
+    const normalized = contentType?.toLowerCase() ?? ''
+    this.mode = normalized.includes('text/event-stream')
+      ? 'sse'
+      : normalized.includes('application/json')
+        ? 'json'
+        : 'none'
+  }
+
+  observe(value: Uint8Array): void {
+    if (this.mode === 'sse') {
+      this.consumeSseText(this.decoder.decode(value, { stream: true }))
+      return
+    }
+    if (this.mode !== 'json' || this.jsonOverflow) return
+    if (this.jsonBytes + value.byteLength > MAX_USAGE_JSON_BYTES) {
+      this.jsonChunks.length = 0
+      this.jsonOverflow = true
+      return
+    }
+    this.jsonBytes += value.byteLength
+    this.jsonChunks.push(value.slice())
+  }
+
+  finish(): TeamProviderTokenUsage | undefined {
+    if (this.mode === 'sse') {
+      this.consumeSseText(this.decoder.decode(), true)
+      this.flushSseEvent()
+      return this.latest
+    }
+    if (this.mode !== 'json' || this.jsonOverflow) return undefined
+    try {
+      const payload = JSON.parse(Buffer.concat(this.jsonChunks.map(chunk => Buffer.from(chunk))).toString('utf8')) as unknown
+      return usageFromPayload(payload)
+    } catch {
+      return undefined
+    }
+  }
+
+  private consumeSseText(text: string, final = false): void {
+    let cursor = 0
+    while (cursor < text.length) {
+      const newline = text.indexOf('\n', cursor)
+      const end = newline === -1 ? text.length : newline
+      const piece = text.slice(cursor, end)
+      if (!this.sseDiscardLine) {
+        if (this.sseLine.length + piece.length <= MAX_USAGE_SSE_LINE_CHARS) {
+          this.sseLine += piece
+        } else {
+          this.sseLine = ''
+          this.sseDiscardLine = true
+        }
+      }
+      if (newline === -1) break
+      if (!this.sseDiscardLine) this.consumeSseLine(this.sseLine.endsWith('\r') ? this.sseLine.slice(0, -1) : this.sseLine)
+      this.sseLine = ''
+      this.sseDiscardLine = false
+      cursor = newline + 1
+    }
+    if (final) {
+      if (!this.sseDiscardLine && this.sseLine.length > 0) {
+        this.consumeSseLine(this.sseLine.endsWith('\r') ? this.sseLine.slice(0, -1) : this.sseLine)
+      }
+      this.sseLine = ''
+      this.sseDiscardLine = false
+    }
+  }
+
+  private consumeSseLine(line: string): void {
+    if (line.length === 0) {
+      this.flushSseEvent()
+      return
+    }
+    if (!line.startsWith('data:') || this.sseDiscardEvent) return
+    const data = line.slice(5).replace(/^ /u, '')
+    if (this.sseEventChars + data.length > MAX_USAGE_SSE_EVENT_CHARS) {
+      this.sseEventData.length = 0
+      this.sseEventChars = 0
+      this.sseDiscardEvent = true
+      return
+    }
+    this.sseEventData.push(data)
+    this.sseEventChars += data.length
+  }
+
+  private flushSseEvent(): void {
+    if (!this.sseDiscardEvent && this.sseEventData.length > 0) {
+      const data = this.sseEventData.join('\n')
+      if (data !== '[DONE]') {
+        try {
+          this.latest = usageFromPayload(JSON.parse(data) as unknown) ?? this.latest
+        } catch {
+          // Provider content and malformed metadata are deliberately ignored.
+        }
+      }
+    }
+    this.sseEventData.length = 0
+    this.sseEventChars = 0
+    this.sseDiscardEvent = false
+  }
+}
+
+function usageFromPayload(value: unknown): TeamProviderTokenUsage | undefined {
+  if (!isRecord(value)) return undefined
+  const direct = parseTeamProviderTokenUsage(value['usage'])
+  if (direct !== undefined) return direct
+  const response = value['response']
+  return isRecord(response) ? parseTeamProviderTokenUsage(response['usage']) : undefined
 }
 
 function waitForDrain(res: ServerResponse, signal: AbortSignal): Promise<void> {
@@ -335,8 +475,13 @@ function waitForDrain(res: ServerResponse, signal: AbortSignal): Promise<void> {
   })
 }
 
-async function settle(service: TeamService, lease: TeamRouteLease, result: TeamRouteSettleResult): Promise<void> {
-  await service.settleRequest(lease, result)
+async function settle(
+  service: TeamService,
+  lease: TeamRouteLease,
+  result: TeamRouteSettleResult,
+  usage?: TeamProviderTokenUsage,
+): Promise<void> {
+  await service.settleRequest(lease, result, usage)
 }
 
 function isHardCapacityStatus(status: number): boolean {

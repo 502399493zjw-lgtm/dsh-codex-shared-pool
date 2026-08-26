@@ -1,77 +1,246 @@
 /** Runtime-validated same-origin client for the Host-owned Team management proxy. */
 
 import {
-  TEAM_MANAGEMENT_CONNECT_PATH,
+  TEAM_MANAGEMENT_CAPABILITY_HEADER,
+  TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH,
   TEAM_MANAGEMENT_DISCONNECT_PATH,
+  TEAM_MANAGEMENT_DISSOLUTION_CLEAR_PATH,
+  TEAM_MANAGEMENT_DISSOLUTION_RECOVER_PATH,
+  TEAM_MANAGEMENT_DISSOLVE_PATH,
+  TEAM_MANAGEMENT_DISPLAY_NAME_MIGRATION_ACK_PATH,
   TEAM_MANAGEMENT_INVITES_PATH,
+  TEAM_MANAGEMENT_INVITES_PREVIEW_PATH,
+  TEAM_MANAGEMENT_INVITES_REVEAL_PATH,
   TEAM_MANAGEMENT_INVITES_REVOKE_PATH,
   TEAM_MANAGEMENT_JOIN_PATH,
+  TEAM_MANAGEMENT_JOIN_DISCARD_PATH,
+  TEAM_MANAGEMENT_JOIN_RECOVER_PATH,
   TEAM_MANAGEMENT_LEAVE_PATH,
+  TEAM_MANAGEMENT_MEMBERS_REMOVE_PATH,
   TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
   TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
   TEAM_MANAGEMENT_OAUTH_START_PATH,
   TEAM_MANAGEMENT_OVERVIEW_PATH,
+  TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_ACCEPT_PATH,
   TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_PATH,
+  TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_REJECT_PATH,
+  TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_REVOKE_PATH,
+  TEAM_MANAGEMENT_SESSION_PATH,
   TEAM_MANAGEMENT_STATUS_PATH,
   TEAM_MANAGEMENT_TEAM_STATUS_PATH,
   TEAM_MANAGEMENT_USAGE_PATH,
 } from '../../shared/team-management.ts'
 import type {
+  TeamDissolutionClearResult,
+  TeamDissolutionInput,
+  TeamDissolutionView,
+  TeamConnectionTerminalClearResult,
+  TeamConnectionTerminalView,
   TeamManagementConnectionResult,
+  TeamManagementContributionPatch,
+  TeamManagementContributionResult,
+  TeamManagementContributionSummary,
   TeamManagementDepartureResult,
+  TeamManagementDisplayNameMigrationAcknowledgement,
+  TeamManagementExpectedContext,
   TeamManagementInviteResult,
+  TeamManagementInvitePreview,
+  TeamManagementInviteRevealResult,
   TeamManagementInviteRevocationResult,
+  TeamManagementMemberResult,
   TeamManagementMemberSummary,
   TeamManagementOAuthResult,
   TeamManagementOverview,
-  TeamManagementOwnershipTransferResult,
+  TeamManagementOwnershipTransferAcceptanceResult,
+  TeamManagementOwnershipTransferSummary,
   TeamManagementStatus,
+  TeamManagementSession,
   TeamManagementTeamStatusResult,
   TeamManagementUsageResult,
 } from '../../shared/team-management.ts'
 import type {
-  TeamContributionAccountPatch,
-  TeamContributionAccountSummary,
   TeamContributionCapacityBucketSummary,
   TeamContributionCapacitySummary,
   TeamInviteSummary,
   TeamMemberSummary,
   TeamSummary,
-  TeamUsageEventSummary,
+  TeamUsageAggregateSummary,
 } from '../../team/types.ts'
 
 type JsonObject = Record<string, unknown>
 type Parser<T> = (value: unknown) => T
 
+/** Browser-visible request failure with enough structure for recovery UX. */
+export class TeamManagementRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'TeamManagementRequestError'
+    this.status = status
+  }
+}
+
 export function parseTeamManagementStatus(value: unknown): TeamManagementStatus {
   const item = object(value, 'Team management status')
+  exactKeys(item, [
+    'enabled',
+    'keyConfigured',
+    'keyWritable',
+    'pendingJoinConfigured',
+    'keySource',
+    'serverOrigin',
+    'dissolution',
+    'connectionTerminal',
+  ], 'Team management status')
   const enabled = booleanField(item, 'enabled')
   const keyConfigured = booleanField(item, 'keyConfigured')
   const keyWritable = booleanField(item, 'keyWritable')
+  const pendingJoinConfigured = booleanField(item, 'pendingJoinConfigured')
   const keySource = optionalStringField(item, 'keySource')
   const serverOrigin = optionalStringField(item, 'serverOrigin')
+  const dissolution = item.dissolution === undefined
+    ? undefined
+    : parseTeamDissolutionView(item.dissolution)
+  const connectionTerminal = item.connectionTerminal === undefined
+    ? undefined
+    : parseTeamConnectionTerminalView(item.connectionTerminal)
+  if (dissolution !== undefined && connectionTerminal !== undefined) {
+    throw new Error('Team management status contains conflicting terminal states')
+  }
   if (serverOrigin !== undefined) safeUrl(serverOrigin, 'serverOrigin')
   return {
     enabled,
     keyConfigured,
     keyWritable,
+    pendingJoinConfigured,
     ...(keySource === undefined ? {} : { keySource }),
     ...(serverOrigin === undefined ? {} : { serverOrigin }),
+    ...(dissolution === undefined ? {} : { dissolution }),
+    ...(connectionTerminal === undefined ? {} : { connectionTerminal }),
   }
+}
+
+function parseTeamConnectionTerminalView(value: unknown): TeamConnectionTerminalView {
+  const item = object(value, 'Team connection terminal')
+  exactKeys(item, ['code', 'localCleanup'], 'Team connection terminal')
+  return {
+    code: unionField(item, 'code', ['member_removed', 'member_left', 'team_dissolved', 'device_revoked'] as const),
+    localCleanup: unionField(item, 'localCleanup', ['completed', 'retry_required', 'manual_required'] as const),
+  }
+}
+
+function parseTeamConnectionTerminalClearResult(value: unknown): TeamConnectionTerminalClearResult {
+  const item = object(value, 'Team connection terminal clear result')
+  if (item.cleared === true) {
+    exactKeys(item, ['cleared'], 'Team connection terminal clear result')
+    return { cleared: true }
+  }
+  return parseTeamConnectionTerminalView(value)
+}
+
+function parseTeamDissolutionView(value: unknown): TeamDissolutionView {
+  const item = object(value, 'Team dissolution')
+  const state = unionField(item, 'state', ['confirming', 'confirmed'] as const)
+  if (state === 'confirming') {
+    exactKeys(item, ['state', 'teamName', 'requestedAt'], 'Team dissolution')
+    return {
+      state,
+      teamName: stringField(item, 'teamName'),
+      requestedAt: boundedIntegerField(item, 'requestedAt', 0, Number.MAX_SAFE_INTEGER),
+    }
+  }
+  const hasTeamName = item.teamName !== undefined
+  const hasDissolvedAt = item.dissolvedAt !== undefined
+  if (hasTeamName !== hasDissolvedAt) throw new Error('Team dissolution metadata is incomplete')
+  exactKeys(
+    item,
+    hasTeamName ? ['state', 'teamName', 'dissolvedAt', 'localCleanup'] : ['state', 'localCleanup'],
+    'Team dissolution',
+  )
+  return {
+    state,
+    ...(hasTeamName ? {
+      teamName: stringField(item, 'teamName'),
+      dissolvedAt: boundedIntegerField(item, 'dissolvedAt', 0, Number.MAX_SAFE_INTEGER),
+    } : {}),
+    localCleanup: unionField(item, 'localCleanup', ['completed', 'retry_required', 'manual_required'] as const),
+  }
+}
+
+function parseTeamDissolutionClearResult(value: unknown): TeamDissolutionClearResult {
+  const item = object(value, 'Team dissolution clear result')
+  if (item.cleared === true) {
+    exactKeys(item, ['cleared'], 'Team dissolution clear result')
+    return { cleared: true }
+  }
+  return parseTeamDissolutionView(value)
+}
+
+function parseDisplayNameMigrationNotice(value: unknown): { readonly migrationVersion: number } {
+  const item = object(value, 'Team display-name migration notice')
+  exactKeys(item, ['migrationVersion'], 'Team display-name migration notice')
+  return {
+    migrationVersion: boundedIntegerField(item, 'migrationVersion', 1, Number.MAX_SAFE_INTEGER),
+  }
+}
+
+function parseDisplayNameMigrationAcknowledgement(
+  value: unknown,
+  requestedMigrationVersion: number,
+): TeamManagementDisplayNameMigrationAcknowledgement {
+  const item = object(value, 'Team display-name migration acknowledgement')
+  exactKeys(item, ['migrationVersion', 'acknowledged'], 'Team display-name migration acknowledgement')
+  const migrationVersion = boundedIntegerField(item, 'migrationVersion', 1, Number.MAX_SAFE_INTEGER)
+  if (migrationVersion !== requestedMigrationVersion || item.acknowledged !== true) {
+    throw new Error('Team display-name migration acknowledgement does not match the request')
+  }
+  return { migrationVersion, acknowledged: true }
 }
 
 export function parseTeamManagementOverview(value: unknown): TeamManagementOverview {
   const item = object(value, 'Team overview')
+  const team = parseTeam(item.team)
   const currentMember = parseMember(item.currentMember)
-  return {
-    team: parseTeam(item.team),
+  const viewerRole = unionField(item, 'viewerRole', ['owner', 'member'] as const)
+  if ((viewerRole === 'owner') !== (currentMember.role === 'owner')) {
+    throw new Error('viewerRole is inconsistent with currentMember')
+  }
+  const contributions = arrayField(
+    item,
+    'contributions',
+    value => parseContribution(value, currentMember.id),
+  ).filter(account => account.ownerMemberId === currentMember.id)
+  const ownershipTransfer = item.ownershipTransfer === undefined
+    ? undefined
+    : parseOwnershipTransferSummary(item.ownershipTransfer)
+  const displayNameMigrationNotice = item.displayNameMigrationNotice === undefined
+    ? undefined
+    : parseDisplayNameMigrationNotice(item.displayNameMigrationNotice)
+  if (
+    ownershipTransfer !== undefined
+    && (
+      ownershipTransfer.teamId !== team.id
+      || ownershipTransfer.status !== 'pending'
+      || (currentMember.id !== ownershipTransfer.requestedByMemberId
+        && currentMember.id !== ownershipTransfer.targetMemberId)
+    )
+  ) {
+    throw new Error('Team ownership transfer is not visible to this member')
+  }
+  const base = {
+    team,
     currentMember,
     members: arrayField(item, 'members', parseManagementMember),
-    invites: arrayField(item, 'invites', parseInvite),
-    contributions: arrayField(item, 'contributions', value => parseContribution(value, currentMember.id)),
+    contributions,
+    ...(displayNameMigrationNotice === undefined ? {} : { displayNameMigrationNotice }),
+    ...(ownershipTransfer === undefined ? {} : { ownershipTransfer }),
   }
+  return viewerRole === 'owner'
+    ? { viewerRole, ...base, invites: arrayField(item, 'invites', parseInvite) }
+    : { viewerRole, ...base }
 }
 
 export function parseTeamManagementOAuthResult(value: unknown): TeamManagementOAuthResult {
@@ -102,21 +271,57 @@ function parseDeparture(value: unknown): TeamManagementDepartureResult {
   return { member }
 }
 
-function parseOwnershipTransfer(value: unknown): TeamManagementOwnershipTransferResult {
+function parseOwnershipTransferSummary(value: unknown): TeamManagementOwnershipTransferSummary {
   const item = object(value, 'Team ownership transfer')
+  const status = unionField(item, 'status', ['pending', 'accepted', 'rejected', 'revoked', 'expired', 'canceled'] as const)
+  exactKeys(
+    item,
+    status === 'pending'
+      ? ['id', 'teamId', 'requestedByMemberId', 'targetMemberId', 'status', 'createdAt', 'expiresAt']
+      : ['id', 'teamId', 'requestedByMemberId', 'targetMemberId', 'status', 'createdAt', 'expiresAt', 'resolvedAt'],
+    'Team ownership transfer',
+  )
+  const transfer = {
+    id: stringField(item, 'id'),
+    teamId: stringField(item, 'teamId'),
+    requestedByMemberId: stringField(item, 'requestedByMemberId'),
+    targetMemberId: stringField(item, 'targetMemberId'),
+    status,
+    createdAt: numberField(item, 'createdAt'),
+    expiresAt: numberField(item, 'expiresAt'),
+    ...(status === 'pending' ? {} : { resolvedAt: numberField(item, 'resolvedAt') }),
+  } satisfies TeamManagementOwnershipTransferSummary
+  if (
+    transfer.requestedByMemberId === transfer.targetMemberId
+    || transfer.expiresAt !== transfer.createdAt + 24 * 60 * 60 * 1000
+    || ('resolvedAt' in transfer && transfer.resolvedAt < transfer.createdAt)
+  ) {
+    throw new Error('Team ownership transfer is invalid')
+  }
+  return transfer
+}
+
+function parseOwnershipTransferAcceptance(value: unknown): TeamManagementOwnershipTransferAcceptanceResult {
+  const item = object(value, 'Team ownership transfer acceptance')
+  exactKeys(item, ['transfer', 'formerOwner', 'owner'], 'Team ownership transfer acceptance')
+  const transfer = parseOwnershipTransferSummary(item.transfer)
   const formerOwner = parseMember(item.formerOwner)
   const owner = parseMember(item.owner)
   if (
-    formerOwner.role !== 'admin'
+    transfer.status !== 'accepted'
+    || formerOwner.role !== 'member'
     || formerOwner.status !== 'active'
     || owner.role !== 'owner'
     || owner.status !== 'active'
     || formerOwner.id === owner.id
     || formerOwner.teamId !== owner.teamId
+    || formerOwner.teamId !== transfer.teamId
+    || formerOwner.id !== transfer.requestedByMemberId
+    || owner.id !== transfer.targetMemberId
   ) {
     throw new Error('Team ownership transfer is invalid')
   }
-  return { formerOwner, owner }
+  return { transfer, formerOwner, owner }
 }
 
 function parseInviteResult(value: unknown): TeamManagementInviteResult {
@@ -131,19 +336,60 @@ function parseInviteRevocationResult(value: unknown): TeamManagementInviteRevoca
   return { invite: parseInvite(item.invite) }
 }
 
+function parseInviteRevealResult(value: unknown): TeamManagementInviteRevealResult {
+  const item = object(value, 'Team invite reveal')
+  const inviteToken = stringField(item, 'inviteToken')
+  if (!inviteToken.startsWith('dsh_invite_')) throw new Error('inviteToken is invalid')
+  return {
+    inviteId: stringField(item, 'inviteId'),
+    inviteToken,
+    expiresAt: numberField(item, 'expiresAt'),
+  }
+}
+
+function parseInvitePreview(value: unknown): TeamManagementInvitePreview {
+  const item = object(value, 'Team invite preview')
+  const joinHandle = stringField(item, 'joinHandle')
+  if (!/^dsh_join_[A-Za-z0-9_-]{43}$/u.test(joinHandle)) throw new Error('joinHandle is invalid')
+  return {
+    teamName: stringField(item, 'teamName'),
+    label: stringField(item, 'label'),
+    expiresAt: numberField(item, 'expiresAt'),
+    teamStatus: unionField(item, 'teamStatus', ['active', 'paused'] as const),
+    joinHandle,
+  }
+}
+
+function parseMemberResult(value: unknown): TeamManagementMemberResult {
+  const item = object(value, 'Team member result')
+  return { member: parseMember(item.member) }
+}
+
 function parseTeamStatusResult(value: unknown): TeamManagementTeamStatusResult {
   const item = object(value, 'Team status result')
   return { team: parseTeam(item.team) }
 }
 
-function parseContributionResult(value: unknown): { account: TeamContributionAccountSummary } {
+function parseContributionResult(value: unknown): TeamManagementContributionResult {
   const item = object(value, 'Contribution result')
   return { account: parseContribution(item.account) }
 }
 
 function parseUsageResult(value: unknown): TeamManagementUsageResult {
   const item = object(value, 'Team usage')
-  return { events: arrayField(item, 'events', parseUsageEvent) }
+  const role = unionField(item, 'role', ['owner', 'member'] as const)
+  if (item.currency !== 'USD') throw new Error('currency is invalid')
+  const window = object(item.window, 'usage window')
+  const startedAt = boundedIntegerField(window, 'startedAt', 0, Number.MAX_SAFE_INTEGER)
+  const endedAt = boundedIntegerField(window, 'endedAt', 0, Number.MAX_SAFE_INTEGER)
+  if (startedAt > endedAt) throw new Error('usage window is invalid')
+  const base = {
+    window: { startedAt, endedAt },
+    currency: 'USD' as const,
+    mine: parseUsageAggregate(item.mine, 'member usage aggregate'),
+  }
+  if (role === 'member') return { role, ...base }
+  return { role, ...base, team: parseUsageAggregate(item.team, 'Team usage aggregate') }
 }
 
 function parseTeam(value: unknown): TeamSummary {
@@ -152,17 +398,19 @@ function parseTeam(value: unknown): TeamSummary {
     id: stringField(item, 'id'),
     name: stringField(item, 'name'),
     status: unionField(item, 'status', ['active', 'paused'] as const),
+    lifecycleRevision: boundedIntegerField(item, 'lifecycleRevision', 1, Number.MAX_SAFE_INTEGER),
     createdAt: numberField(item, 'createdAt'),
   }
 }
 
 function parseMember(value: unknown): TeamMemberSummary {
   const item = object(value, 'member')
+  const role = unionField(item, 'role', ['owner', 'admin', 'member'] as const)
   return {
     id: stringField(item, 'id'),
     teamId: stringField(item, 'teamId'),
     displayName: stringField(item, 'displayName'),
-    role: unionField(item, 'role', ['owner', 'admin', 'member'] as const),
+    role: role === 'owner' ? 'owner' : 'member',
     status: unionField(item, 'status', ['active', 'suspended', 'removed'] as const),
     joinedAt: numberField(item, 'joinedAt'),
   }
@@ -183,14 +431,16 @@ function parseInvite(value: unknown): TeamInviteSummary {
     id: stringField(item, 'id'),
     teamId: stringField(item, 'teamId'),
     invitedByMemberId: stringField(item, 'invitedByMemberId'),
+    label: stringField(item, 'label'),
     status: unionField(item, 'status', ['pending', 'accepted', 'expired', 'revoked'] as const),
+    revealable: booleanField(item, 'revealable'),
     expiresAt: numberField(item, 'expiresAt'),
     createdAt: numberField(item, 'createdAt'),
     ...(acceptedAt === undefined ? {} : { acceptedAt }),
   }
 }
 
-function parseContribution(value: unknown, capacityOwnerMemberId?: string): TeamContributionAccountSummary {
+function parseContribution(value: unknown, capacityOwnerMemberId?: string): TeamManagementContributionSummary {
   const item = object(value, 'contribution')
   const maximum = item.maxSharedRequestsPerWindow
   if (maximum !== null && (typeof maximum !== 'number' || !Number.isInteger(maximum) || maximum <= 0)) {
@@ -268,57 +518,163 @@ function parseCapacityBucket(value: unknown): TeamContributionCapacityBucketSumm
   }
 }
 
-function parseUsageEvent(value: unknown): TeamUsageEventSummary {
-  const item = object(value, 'usage event')
-  const finishedAt = optionalNumberField(item, 'finishedAt')
-  if (item.unit !== 'request') throw new Error('usage event unit is invalid')
-  return {
-    id: stringField(item, 'id'),
-    teamId: stringField(item, 'teamId'),
-    consumerMemberId: stringField(item, 'consumerMemberId'),
-    upstreamOwnerMemberId: stringField(item, 'upstreamOwnerMemberId'),
-    upstreamAccountId: stringField(item, 'upstreamAccountId'),
-    model: stringField(item, 'model'),
-    unit: 'request',
-    status: unionField(item, 'status', ['in_progress', 'succeeded', 'failed', 'cancelled'] as const),
-    startedAt: numberField(item, 'startedAt'),
-    ...(finishedAt === undefined ? {} : { finishedAt }),
+function parseUsageAggregate(value: unknown, label: string): TeamUsageAggregateSummary {
+  const item = object(value, label)
+  const requestCount = boundedIntegerField(item, 'requestCount', 0, Number.MAX_SAFE_INTEGER)
+  const tokenMeasuredRequestCount = boundedIntegerField(item, 'tokenMeasuredRequestCount', 0, Number.MAX_SAFE_INTEGER)
+  const pricedRequestCount = boundedIntegerField(item, 'pricedRequestCount', 0, Number.MAX_SAFE_INTEGER)
+  const totalTokens = nullableDecimalString(item.totalTokens, 'totalTokens')
+  const estimatedCostUsdMicros = nullableDecimalString(item.estimatedCostUsdMicros, 'estimatedCostUsdMicros')
+  if (tokenMeasuredRequestCount > requestCount) throw new Error('tokenMeasuredRequestCount exceeds requestCount')
+  if (pricedRequestCount > tokenMeasuredRequestCount) throw new Error('pricedRequestCount exceeds tokenMeasuredRequestCount')
+  if (requestCount === 0) {
+    if (tokenMeasuredRequestCount !== 0 || pricedRequestCount !== 0 || totalTokens !== '0' || estimatedCostUsdMicros !== '0') {
+      throw new Error('empty usage aggregate is invalid')
+    }
+  } else {
+    if ((tokenMeasuredRequestCount === 0) !== (totalTokens === null)) {
+      throw new Error('totalTokens is inconsistent with tokenMeasuredRequestCount')
+    }
+    if ((pricedRequestCount === 0) !== (estimatedCostUsdMicros === null)) {
+      throw new Error('estimatedCostUsdMicros is inconsistent with pricedRequestCount')
+    }
   }
+  return { requestCount, tokenMeasuredRequestCount, pricedRequestCount, totalTokens, estimatedCostUsdMicros }
+}
+
+function nullableDecimalString(value: unknown, label: string): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(value)) throw new Error(`${label} is invalid`)
+  return value
 }
 
 /** Small typed facade; raw remote documents never reach React state. */
 export class TeamManagementApi {
+  private session: TeamManagementSession | undefined
+  private sessionRequest: Promise<TeamManagementSession> | undefined
+
   constructor(private readonly fetcher: typeof fetch) {}
 
   status(): Promise<TeamManagementStatus> {
     return this.request(TEAM_MANAGEMENT_STATUS_PATH, {}, parseTeamManagementStatus)
   }
 
-  connect(apiKey: string): Promise<TeamManagementConnectionResult> {
-    return this.request(TEAM_MANAGEMENT_CONNECT_PATH, { method: 'POST', body: { apiKey } }, parseConnection)
+  join(joinHandle: string, displayName: string): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_JOIN_PATH, { method: 'POST', body: { joinHandle, displayName } }, parseConnection)
   }
 
-  join(inviteToken: string, displayName: string): Promise<TeamManagementConnectionResult> {
-    return this.request(TEAM_MANAGEMENT_JOIN_PATH, { method: 'POST', body: { inviteToken, displayName } }, parseConnection)
+  recoverJoin(): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_JOIN_RECOVER_PATH, { method: 'POST', body: {} }, parseConnection)
   }
 
-  disconnect(revokeRemote: boolean): Promise<{ ok: true; remoteRevoked: boolean }> {
-    return this.request(TEAM_MANAGEMENT_DISCONNECT_PATH, { method: 'POST', body: { revokeRemote } }, value => {
+  discardPendingJoin(): Promise<{ discarded: true }> {
+    return this.request(TEAM_MANAGEMENT_JOIN_DISCARD_PATH, { method: 'POST', body: {} }, value => {
+      const item = object(value, 'pending Team join discard')
+      if (item.discarded !== true) throw new Error('pending Team join discard is invalid')
+      return { discarded: true }
+    })
+  }
+
+  disconnect(revokeRemote: false): Promise<{ ok: true; remoteRevoked: boolean }>
+  disconnect(revokeRemote: true, expectedContext: TeamManagementExpectedContext): Promise<{ ok: true; remoteRevoked: boolean }>
+  disconnect(
+    revokeRemote: boolean,
+    expectedContext?: TeamManagementExpectedContext,
+  ): Promise<{ ok: true; remoteRevoked: boolean }> {
+    return this.request(TEAM_MANAGEMENT_DISCONNECT_PATH, {
+      method: 'POST',
+      body: { revokeRemote, ...(expectedContext === undefined ? {} : { expectedContext }) },
+    }, value => {
       const item = object(value, 'disconnect result')
-      if (item.ok !== true) throw new Error('disconnect result is invalid')
+      if (item.disconnected !== true) throw new Error('disconnect result is invalid')
       return { ok: true, remoteRevoked: booleanField(item, 'remoteRevoked') }
     })
   }
 
-  leaveTeam(): Promise<TeamManagementDepartureResult> {
-    return this.request(TEAM_MANAGEMENT_LEAVE_PATH, { method: 'POST', body: {} }, parseDeparture)
+  leaveTeam(expectedContext: TeamManagementExpectedContext): Promise<TeamManagementDepartureResult> {
+    return this.request(TEAM_MANAGEMENT_LEAVE_PATH, { method: 'POST', body: { expectedContext } }, parseDeparture)
   }
 
-  transferOwnership(targetMemberId: string): Promise<TeamManagementOwnershipTransferResult> {
+  dissolveTeam(input: TeamDissolutionInput, expectedContext: TeamManagementExpectedContext): Promise<TeamDissolutionView> {
+    return this.request(
+      TEAM_MANAGEMENT_DISSOLVE_PATH,
+      {
+        method: 'POST',
+        body: {
+          confirmationName: input.confirmationName,
+          expectedLifecycleRevision: input.expectedLifecycleRevision,
+          expectedContext,
+        },
+      },
+      parseTeamDissolutionView,
+    )
+  }
+
+  recoverTeamDissolution(): Promise<TeamDissolutionView> {
+    return this.request(
+      TEAM_MANAGEMENT_DISSOLUTION_RECOVER_PATH,
+      { method: 'POST', body: {} },
+      parseTeamDissolutionView,
+    )
+  }
+
+  clearTeamDissolution(): Promise<TeamDissolutionClearResult> {
+    return this.request(
+      TEAM_MANAGEMENT_DISSOLUTION_CLEAR_PATH,
+      { method: 'POST', body: {} },
+      parseTeamDissolutionClearResult,
+    )
+  }
+
+  clearConnectionTerminal(): Promise<TeamConnectionTerminalClearResult> {
+    return this.request(
+      TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
+      { method: 'POST', body: {} },
+      parseTeamConnectionTerminalClearResult,
+    )
+  }
+
+  requestOwnershipTransfer(
+    targetMemberId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementOwnershipTransferSummary> {
     return this.request(
       TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_PATH,
-      { method: 'POST', body: { targetMemberId } },
-      parseOwnershipTransfer,
+      { method: 'POST', body: { targetMemberId, expectedContext } },
+      parseOwnershipTransferSummary,
+    )
+  }
+
+  acceptOwnershipTransfer(
+    transferId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementOwnershipTransferAcceptanceResult> {
+    return this.request(
+      TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_ACCEPT_PATH,
+      { method: 'POST', body: { transferId, expectedContext } },
+      parseOwnershipTransferAcceptance,
+    )
+  }
+
+  rejectOwnershipTransfer(
+    transferId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementOwnershipTransferSummary> {
+    return this.request(
+      TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_REJECT_PATH,
+      { method: 'POST', body: { transferId, expectedContext } },
+      parseOwnershipTransferSummary,
+    )
+  }
+
+  revokeOwnershipTransfer(
+    transferId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementOwnershipTransferSummary> {
+    return this.request(
+      TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_REVOKE_PATH,
+      { method: 'POST', body: { transferId, expectedContext } },
+      parseOwnershipTransferSummary,
     )
   }
 
@@ -326,44 +682,124 @@ export class TeamManagementApi {
     return this.request(TEAM_MANAGEMENT_OVERVIEW_PATH, {}, parseTeamManagementOverview)
   }
 
-  createInvite(expiresInMs = 7 * 24 * 60 * 60 * 1000): Promise<TeamManagementInviteResult> {
-    return this.request(TEAM_MANAGEMENT_INVITES_PATH, { method: 'POST', body: { expiresInMs } }, parseInviteResult)
+  acknowledgeDisplayNameMigration(
+    migrationVersion: number,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementDisplayNameMigrationAcknowledgement> {
+    if (!Number.isSafeInteger(migrationVersion) || migrationVersion < 1) {
+      return Promise.reject(new Error('migrationVersion is invalid'))
+    }
+    return this.request(
+      TEAM_MANAGEMENT_DISPLAY_NAME_MIGRATION_ACK_PATH,
+      { method: 'POST', body: { migrationVersion, expectedContext } },
+      value => parseDisplayNameMigrationAcknowledgement(value, migrationVersion),
+    )
   }
 
-  revokeInvite(inviteId: string): Promise<TeamManagementInviteRevocationResult> {
+  previewInvite(inviteToken: string): Promise<TeamManagementInvitePreview> {
+    return this.request(TEAM_MANAGEMENT_INVITES_PREVIEW_PATH, { method: 'POST', body: { inviteToken } }, parseInvitePreview)
+  }
+
+  createInvite(
+    label: string,
+    expiresInMs: number,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementInviteResult> {
+    return this.request(
+      TEAM_MANAGEMENT_INVITES_PATH,
+      { method: 'POST', body: { label, expiresInMs, expectedContext } },
+      parseInviteResult,
+    )
+  }
+
+  revealInvite(inviteId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementInviteRevealResult> {
+    return this.request(
+      TEAM_MANAGEMENT_INVITES_REVEAL_PATH,
+      { method: 'POST', body: { inviteId, expectedContext } },
+      value => {
+        const result = parseInviteRevealResult(value)
+        if (result.inviteId !== inviteId) throw new Error('inviteId does not match the reveal request')
+        return result
+      },
+    )
+  }
+
+  revokeInvite(inviteId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementInviteRevocationResult> {
     return this.request(
       TEAM_MANAGEMENT_INVITES_REVOKE_PATH,
-      { method: 'POST', body: { inviteId } },
+      { method: 'POST', body: { inviteId, expectedContext } },
       parseInviteRevocationResult,
     )
   }
 
-  setTeamStatus(status: 'active' | 'paused'): Promise<TeamManagementTeamStatusResult> {
-    return this.request(TEAM_MANAGEMENT_TEAM_STATUS_PATH, { method: 'POST', body: { status } }, parseTeamStatusResult)
-  }
-
-  startOAuth(label: string): Promise<TeamManagementOAuthResult> {
-    return this.request(TEAM_MANAGEMENT_OAUTH_START_PATH, { method: 'POST', body: { label } }, parseTeamManagementOAuthResult)
-  }
-
-  cancelOAuth(accountId: string): Promise<{ account: TeamContributionAccountSummary }> {
-    return this.request(TEAM_MANAGEMENT_OAUTH_CANCEL_PATH, { method: 'POST', body: { accountId } }, parseContributionResult)
-  }
-
-  reauthorizeOAuth(accountId: string): Promise<TeamManagementOAuthResult> {
+  removeMember(memberId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementMemberResult> {
     return this.request(
-      TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
-      { method: 'POST', body: { accountId } },
+      TEAM_MANAGEMENT_MEMBERS_REMOVE_PATH,
+      { method: 'POST', body: { memberId, expectedContext } },
+      parseMemberResult,
+    )
+  }
+
+  setTeamStatus(
+    status: 'active' | 'paused',
+    expectedLifecycleRevision: number,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementTeamStatusResult> {
+    return this.request(
+      TEAM_MANAGEMENT_TEAM_STATUS_PATH,
+      { method: 'POST', body: { status, expectedLifecycleRevision, expectedContext } },
+      parseTeamStatusResult,
+    )
+  }
+
+  startOAuth(label: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementOAuthResult> {
+    return this.request(
+      TEAM_MANAGEMENT_OAUTH_START_PATH,
+      { method: 'POST', body: { label, expectedContext } },
       parseTeamManagementOAuthResult,
     )
   }
 
-  updateContribution(accountId: string, patch: TeamContributionAccountPatch): Promise<{ account: TeamContributionAccountSummary }> {
-    return this.request(TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH, { method: 'POST', body: { accountId, ...patch } }, parseContributionResult)
+  cancelOAuth(accountId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementContributionResult> {
+    return this.request(
+      TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
+      { method: 'POST', body: { accountId, expectedContext } },
+      parseContributionResult,
+    )
   }
 
-  revokeContribution(accountId: string): Promise<{ account: TeamContributionAccountSummary }> {
-    return this.request(TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH, { method: 'POST', body: { accountId } }, parseContributionResult)
+  reauthorizeOAuth(accountId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementOAuthResult> {
+    return this.request(
+      TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      { method: 'POST', body: { accountId, expectedContext } },
+      parseTeamManagementOAuthResult,
+    )
+  }
+
+  updateContribution(
+    accountId: string,
+    patch: TeamManagementContributionPatch,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<TeamManagementContributionResult> {
+    const body: JsonObject = {
+      accountId,
+      expectedContext,
+      ...patch.label === undefined ? {} : { label: patch.label },
+      ...patch.status === undefined ? {} : { status: patch.status },
+      ...patch.personalReservePercent === undefined ? {} : { personalReservePercent: patch.personalReservePercent },
+      ...patch.maxSharedRequestsPerWindow === undefined ? {} : { maxSharedRequestsPerWindow: patch.maxSharedRequestsPerWindow },
+      ...patch.maxSharedConcurrency === undefined ? {} : { maxSharedConcurrency: patch.maxSharedConcurrency },
+      ...patch.allowedModels === undefined ? {} : { allowedModels: [...patch.allowedModels] },
+    }
+    return this.request(TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH, { method: 'POST', body }, parseContributionResult)
+  }
+
+  revokeContribution(accountId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementContributionResult> {
+    return this.request(
+      TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH,
+      { method: 'POST', body: { accountId, expectedContext } },
+      parseContributionResult,
+    )
   }
 
   usage(_limit = 50): Promise<TeamManagementUsageResult> {
@@ -375,7 +811,28 @@ export class TeamManagementApi {
     options: { method?: 'POST'; body?: JsonObject },
     parse: Parser<T>,
   ): Promise<T> {
-    const response = await this.fetcher(path, {
+    let capability = options.method === 'POST' ? await this.managementCapability() : undefined
+    let response = await this.dispatch(path, options, capability)
+    if (options.method === 'POST' && await isCapabilityRejected(response)) {
+      this.session = undefined
+      capability = await this.managementCapability()
+      response = await this.dispatch(path, options, capability)
+    }
+    if (!response.ok) {
+      const message = await safeResponseError(response)
+      throw new TeamManagementRequestError(response.status, message ?? `Team management request failed (${response.status})`)
+    }
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
+    if (!contentType.startsWith('application/json')) throw new Error('Team management returned a non-JSON response')
+    return parse(await response.json())
+  }
+
+  private dispatch(
+    path: string,
+    options: { method?: 'POST'; body?: JsonObject },
+    capability: string | undefined,
+  ): Promise<Response> {
+    return this.fetcher(path, {
       method: options.method ?? 'GET',
       credentials: 'same-origin',
       cache: 'no-store',
@@ -383,16 +840,50 @@ export class TeamManagementApi {
       headers: {
         accept: 'application/json',
         ...(options.body === undefined ? {} : { 'content-type': 'application/json' }),
+        ...(capability === undefined ? {} : { [TEAM_MANAGEMENT_CAPABILITY_HEADER]: capability }),
       },
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
     })
+  }
+
+  private async managementCapability(): Promise<string> {
+    const active = this.session
+    if (active !== undefined && active.expiresAt > Date.now() + 5_000) return active.capability
+    if (this.sessionRequest !== undefined) return (await this.sessionRequest).capability
+
+    const request = this.issueManagementSession()
+    this.sessionRequest = request
+    try {
+      const session = await request
+      this.session = session
+      return session.capability
+    } finally {
+      if (this.sessionRequest === request) this.sessionRequest = undefined
+    }
+  }
+
+  private async issueManagementSession(): Promise<TeamManagementSession> {
+    const response = await this.fetcher(TEAM_MANAGEMENT_SESSION_PATH, {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
     if (!response.ok) {
       const message = await safeResponseError(response)
-      throw new Error(message ?? `Team management request failed (${response.status})`)
+      throw new TeamManagementRequestError(response.status, message ?? `Team management session failed (${response.status})`)
     }
     const contentType = response.headers.get('content-type')?.toLowerCase() ?? ''
-    if (!contentType.startsWith('application/json')) throw new Error('Team management returned a non-JSON response')
-    return parse(await response.json())
+    if (!contentType.startsWith('application/json')) throw new Error('Team management session returned a non-JSON response')
+    const item = object(await response.json(), 'Team management session')
+    const capability = stringField(item, 'capability')
+    const expiresAt = numberField(item, 'expiresAt')
+    if (!/^dsh_tm_[A-Za-z0-9_-]{43}$/u.test(capability) || !Number.isInteger(expiresAt) || expiresAt <= Date.now()) {
+      throw new Error('Team management session is invalid')
+    }
+    return { capability, expiresAt }
   }
 }
 
@@ -404,17 +895,36 @@ async function safeResponseError(response: Response): Promise<string | undefined
   if (!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return undefined
   try {
     const item = object(await response.json(), 'error response')
-    return typeof item.error === 'string' && item.error.length > 0 && item.error.length <= 400
-      ? item.error
-      : undefined
+    if (typeof item.error === 'string' && item.error.length > 0 && item.error.length <= 400) return item.error
+    if (isForbiddenError(item)) return 'Team management request is forbidden'
+    return undefined
   } catch {
     return undefined
   }
 }
 
+async function isCapabilityRejected(response: Response): Promise<boolean> {
+  if (response.status !== 403 || !response.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return false
+  try {
+    return isForbiddenError(object(await response.clone().json(), 'error response'))
+  } catch {
+    return false
+  }
+}
+
+function isForbiddenError(item: JsonObject): boolean {
+  if (typeof item.error !== 'object' || item.error === null || Array.isArray(item.error)) return false
+  return (item.error as JsonObject).code === 'team_management_forbidden'
+}
+
 function object(value: unknown, label: string): JsonObject {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(`${label} must be an object`)
   return value as JsonObject
+}
+
+function exactKeys(item: JsonObject, allowed: readonly string[], label: string): void {
+  const unexpected = Object.keys(item).find(key => !allowed.includes(key))
+  if (unexpected !== undefined) throw new Error(`${label} has unexpected field ${unexpected}`)
 }
 
 function shortString(value: unknown, label: string): string {

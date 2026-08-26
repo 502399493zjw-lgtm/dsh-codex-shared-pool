@@ -13,6 +13,16 @@ describe('Team database migration command', () => {
 
     expect(shipped.trim()).toBe(POSTGRES_TEAM_RUNTIME_ROLES_SQL.trim())
     expect(shipped).toMatch(/REVOKE ALL ON TABLE public\.team_contribution_credentials FROM dsh_team_host/u)
+    expect(shipped).toMatch(/GRANT SELECT ON TABLE public\.team_role_migration_audit_events TO dsh_team_host/u)
+    expect(shipped).toMatch(/GRANT SELECT ON TABLE public\.team_member_display_name_migration_audit_events TO dsh_team_host/u)
+    expect(shipped).toMatch(/GRANT UPDATE \(acknowledged_at\) ON TABLE public\.team_member_display_name_migration_audit_events TO dsh_team_host/u)
+    expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_role_migration_audit_events[\s\S]*FROM dsh_team_broker/u)
+    expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_member_display_name_migration_audit_events[\s\S]*FROM dsh_team_broker/u)
+    expect(shipped).toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE[\s\S]*public\.team_dissolution_recovery_rate_limits[\s\S]*TO dsh_team_host/u)
+    expect(shipped).toMatch(/GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE[\s\S]*public\.team_ownership_transfers[\s\S]*public\.team_ownership_transfer_audit_events[\s\S]*TO dsh_team_host/u)
+    expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_ownership_transfers[\s\S]*public\.team_ownership_transfer_audit_events[\s\S]*FROM PUBLIC/u)
+    expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_lifecycle_operations[\s\S]*public\.team_dissolution_recovery_rate_limits[\s\S]*FROM dsh_team_broker/u)
+    expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_ownership_transfers[\s\S]*public\.team_ownership_transfer_audit_events[\s\S]*FROM dsh_team_broker/u)
     expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.teams[\s\S]*FROM dsh_team_broker/u)
     expect(logins).toMatch(/CREATE ROLE dsh_team_host_login LOGIN PASSWORD '\$POSTGRES_TEAM_HOST_PASSWORD'/u)
     expect(logins).toMatch(/CREATE ROLE dsh_team_broker_login LOGIN PASSWORD '\$POSTGRES_TEAM_BROKER_PASSWORD'/u)
@@ -27,20 +37,93 @@ describe('Team database migration command', () => {
     const query = vi.fn(async () => ({ rows: [{
       host_control: true,
       host_credentials: false,
+      host_role_migration_audit: true,
+      host_display_name_migration_audit: true,
+      host_display_name_migration_ack: true,
       broker_control: false,
+      broker_role_migration_audit: false,
+      broker_display_name_migration_audit: false,
+      broker_display_name_migration_ack: false,
       broker_credentials: true,
     }] }))
 
     await expect(verifyTeamDatabaseRoleBoundary({ query })).resolves.toBeUndefined()
     expect(String(query.mock.calls[0]?.[0])).toMatch(/has_table_privilege/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/has_column_privilege/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/has_any_column_privilege/iu)
     expect(String(query.mock.calls[0]?.[0])).toMatch(/dsh_team_host_login/iu)
     expect(String(query.mock.calls[0]?.[0])).toMatch(/dsh_team_broker_login/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/team_dissolution_recovery_rate_limits/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/team_ownership_transfers/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/team_ownership_transfer_audit_events/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/team_role_migration_audit_events/iu)
+    expect(String(query.mock.calls[0]?.[0])).toMatch(/team_member_display_name_migration_audit_events/iu)
 
     await expect(verifyTeamDatabaseRoleBoundary({
       query: vi.fn(async () => ({ rows: [{
         host_control: true,
         host_credentials: true,
+        host_role_migration_audit: true,
+        host_display_name_migration_audit: true,
         broker_control: false,
+        broker_role_migration_audit: false,
+        broker_display_name_migration_audit: false,
+        broker_credentials: true,
+      }] })),
+    })).rejects.toThrow(/role boundary/iu)
+
+    await expect(verifyTeamDatabaseRoleBoundary({
+      query: vi.fn(async () => ({ rows: [{
+        host_control: true,
+        host_credentials: false,
+        host_role_migration_audit: false,
+        host_display_name_migration_audit: true,
+        broker_control: false,
+        broker_role_migration_audit: false,
+        broker_display_name_migration_audit: false,
+        broker_credentials: true,
+      }] })),
+    })).rejects.toThrow(/role boundary/iu)
+
+    await expect(verifyTeamDatabaseRoleBoundary({
+      query: vi.fn(async () => ({ rows: [{
+        host_control: true,
+        host_credentials: false,
+        host_role_migration_audit: true,
+        host_display_name_migration_audit: false,
+        broker_control: false,
+        broker_role_migration_audit: false,
+        broker_display_name_migration_audit: false,
+        broker_credentials: true,
+      }] })),
+    })).rejects.toThrow(/role boundary/iu)
+
+    await expect(verifyTeamDatabaseRoleBoundary({
+      query: vi.fn(async () => ({ rows: [{
+        host_control: true,
+        host_credentials: false,
+        host_role_migration_audit: true,
+        host_display_name_migration_audit: true,
+        host_display_name_migration_ack: false,
+        broker_control: false,
+        broker_role_migration_audit: false,
+        broker_display_name_migration_audit: false,
+        broker_display_name_migration_ack: false,
+        broker_credentials: true,
+      }] })),
+    })).rejects.toThrow(/role boundary/iu)
+
+    await expect(verifyTeamDatabaseRoleBoundary({
+      query: vi.fn(async () => ({ rows: [{
+        host_control: true,
+        host_credentials: false,
+        host_role_migration_audit: true,
+        host_display_name_migration_audit: true,
+        host_display_name_migration_ack: true,
+        broker_control: false,
+        broker_role_migration_audit: false,
+        broker_display_name_migration_audit: false,
+        broker_display_name_migration_ack: true,
         broker_credentials: true,
       }] })),
     })).rejects.toThrow(/role boundary/iu)

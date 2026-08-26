@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { TeamCapacityProvider } from '../src/team/capacity.ts'
 import type { TeamCredentialBroker, TeamCredentialRef } from '../src/team/credentials.ts'
 import { TeamRequestRouter } from '../src/team/routing.ts'
 import { TeamService } from '../src/team/service.ts'
@@ -151,6 +152,126 @@ describe('Team request admission service', () => {
     }))
   })
 
+  it('refreshes active shared quotas and moves a sticky session away from an exhausted account', async () => {
+    let id = 0
+    const store = new MemoryTeamStore({ id: () => `id-${++id}` })
+    const broker = new CapacityBroker()
+    const service = new TeamService({
+      store,
+      broker,
+      capacity: new TeamCapacityProvider(broker, { now: () => 1_000, ttlMs: 300_000 }),
+      router: new TeamRequestRouter({ id: () => `lease-${++id}` }),
+    })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const firstCreated = await store.createContributionAccount(owner, 'Primary shared Codex')
+    const secondCreated = await store.createContributionAccount(owner, 'Fallback shared Codex')
+    const first = await store.setContributionAccountStatus(owner.teamId, firstCreated.id, 'active')
+    const second = await store.setContributionAccountStatus(owner.teamId, secondCreated.id, 'active')
+    broker.remainingByAccount.set(first.id, 90)
+    broker.remainingByAccount.set(second.id, 70)
+
+    const initial = await service.admitLiveRequest(friend, {
+      sessionId: 'sticky-shared-session',
+      model: 'gpt-5-codex',
+    })
+    expect(initial.account.id).toBe(first.id)
+    await service.settleRequest(initial.lease, 'success')
+
+    broker.remainingByAccount.set(first.id, 0)
+    await service.refreshActiveContributionCapacities()
+    const fallback = await service.admitLiveRequest(friend, {
+      sessionId: 'sticky-shared-session',
+      model: 'gpt-5-codex',
+    })
+
+    expect(fallback.account.id).toBe(second.id)
+    expect(fallback.source).toBe('shared')
+    expect(broker.reads.filter(ref => ref.accountId === first.id)).toHaveLength(2)
+    expect(broker.reads.filter(ref => ref.accountId === second.id)).toHaveLength(2)
+    await service.settleRequest(fallback.lease, 'success')
+
+    broker.remainingByAccount.set(first.id, 95)
+    await service.refreshActiveContributionCapacities()
+    const recovered = await service.admitLiveRequest(friend, {
+      sessionId: 'new-session-after-reset',
+      model: 'gpt-5-codex',
+    })
+    expect(recovered.account.id).toBe(first.id)
+    await service.settleRequest(recovered.lease, 'success')
+  })
+
+  it('periodically refreshes only active contributions and stops the Host timer on dispose', async () => {
+    vi.useFakeTimers()
+    try {
+      let id = 0
+      const store = new MemoryTeamStore({ id: () => `id-${++id}` })
+      const broker = new CapacityBroker()
+      const service = new TeamService({
+        store,
+        broker,
+        capacity: new TeamCapacityProvider(broker, { now: () => 1_000, ttlMs: 300_000 }),
+      })
+      const boot = await store.bootstrap('Friends', 'Owner')
+      const owner = await store.authenticateApiKey(boot.apiKey)
+      if (owner === undefined) throw new Error('owner key should authenticate')
+      const activeCreated = await store.createContributionAccount(owner, 'Active shared Codex')
+      const pausedCreated = await store.createContributionAccount(owner, 'Paused Codex')
+      const active = await store.setContributionAccountStatus(owner.teamId, activeCreated.id, 'active')
+      const paused = await store.setContributionAccountStatus(owner.teamId, pausedCreated.id, 'active')
+      await store.updateContributionAccount(owner, paused.id, { status: 'paused' })
+
+      service.startCapacityMonitoring({ intervalMs: 100 })
+      expect(broker.reads).toHaveLength(0)
+
+      await vi.advanceTimersByTimeAsync(100)
+      expect(broker.reads.map(ref => ref.accountId)).toEqual([active.id])
+
+      await vi.advanceTimersByTimeAsync(100)
+      expect(broker.reads.map(ref => ref.accountId)).toEqual([active.id, active.id])
+
+      await service.dispose()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(broker.reads.map(ref => ref.accountId)).toEqual([active.id, active.id])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses a twelve-hour default interval for the idle Host capacity sweep', async () => {
+    vi.useFakeTimers()
+    try {
+      let id = 0
+      const store = new MemoryTeamStore({ id: () => `id-${++id}` })
+      const broker = new CapacityBroker()
+      const service = new TeamService({
+        store,
+        broker,
+        capacity: new TeamCapacityProvider(broker, { now: () => 1_000, ttlMs: 300_000 }),
+      })
+      const boot = await store.bootstrap('Friends', 'Owner')
+      const owner = await store.authenticateApiKey(boot.apiKey)
+      if (owner === undefined) throw new Error('owner key should authenticate')
+      const created = await store.createContributionAccount(owner, 'Active shared Codex')
+      await store.setContributionAccountStatus(owner.teamId, created.id, 'active')
+
+      service.startCapacityMonitoring()
+      await vi.advanceTimersByTimeAsync(12 * 60 * 60 * 1_000 - 1)
+      expect(broker.reads).toHaveLength(0)
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(broker.reads).toHaveLength(1)
+      await service.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('records metadata-only usage while preferring the consumer account', async () => {
     let id = 0
     const store = new MemoryTeamStore({ id: () => `id-${++id}` })
@@ -195,6 +316,53 @@ describe('Team request admission service', () => {
     const settled = await service.settleRequest(admitted.lease, 'success')
     expect(settled.status).toBe('succeeded')
     expect((await service.listUsageEvents(member, 10))).toEqual([settled])
+  })
+
+  it('atomically reserves the contributor daily Credits cap only for shared requests', async () => {
+    let id = 0
+    const store = new MemoryTeamStore({ id: () => `id-${++id}`, now: () => Date.UTC(2026, 7, 20, 12) })
+    const service = new TeamService({
+      store,
+      broker: new NoopCredentialBroker(),
+      router: new TeamRequestRouter({ id: () => `lease-${++id}` }),
+    })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const created = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.updateContributionAccount(owner, created.id, {
+      dailySharedCreditLimit: 50_000,
+      maxSharedConcurrency: 3,
+    })
+    const account = await store.setContributionAccountStatus(owner.teamId, created.id, 'active')
+    const capacity = [{ accountId: account.id, healthy: true, remainingPercent: 80, resetAt: 10_000 }]
+
+    const shared = await service.admitRequest(friend, { sessionId: 'friend-1', model: 'gpt-5-codex', capacities: capacity })
+    const own = await service.admitRequest(owner, { sessionId: 'owner-1', model: 'gpt-5-codex', capacities: capacity })
+    await expect(service.admitRequest(friend, {
+      sessionId: 'friend-2',
+      model: 'gpt-5-codex',
+      capacities: capacity,
+    })).rejects.toThrow(/daily shared Credits limit/iu)
+
+    await service.settleRequest(shared.lease, 'error')
+    await service.settleRequest(own.lease, 'success')
+    const retried = await service.admitRequest(friend, { sessionId: 'friend-2', model: 'gpt-5-codex', capacities: capacity })
+    const settled = await service.settleRequest(retried.lease, 'success', {
+      inputTokens: 10_000,
+      cachedInputTokens: 0,
+      outputTokens: 10_000,
+    })
+    expect(settled).toMatchObject({ credits: 50_000, creditsFormulaVersion: 'credits-v1' })
+    await expect(service.admitRequest(friend, {
+      sessionId: 'friend-3',
+      model: 'gpt-5-codex',
+      capacities: capacity,
+    })).rejects.toThrow(/daily shared Credits limit/iu)
   })
 
   it('stops new admission before waiting for an in-flight request to drain on revoke', async () => {

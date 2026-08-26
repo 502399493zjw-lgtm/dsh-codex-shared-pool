@@ -70,18 +70,30 @@ export class TeamCapacityProvider {
 
   async read(ref: TeamCredentialRef, model: string): Promise<TeamQuotaSnapshot> {
     const key = capacityKey(ref)
+    const refreshing = this.inFlight.get(key)
+    if (refreshing !== undefined) return projectLoaded(await refreshing, model)
     const now = this.now()
     const cached = this.cache.get(key)
     if (cached !== undefined && cached.expiresAt > now) {
-      return cached.usage === undefined ? { healthy: false } : projectTeamQuota(cached.usage, model)
+      return projectLoaded(cached, model)
     }
     let pending = this.inFlight.get(key)
     if (pending === undefined) {
       pending = this.load(ref)
       this.inFlight.set(key, pending)
     }
-    const loaded = await pending
-    return loaded.usage === undefined ? { healthy: false } : projectTeamQuota(loaded.usage, model)
+    return projectLoaded(await pending, model)
+  }
+
+  /** Force one provider read even while the ordinary admission cache is warm. */
+  async refresh(ref: TeamCredentialRef, model: string): Promise<TeamQuotaSnapshot> {
+    const key = capacityKey(ref)
+    let pending = this.inFlight.get(key)
+    if (pending === undefined) {
+      pending = this.load(ref)
+      this.inFlight.set(key, pending)
+    }
+    return projectLoaded(await pending, model)
   }
 
   invalidate(ref: TeamCredentialRef): void {
@@ -103,6 +115,10 @@ export class TeamCapacityProvider {
       this.inFlight.delete(key)
     }
   }
+}
+
+function projectLoaded(loaded: CachedUsage, model: string): TeamQuotaSnapshot {
+  return loaded.usage === undefined ? { healthy: false } : projectTeamQuota(loaded.usage, model)
 }
 
 function capacityKey(ref: TeamCredentialRef): string {

@@ -42,6 +42,7 @@ interface ContributionRoutingRow extends QueryResultRow {
   status: TeamContributionStatus
   personal_reserve_percent: number
   max_shared_requests_per_window: number | null
+  daily_shared_credit_limit: string | number | null
   max_shared_concurrency: number
   allowed_models: unknown
   created_at: string | number
@@ -355,6 +356,7 @@ function contributionSummary(row: ContributionRoutingRow): TeamContributionAccou
     status: row.status,
     personalReservePercent: row.personal_reserve_percent,
     maxSharedRequestsPerWindow: row.max_shared_requests_per_window,
+    dailySharedCreditLimit: row.daily_shared_credit_limit === null ? null : numberValue(row.daily_shared_credit_limit),
     maxSharedConcurrency: row.max_shared_concurrency,
     allowedModels: models,
     createdAt: numberValue(row.created_at),
