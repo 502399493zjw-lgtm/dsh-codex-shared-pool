@@ -425,6 +425,15 @@ describe('PostgreSQL Team store', () => {
     )
   })
 
+  it('adds weekly shared-cost limits and non-negative admission reservations in migration 21', () => {
+    const migration = POSTGRES_TEAM_MIGRATIONS.find(item => item.version === 21)
+
+    expect(migration?.sql).toMatch(/weekly_shared_estimated_api_cost_limit_micros bigint/iu)
+    expect(migration?.sql).toMatch(/BETWEEN 10000 AND 10000000000/iu)
+    expect(migration?.sql).toMatch(/reserved_estimated_cost_usd_micros bigint NOT NULL DEFAULT 0/iu)
+    expect(migration?.sql).toMatch(/reserved_estimated_cost_usd_micros >= 0/iu)
+  })
+
   it('deterministically repairs legacy display names before establishing migration 20 uniqueness', async () => {
     const pool = testPool()
     await applyTeamMigrationsThrough(pool, 19)
@@ -1369,6 +1378,32 @@ describe('PostgreSQL Team store', () => {
     await pool.end()
   })
 
+  it('enforces the weekly estimated-cost limit for shared use and releases cancelled reservations', async () => {
+    const pool = testPool()
+    const store = testStore({ pool, now: () => Date.UTC(2026, 7, 24, 12) })
+    const boot = await store.bootstrap('Weekly Team', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const created = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.updateContributionAccount(owner, created.id, {
+      weeklySharedEstimatedApiCostLimitMicros: 100_000,
+    })
+    const account = await store.setContributionAccountStatus(owner.teamId, created.id, 'active')
+
+    await store.beginUsageEvent(friend, 'weekly-held', account.id, 'gpt-5-codex')
+    await expect(store.beginUsageEvent(friend, 'weekly-blocked', account.id, 'gpt-5-codex'))
+      .rejects.toThrow(/weekly shared estimated API cost limit/iu)
+    await expect(store.beginUsageEvent(owner, 'owner-own', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+
+    await store.settleUsageEvent(owner.teamId, 'weekly-held', 'cancelled')
+    await expect(store.beginUsageEvent(friend, 'weekly-after-cancel', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+    await pool.end()
+  })
+
   it('aggregates shared account Credits without counting the contributor own use', async () => {
     const pool = testPool()
     const now = Date.UTC(2026, 7, 20, 12)
@@ -1545,6 +1580,7 @@ describe('PostgreSQL Team store', () => {
         totalTokens: '50',
         estimatedCostUsdMicros: null,
       },
+      ownedAccounts: expect.any(Array),
     })
     await expect(store.readUsageProjection(friend)).resolves.toEqual({
       role: 'member',
@@ -1557,6 +1593,7 @@ describe('PostgreSQL Team store', () => {
         totalTokens: '120',
         estimatedCostUsdMicros: '1234',
       },
+      ownedAccounts: expect.any(Array),
     })
     const adminProjection = await store.readUsageProjection(admin)
     expect(adminProjection).toEqual({
@@ -1570,8 +1607,28 @@ describe('PostgreSQL Team store', () => {
         totalTokens: '10',
         estimatedCostUsdMicros: '50',
       },
+      ownedAccounts: [],
     })
     expect(adminProjection).not.toHaveProperty('team')
+    const ownerOwnedUsage = (await store.readUsageProjection(owner)).ownedAccounts
+    expect(ownerOwnedUsage).toHaveLength(1)
+    expect(ownerOwnedUsage[0]).toMatchObject({
+      accountId: ownerAccount.id,
+      aggregate: {
+        requestCount: 3,
+        tokenMeasuredRequestCount: 2,
+        pricedRequestCount: 2,
+        totalTokens: '130',
+        estimatedCostUsdMicros: '1284',
+      },
+      recentRequests: expect.arrayContaining([
+        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model' }),
+        expect.objectContaining({ id: 'friend-unmeasured', model: 'untrusted-request-model' }),
+        expect.objectContaining({ id: 'admin-priced', model: 'untrusted-request-model' }),
+      ]),
+    })
+    expect(JSON.stringify(ownerOwnedUsage)).not.toContain(friend.memberId)
+    expect(JSON.stringify(ownerOwnedUsage)).not.toContain(admin.memberId)
     await pool.end()
   })
 

@@ -387,9 +387,40 @@ function parseUsageResult(value: unknown): TeamManagementUsageResult {
     window: { startedAt, endedAt },
     currency: 'USD' as const,
     mine: parseUsageAggregate(item.mine, 'member usage aggregate'),
+    ownedAccounts: item.ownedAccounts === undefined
+      ? []
+      : arrayField(item, 'ownedAccounts', parseOwnedAccountUsage),
   }
   if (role === 'member') return { role, ...base }
   return { role, ...base, team: parseUsageAggregate(item.team, 'Team usage aggregate') }
+}
+
+function parseOwnedAccountUsage(value: unknown) {
+  const item = object(value, 'owned account usage')
+  const window = object(item.window, 'owned account usage window')
+  return {
+    accountId: stringField(item, 'accountId'),
+    window: {
+      startedAt: boundedIntegerField(window, 'startedAt', 0, Number.MAX_SAFE_INTEGER),
+      endedAt: boundedIntegerField(window, 'endedAt', 0, Number.MAX_SAFE_INTEGER),
+    },
+    aggregate: parseUsageAggregate(item.aggregate, 'owned account usage aggregate'),
+    recentRequests: arrayField(item, 'recentRequests', value => {
+      const request = object(value, 'recent request')
+      const finishedAt = request.finishedAt === undefined ? undefined : numberField(request, 'finishedAt')
+      const totalTokens = request.totalTokens === undefined ? undefined : boundedIntegerField(request, 'totalTokens', 0, Number.MAX_SAFE_INTEGER)
+      const estimatedCostUsdMicros = request.estimatedCostUsdMicros === undefined ? undefined : stringField(request, 'estimatedCostUsdMicros')
+      return {
+        id: stringField(request, 'id'),
+        model: stringField(request, 'model'),
+        status: unionField(request, 'status', ['in_progress', 'succeeded', 'failed', 'cancelled'] as const),
+        startedAt: numberField(request, 'startedAt'),
+        ...(finishedAt === undefined ? {} : { finishedAt }),
+        ...(totalTokens === undefined ? {} : { totalTokens }),
+        ...(estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros }),
+      }
+    }),
+  }
 }
 
 function parseTeam(value: unknown): TeamSummary {
@@ -447,6 +478,10 @@ function parseContribution(value: unknown, capacityOwnerMemberId?: string): Team
     throw new Error('contribution.maxSharedRequestsPerWindow is invalid')
   }
   const lastError = optionalStringField(item, 'lastError')
+  const weeklyLimit = item.weeklySharedEstimatedApiCostLimitMicros ?? null
+  if (weeklyLimit !== null && (typeof weeklyLimit !== 'number' || !Number.isSafeInteger(weeklyLimit) || weeklyLimit < 0)) {
+    throw new Error('contribution.weeklySharedEstimatedApiCostLimitMicros is invalid')
+  }
   const ownerMemberId = stringField(item, 'ownerMemberId')
   const status = unionField(item, 'status', ['authorizing', 'active', 'paused', 'revoked', 'reauth_required'] as const)
   const capacity = item.capacity === undefined
@@ -462,6 +497,7 @@ function parseContribution(value: unknown, capacityOwnerMemberId?: string): Team
     status,
     personalReservePercent: boundedNumberField(item, 'personalReservePercent', 0, 100),
     maxSharedRequestsPerWindow: maximum,
+    weeklySharedEstimatedApiCostLimitMicros: weeklyLimit as number | null,
     maxSharedConcurrency: boundedIntegerField(item, 'maxSharedConcurrency', 1, 1_000),
     allowedModels: arrayField(item, 'allowedModels', value => shortString(value, 'allowed model')),
     createdAt: numberField(item, 'createdAt'),
@@ -480,6 +516,7 @@ const CAPACITY_REASONS = [
   'shared_concurrency_reached',
   'request_cap_reset_unavailable',
   'request_cap_reached',
+  'weekly_shared_cost_reached',
   'runtime_unavailable',
 ] as const
 

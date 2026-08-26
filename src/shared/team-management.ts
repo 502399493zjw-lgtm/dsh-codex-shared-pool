@@ -125,6 +125,7 @@ export type TeamManagementContributionSummary = Pick<TeamContributionAccountSumm
   | 'status'
   | 'personalReservePercent'
   | 'maxSharedRequestsPerWindow'
+  | 'weeklySharedEstimatedApiCostLimitMicros'
   | 'maxSharedConcurrency'
   | 'allowedModels'
   | 'createdAt'
@@ -139,6 +140,7 @@ export type TeamManagementContributionPatch = Pick<TeamContributionAccountPatch,
   | 'status'
   | 'personalReservePercent'
   | 'maxSharedRequestsPerWindow'
+  | 'weeklySharedEstimatedApiCostLimitMicros'
   | 'maxSharedConcurrency'
   | 'allowedModels'
 >

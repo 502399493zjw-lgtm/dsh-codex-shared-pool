@@ -105,6 +105,8 @@ import type {
   TeamMemberSummary,
   TeamSummary,
   TeamUsageAggregateSummary,
+  TeamUsageEventStatus,
+  TeamUsageProjection,
 } from './types.ts'
 import {
   DEFAULT_TEAM_CLIENT_API_KEY_REF,
@@ -544,6 +546,10 @@ function projectContribution(value: unknown, capacityOwnerMemberId?: string): Te
   )) {
     throw new Error('remote Team returned an invalid contribution policy')
   }
+  const weeklyLimit = item.weeklySharedEstimatedApiCostLimitMicros ?? null
+  if (weeklyLimit !== null && (
+    typeof weeklyLimit !== 'number' || !Number.isSafeInteger(weeklyLimit) || weeklyLimit < 0
+  )) throw new Error('remote Team returned an invalid weekly contribution limit')
   const lastError = item.lastError === undefined
     ? undefined
     : safeTeamErrorMessage(stringField(item, 'lastError'))
@@ -561,6 +567,7 @@ function projectContribution(value: unknown, capacityOwnerMemberId?: string): Te
     status: status as TeamManagementContributionSummary['status'],
     personalReservePercent: numberField(item, 'personalReservePercent'),
     maxSharedRequestsPerWindow: cap as number | null,
+    weeklySharedEstimatedApiCostLimitMicros: weeklyLimit as number | null,
     maxSharedConcurrency: numberField(item, 'maxSharedConcurrency'),
     allowedModels: stringArray(item.allowedModels, 'allowedModels'),
     createdAt: numberField(item, 'createdAt'),
@@ -579,6 +586,7 @@ const CAPACITY_REASONS = [
   'shared_concurrency_reached',
   'request_cap_reset_unavailable',
   'request_cap_reached',
+  'weekly_shared_cost_reached',
   'runtime_unavailable',
 ] as const
 
@@ -732,6 +740,35 @@ function projectUsageAggregate(value: unknown, label: string): TeamUsageAggregat
     estimatedCostUsdMicros,
   )
   return { requestCount, tokenMeasuredRequestCount, pricedRequestCount, totalTokens, estimatedCostUsdMicros }
+}
+
+function projectOwnedAccountUsage(value: unknown): TeamUsageProjection['ownedAccounts'] {
+  if (!Array.isArray(value)) throw new Error('remote Team returned invalid owned account usage')
+  return value.map(raw => {
+    const account = record(raw, 'owned account usage')
+    const window = record(account.window, 'owned account usage window')
+    const requests = account.recentRequests
+    if (!Array.isArray(requests)) throw new Error('remote Team returned invalid recent requests')
+    return {
+      accountId: stringField(account, 'accountId'),
+      window: { startedAt: safeNonNegativeInteger(window, 'startedAt'), endedAt: safeNonNegativeInteger(window, 'endedAt') },
+      aggregate: projectUsageAggregate(account.aggregate, 'owned account usage aggregate'),
+      recentRequests: requests.map(rawRequest => {
+        const request = record(rawRequest, 'recent request')
+        const status = stringField(request, 'status')
+        if (!['in_progress', 'succeeded', 'failed', 'cancelled'].includes(status)) throw new Error('remote Team returned invalid request status')
+        return {
+          id: stringField(request, 'id'),
+          model: stringField(request, 'model'),
+          status: status as TeamUsageEventStatus,
+          startedAt: safeNonNegativeInteger(request, 'startedAt'),
+          ...(request.finishedAt === undefined ? {} : { finishedAt: safeNonNegativeInteger(request, 'finishedAt') }),
+          ...(request.totalTokens === undefined ? {} : { totalTokens: safeNonNegativeInteger(request, 'totalTokens') }),
+          ...(request.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: stringField(request, 'estimatedCostUsdMicros') }),
+        }
+      }),
+    }
+  })
 }
 
 function nullableDecimalString(value: unknown, label: string): string | null {
@@ -984,6 +1021,7 @@ function contributionPatch(value: Record<string, unknown>): {
     'status',
     'personalReservePercent',
     'maxSharedRequestsPerWindow',
+    'weeklySharedEstimatedApiCostLimitMicros',
     'maxSharedConcurrency',
     'allowedModels',
     'expectedContext',
@@ -999,6 +1037,11 @@ function contributionPatch(value: Record<string, unknown>): {
       : value.maxSharedRequestsPerWindow === null
         ? { maxSharedRequestsPerWindow: null }
         : { maxSharedRequestsPerWindow: requiredInteger(value, 'maxSharedRequestsPerWindow') },
+    ...value.weeklySharedEstimatedApiCostLimitMicros === undefined
+      ? {}
+      : value.weeklySharedEstimatedApiCostLimitMicros === null
+        ? { weeklySharedEstimatedApiCostLimitMicros: null }
+        : { weeklySharedEstimatedApiCostLimitMicros: requiredInteger(value, 'weeklySharedEstimatedApiCostLimitMicros') },
     ...value.allowedModels === undefined ? {} : { allowedModels: stringArray(value.allowedModels, 'allowedModels') },
   }
   if (patch.status !== undefined && patch.status !== 'active' && patch.status !== 'paused') throw new Error('status must be active or paused')
@@ -1602,6 +1645,7 @@ class TeamManagementProxy {
       window: { startedAt, endedAt },
       currency: 'USD' as const,
       mine: projectUsageAggregate(item.mine, 'member usage aggregate'),
+      ownedAccounts: item.ownedAccounts === undefined ? [] : projectOwnedAccountUsage(item.ownedAccounts),
     }
     if (role === 'member') return { role, ...base }
     return { role, ...base, team: projectUsageAggregate(item.team, 'Team usage aggregate') }

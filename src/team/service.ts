@@ -1,7 +1,7 @@
 /** Host-owned Team service boundary. */
 
 import type { TeamStore } from './store.ts'
-import { MemoryTeamStore, TeamDailyCreditsLimitError } from './store.ts'
+import { MemoryTeamStore, TeamDailyCreditsLimitError, TeamWeeklyEstimatedCostLimitError } from './store.ts'
 import type { TeamAuthContext } from './store.ts'
 import type {
   TeamContributionCapacityBucketId,
@@ -37,7 +37,11 @@ import { TeamCapacityProvider } from './capacity.ts'
 import { safeTeamErrorMessage } from './safe-message.ts'
 import { openAICodexQuotaBucket } from '../account-allocation.ts'
 import { TEAM_SHARED_CREDIT_RESERVATION } from './credits.ts'
-import type { TeamProviderTokenUsage } from './credits.ts'
+import {
+  estimateTeamUsageCostUsdMicros,
+  TEAM_ESTIMATED_COST_PRICING_CATALOG_VERSION,
+  type TeamProviderTokenUsage,
+} from './credits.ts'
 
 const CAPACITY_MODELS: Readonly<Record<TeamContributionCapacityBucketId, string>> = {
   codex: 'gpt-5-codex',
@@ -359,6 +363,9 @@ export class TeamService {
       if (error instanceof TeamDailyCreditsLimitError) {
         throw new TeamRouteCapacityError(error.message, ['daily_shared_credits_reached'])
       }
+      if (error instanceof TeamWeeklyEstimatedCostLimitError) {
+        throw new TeamRouteCapacityError(error.message, ['weekly_shared_cost_reached'])
+      }
       throw error
     }
   }
@@ -453,7 +460,19 @@ export class TeamService {
     usage?: TeamProviderTokenUsage,
   ): Promise<TeamUsageEventSummary> {
     await this.router.settle(lease, result)
-    return this.store.settleUsageEvent(lease.teamId, lease.id, usageStatus(result), usage)
+    const estimatedCostUsdMicros = usage === undefined
+      ? undefined
+      : estimateTeamUsageCostUsdMicros(lease.model, usage)
+    return this.store.settleUsageEvent(
+      lease.teamId,
+      lease.id,
+      usageStatus(result),
+      usage,
+      estimatedCostUsdMicros === undefined ? undefined : {
+        estimatedCostUsdMicros,
+        pricingCatalogVersion: TEAM_ESTIMATED_COST_PRICING_CATALOG_VERSION,
+      },
+    )
   }
 
   async listUsageEvents(auth: TeamAuthContext, limit = 100): Promise<readonly TeamUsageEventSummary[]> {

@@ -10,12 +10,15 @@ import type {
 
 export const MAX_PERSONAL_RESERVE_PERCENT = 99
 export const MAX_SHARED_REQUESTS_PER_WINDOW = 1_000_000
+export const MIN_WEEKLY_LIMIT_USD_MICROS = 10_000
+export const MAX_WEEKLY_LIMIT_USD_MICROS = 10_000_000_000
 export const MAX_ALLOWED_MODELS = 32
 export const MAX_ALLOWED_MODEL_LENGTH = 120
 
 export interface ContributionProtectionDraft {
   readonly reserve: string
   readonly requestCap: string
+  readonly weeklyLimitUsd?: string
   readonly models: string
 }
 
@@ -46,11 +49,12 @@ export type ContributionProtectionDraftResult = {
   readonly patch: {
     readonly personalReservePercent: number
     readonly maxSharedRequestsPerWindow: number | null
+    readonly weeklySharedEstimatedApiCostLimitMicros: number | null
     readonly allowedModels: readonly string[]
   }
 } | {
   readonly ok: false
-  readonly field: 'reserve' | 'requestCap' | 'allowedModels'
+  readonly field: 'reserve' | 'requestCap' | 'weeklyLimitUsd' | 'allowedModels'
 }
 
 /**
@@ -81,6 +85,18 @@ export function parseContributionProtectionDraft(
     )
   ) return { ok: false, field: 'requestCap' }
 
+  const weeklyLimitText = (draft.weeklyLimitUsd ?? '').trim()
+  const weeklyLimitUsd = weeklyLimitText.length === 0 ? null : Number(weeklyLimitText)
+  const weeklyLimitMicros = weeklyLimitUsd === null ? null : Math.round(weeklyLimitUsd * 1_000_000)
+  if (
+    weeklyLimitMicros !== null
+    && (weeklyLimitUsd === null
+      || !Number.isFinite(weeklyLimitUsd)
+      || weeklyLimitMicros < MIN_WEEKLY_LIMIT_USD_MICROS
+      || weeklyLimitMicros > MAX_WEEKLY_LIMIT_USD_MICROS
+      || Math.abs(weeklyLimitMicros / 1_000_000 - weeklyLimitUsd) > Number.EPSILON)
+  ) return { ok: false, field: 'weeklyLimitUsd' }
+
   const allowedModels = draft.models.split(',').map(value => value.trim()).filter(Boolean)
   if (
     allowedModels.length > MAX_ALLOWED_MODELS
@@ -92,6 +108,7 @@ export function parseContributionProtectionDraft(
     patch: {
       personalReservePercent: reserve,
       maxSharedRequestsPerWindow: requestCap,
+      weeklySharedEstimatedApiCostLimitMicros: weeklyLimitMicros,
       allowedModels,
     },
   }

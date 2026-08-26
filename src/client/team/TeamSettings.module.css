@@ -33,6 +33,74 @@
   gap: 20px;
 }
 
+.teamLanding {
+  display: flex;
+  min-height: 168px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  border: 1px solid var(--team-line);
+  border-radius: 14px;
+  padding: 28px 32px;
+  background: var(--team-layer);
+}
+
+.teamLandingCopy {
+  min-width: 0;
+}
+
+.teamLandingTitle {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--team-ink);
+  font-size: 24px;
+  font-weight: 680;
+  letter-spacing: -0.02em;
+  line-height: 32px;
+}
+
+.teamLandingHint {
+  max-width: 620px;
+  margin: 18px 0 0;
+  color: var(--team-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.teamSettingsTrigger,
+.workspaceBack {
+  min-height: 44px;
+  border: 1px solid var(--team-line);
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: var(--team-layer);
+  color: var(--team-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 20px;
+}
+
+.teamSettingsTrigger {
+  flex: 0 0 auto;
+}
+
+.teamSettingsTrigger:hover,
+.teamSettingsTrigger:focus-visible,
+.workspaceBack:hover,
+.workspaceBack:focus-visible {
+  border-color: color-mix(in srgb, var(--team-blue) 38%, var(--team-line));
+  background: color-mix(in srgb, var(--team-blue) 6%, var(--team-layer));
+}
+
+.workspaceBack {
+  margin: 0 0 18px;
+  border-color: transparent;
+  padding-inline: 0 10px;
+  color: var(--team-muted);
+}
+
 .workspaceShell {
   display: grid;
   min-height: 620px;
@@ -1400,6 +1468,44 @@
 
 .accountCard[data-mine='true'] {
   border-color: color-mix(in srgb, var(--team-blue) 35%, var(--team-line));
+}
+
+.weeklyAmount {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.inlineEdit {
+  border: 0;
+  padding: 0 2px;
+  color: var(--dsh-color-text-secondary, #666);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.recentRequestList {
+  display: grid;
+  gap: 10px;
+}
+
+.recentRequest {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--dsh-color-border, #ddd);
+  border-radius: 10px;
+}
+
+.recentRequest > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--dsh-color-text-secondary, #666);
 }
 
 .accountHeader {
