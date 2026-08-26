@@ -646,6 +646,7 @@ describe('Team control-plane routes', () => {
         currency: 'USD',
         team: emptyUsage,
         mine: emptyUsage,
+        ownedAccounts: [],
       },
     })
 
@@ -667,6 +668,7 @@ describe('Team control-plane routes', () => {
         window: { startedAt: expect.any(Number), endedAt: expect.any(Number) },
         currency: 'USD',
         mine: emptyUsage,
+        ownedAccounts: [],
       },
     })
     expect(memberAudit.body).not.toHaveProperty('team')

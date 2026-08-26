@@ -12,6 +12,7 @@ const team = {
   id: 'team-1',
   name: 'Team Web Smoke',
   status: 'active',
+  lifecycleRevision: 1,
   createdAt: 1,
 }
 
@@ -161,6 +162,48 @@ describe('Team-enabled stock DSH Web smoke', () => {
 
     await expect(runTeamWebSmoke({ fetch: fakeFetch, baseUrl }))
       .rejects.toThrowError(expect.not.stringContaining(leaked))
+  })
+
+  it('rejects an obsolete Team overview without lifecycleRevision', async () => {
+    let keyConfigured = true
+    const fakeFetch: typeof globalThis.fetch = async (input) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/team-client/status')) {
+        return json({
+          enabled: true,
+          keyConfigured,
+          keyWritable: true,
+          pendingJoinConfigured: false,
+          serverOrigin: new URL(baseUrl).origin,
+        })
+      }
+      if (path.endsWith('/team-client/overview')) {
+        return json({
+          team: {
+            id: team.id,
+            name: team.name,
+            status: team.status,
+            createdAt: team.createdAt,
+          },
+          currentMember: owner,
+          members: [{ ...owner, canReceiveOwnership: false }],
+          invites: [],
+          contributions: [],
+        })
+      }
+      if (path.endsWith('/team-client/session')) {
+        return json({ capability: managementCapability, expiresAt: Date.now() + 60_000 })
+      }
+      if (path.endsWith('/team-client/disconnect')) {
+        keyConfigured = false
+        return json({ disconnected: true, remoteRevoked: true })
+      }
+      return json({ error: 'unexpected request' }, 404)
+    }
+
+    await expect(runTeamWebSmoke({ fetch: fakeFetch, baseUrl }))
+      .rejects.toThrow(/lifecycleRevision/u)
+    expect(keyConfigured).toBe(false)
   })
 
   it('disconnects the preconfigured key when the initial overview is invalid', async () => {

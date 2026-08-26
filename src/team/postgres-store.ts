@@ -5,6 +5,7 @@ import { Pool } from 'pg'
 import type { PoolClient, PoolConfig, QueryResultRow } from 'pg'
 import {
   TeamDailyCreditsLimitError,
+  TeamWeeklyEstimatedCostLimitError,
   TEAM_DISSOLUTION_RECOVERY_RATE_LIMIT_MAX_ATTEMPTS,
   TEAM_DISSOLUTION_RECOVERY_RATE_LIMIT_WINDOW_MS,
   TeamDissolutionRecoveryRateLimitError,
@@ -890,6 +891,24 @@ export const POSTGRES_TEAM_MIGRATIONS: readonly PostgresTeamMigration[] = [{
     END
     $dsh_team_runtime_managed_migration$;
   `,
+}, {
+  version: 21,
+  sql: `
+    ALTER TABLE team_contributions
+      ADD COLUMN IF NOT EXISTS weekly_shared_estimated_api_cost_limit_micros bigint;
+    ALTER TABLE team_contributions
+      DROP CONSTRAINT IF EXISTS team_contributions_weekly_shared_estimated_api_cost_limit_check;
+    ALTER TABLE team_contributions
+      ADD CONSTRAINT team_contributions_weekly_shared_estimated_api_cost_limit_check
+      CHECK (weekly_shared_estimated_api_cost_limit_micros IS NULL OR weekly_shared_estimated_api_cost_limit_micros BETWEEN 10000 AND 10000000000);
+    ALTER TABLE team_usage_events
+      ADD COLUMN IF NOT EXISTS reserved_estimated_cost_usd_micros bigint NOT NULL DEFAULT 0;
+    ALTER TABLE team_usage_events
+      DROP CONSTRAINT IF EXISTS team_usage_events_reserved_estimated_cost_check;
+    ALTER TABLE team_usage_events
+      ADD CONSTRAINT team_usage_events_reserved_estimated_cost_check
+      CHECK (reserved_estimated_cost_usd_micros >= 0);
+  `,
 }]
 
 interface TeamRow extends QueryResultRow {
@@ -1133,6 +1152,7 @@ interface ContributionRow extends QueryResultRow {
   personal_reserve_percent: number
   max_shared_requests_per_window: number | null
   daily_shared_credit_limit: string | number | null
+  weekly_shared_estimated_api_cost_limit_micros: string | number | null
   max_shared_concurrency: number
   allowed_models: unknown
   created_at: string | number
@@ -1150,6 +1170,7 @@ interface UsageRow extends QueryResultRow {
   unit: 'request'
   status: TeamUsageEventStatus
   reserved_credits: string | number
+  reserved_estimated_cost_usd_micros: string | number
   credits: string | number | null
   credits_formula_version: 'credits-v1' | null
   total_tokens: string | number | null
@@ -2006,16 +2027,23 @@ export class PostgresTeamStore implements TeamStore {
         dailyCredits: patch.dailySharedCreditLimit === undefined
           ? nullableNumber(account.daily_shared_credit_limit)
           : patch.dailySharedCreditLimit,
+        weeklyCost: patch.weeklySharedEstimatedApiCostLimitMicros === undefined
+          ? nullableNumber(account.weekly_shared_estimated_api_cost_limit_micros)
+          : patch.weeklySharedEstimatedApiCostLimitMicros,
         concurrency: patch.maxSharedConcurrency ?? account.max_shared_concurrency,
         models: patch.allowedModels === undefined ? parseModels(account.allowed_models) : normalizeModels(patch.allowedModels),
       }
       validateContributionLimits(next.reserve, next.maxRequests, next.dailyCredits, next.concurrency)
+      if (next.weeklyCost !== null && (!Number.isSafeInteger(next.weeklyCost) || next.weeklyCost < 10_000 || next.weeklyCost > 10_000_000_000)) {
+        throw new Error('weeklySharedEstimatedApiCostLimitMicros must be null or an integer from 10000 to 10000000000')
+      }
       const result = await client.query<ContributionRow>(`
         UPDATE team_contributions
         SET label = $1, status = $2, personal_reserve_percent = $3,
             max_shared_requests_per_window = $4, daily_shared_credit_limit = $5,
-            max_shared_concurrency = $6, allowed_models = $7::jsonb, updated_at = $8
-        WHERE id = $9 AND team_id = $10
+            weekly_shared_estimated_api_cost_limit_micros = $6,
+            max_shared_concurrency = $7, allowed_models = $8::jsonb, updated_at = $9
+        WHERE id = $10 AND team_id = $11
         RETURNING *
       `, [
         next.label,
@@ -2023,6 +2051,7 @@ export class PostgresTeamStore implements TeamStore {
         next.reserve,
         next.maxRequests,
         next.dailyCredits,
+        next.weeklyCost,
         next.concurrency,
         JSON.stringify(next.models),
         this.now(),
@@ -2100,6 +2129,8 @@ export class PostgresTeamStore implements TeamStore {
       }
       const shared = account.owner_member_id !== member.id
       const effectiveReservation = shared ? reservedCredits : 0
+      const weeklyLimit = nullableNumber(account.weekly_shared_estimated_api_cost_limit_micros)
+      const estimatedCostReservation = shared && weeklyLimit !== null ? Math.min(weeklyLimit, 250_000) : 0
       const dailyLimit = nullableNumber(account.daily_shared_credit_limit)
       if (shared && dailyLimit !== null) {
         const now = this.now()
@@ -2118,15 +2149,33 @@ export class PostgresTeamStore implements TeamStore {
           throw new TeamDailyCreditsLimitError()
         }
       }
+      if (shared && weeklyLimit !== null) {
+        const now = this.now()
+        const weekStart = utcIsoWeekStart(now)
+        const used = await client.query<{ cost_used: string | number }>(`
+          SELECT COALESCE(SUM(
+            CASE WHEN status = 'in_progress' THEN reserved_estimated_cost_usd_micros ELSE COALESCE(estimated_cost_usd_micros, 0) END
+          ), 0) AS cost_used
+          FROM team_usage_events
+          WHERE team_id = $1 AND upstream_account_id = $2
+            AND consumer_member_id <> upstream_owner_member_id
+            AND started_at >= $3 AND started_at < $4
+        `, [member.team_id, account.id, weekStart, weekStart + 7 * 86_400_000])
+        if (numberValue(used.rows[0]?.cost_used ?? 0) + estimatedCostReservation > weeklyLimit) {
+          throw new TeamWeeklyEstimatedCostLimitError()
+        }
+      }
       const result = await client.query<UsageRow>(`
         INSERT INTO team_usage_events
           (id, team_id, consumer_member_id, upstream_owner_member_id,
-           upstream_account_id, model, unit, status, reserved_credits, started_at, finished_at)
-        VALUES ($1, $2, $3, $4, $5, $6, 'request', 'in_progress', $7, $8, NULL)
+           upstream_account_id, model, unit, status, reserved_credits,
+           reserved_estimated_cost_usd_micros, started_at, finished_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'request', 'in_progress', $7, $8, $9, NULL)
         RETURNING *
       `, [
         nonEmpty(eventId, 'eventId', 128), member.team_id, member.id, account.owner_member_id,
-        account.id, nonEmpty(model, 'model', MAX_MODEL_NAME_LENGTH), effectiveReservation, this.now(),
+        account.id, nonEmpty(model, 'model', MAX_MODEL_NAME_LENGTH), effectiveReservation,
+        estimatedCostReservation, this.now(),
       ])
       return summaryUsage(requiredRow(result.rows[0], 'usage event'))
     })
@@ -2165,9 +2214,13 @@ export class PostgresTeamStore implements TeamStore {
         if (event.status === status) return summaryUsage(event)
         throw new Error('usage event is already settled')
       }
+      if (status !== 'cancelled' && estimatedCostUsdMicros === null && numberValue(event.reserved_estimated_cost_usd_micros) > 0) {
+        estimatedCostUsdMicros = String(numberValue(event.reserved_estimated_cost_usd_micros))
+        pricingCatalogVersion = 'admission-reservation-v1'
+      }
       const result = await client.query<UsageRow>(`
         UPDATE team_usage_events
-        SET status = $1, reserved_credits = 0,
+        SET status = $1, reserved_credits = 0, reserved_estimated_cost_usd_micros = 0,
             credits = $2, credits_formula_version = $3,
             total_tokens = $4, estimated_cost_usd_micros = $5,
             pricing_catalog_version = $6, finished_at = $7
@@ -2286,8 +2339,42 @@ export class PostgresTeamStore implements TeamStore {
       }
 
       const mine = await readAggregate(member.id)
+      const ownedWindowStartedAt = endedAt - 7 * 86_400_000
+      const ownedRows = await client.query<UsageRow>(`
+        SELECT usage.*
+        FROM team_usage_events AS usage
+        INNER JOIN team_contributions AS contribution
+          ON contribution.id = usage.upstream_account_id
+        WHERE usage.team_id = $1
+          AND contribution.owner_member_id = $2
+          AND contribution.status <> 'revoked'
+          AND usage.consumer_member_id <> usage.upstream_owner_member_id
+          AND usage.started_at >= $3 AND usage.started_at <= $4
+        ORDER BY usage.started_at DESC
+      `, [team.id, member.id, ownedWindowStartedAt, endedAt])
+      const ownedAccountIds = [...new Set(ownedRows.rows.map(row => row.upstream_account_id))]
+      const ownedAccounts = ownedAccountIds.map(accountId => {
+        const rows = ownedRows.rows.filter(row => row.upstream_account_id === accountId)
+        return {
+          accountId,
+          window: { startedAt: ownedWindowStartedAt, endedAt },
+          aggregate: aggregateUsageRows(rows),
+          recentRequests: rows.slice(0, 10).map(row => {
+            const event = summaryUsage(row)
+            return {
+              id: event.id,
+              model: event.model,
+              status: event.status,
+              startedAt: event.startedAt,
+              ...(event.finishedAt === undefined ? {} : { finishedAt: event.finishedAt }),
+              ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
+              ...(event.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: event.estimatedCostUsdMicros }),
+            }
+          }),
+        }
+      })
       if (member.role !== 'owner') {
-        return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine }
+        return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts }
       }
       return {
         role: 'owner',
@@ -2295,6 +2382,7 @@ export class PostgresTeamStore implements TeamStore {
         currency: 'USD',
         team: await readAggregate(),
         mine,
+        ownedAccounts,
       }
     })
   }
@@ -3268,6 +3356,11 @@ function utcDayStart(timestamp: number): number {
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())
 }
 
+function utcIsoWeekStart(timestamp: number): number {
+  const dayStart = utcDayStart(timestamp)
+  return dayStart - ((new Date(dayStart).getUTCDay() + 6) % 7) * 86_400_000
+}
+
 function nonEmpty(value: string, field: string, maxLength: number): string {
   const result = value.trim().replace(/\s+/gu, ' ')
   if (result.length === 0) throw new Error(`${field} must be a non-empty string`)
@@ -3712,6 +3805,7 @@ function summaryContribution(row: ContributionRow): TeamContributionAccountSumma
     personalReservePercent: row.personal_reserve_percent,
     maxSharedRequestsPerWindow: row.max_shared_requests_per_window,
     dailySharedCreditLimit: nullableNumber(row.daily_shared_credit_limit),
+    weeklySharedEstimatedApiCostLimitMicros: nullableNumber(row.weekly_shared_estimated_api_cost_limit_micros),
     maxSharedConcurrency: row.max_shared_concurrency,
     allowedModels: parseModels(row.allowed_models),
     createdAt: numberValue(row.created_at),
@@ -3778,7 +3872,34 @@ function summaryUsage(row: UsageRow): TeamUsageEventSummary {
     status: row.status,
     ...(credits === undefined ? {} : { credits }),
     ...(row.credits_formula_version === null ? {} : { creditsFormulaVersion: row.credits_formula_version }),
+    ...(row.total_tokens === null ? {} : { totalTokens: numberValue(row.total_tokens) }),
+    ...(row.estimated_cost_usd_micros === null ? {} : { estimatedCostUsdMicros: nonNegativeBigintString(row.estimated_cost_usd_micros, 'stored usage cost') }),
+    ...(row.pricing_catalog_version === null ? {} : { pricingCatalogVersion: row.pricing_catalog_version }),
     startedAt: numberValue(row.started_at),
     ...(finishedAt === undefined ? {} : { finishedAt }),
+  }
+}
+
+function aggregateUsageRows(rows: readonly UsageRow[]): TeamUsageAggregateSummary {
+  let totalTokens = 0n
+  let estimatedCost = 0n
+  let tokenMeasuredRequestCount = 0
+  let pricedRequestCount = 0
+  for (const row of rows) {
+    if (row.total_tokens !== null) {
+      tokenMeasuredRequestCount += 1
+      totalTokens += BigInt(nonNegativeBigintString(row.total_tokens, 'stored usage tokens'))
+    }
+    if (row.estimated_cost_usd_micros !== null) {
+      pricedRequestCount += 1
+      estimatedCost += BigInt(nonNegativeBigintString(row.estimated_cost_usd_micros, 'stored usage cost'))
+    }
+  }
+  return {
+    requestCount: rows.length,
+    tokenMeasuredRequestCount,
+    pricedRequestCount,
+    totalTokens: rows.length === 0 ? '0' : tokenMeasuredRequestCount === 0 ? null : totalTokens.toString(),
+    estimatedCostUsdMicros: rows.length === 0 ? '0' : pricedRequestCount === 0 ? null : estimatedCost.toString(),
   }
 }

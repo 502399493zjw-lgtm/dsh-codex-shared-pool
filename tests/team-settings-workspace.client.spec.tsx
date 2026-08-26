@@ -9,7 +9,11 @@ const { managementApi } = vi.hoisted(() => ({
     overview: vi.fn(),
     acknowledgeDisplayNameMigration: vi.fn(),
     usage: vi.fn(),
+    startOAuth: vi.fn(),
+    cancelOAuth: vi.fn(),
+    reauthorizeOAuth: vi.fn(),
     updateContribution: vi.fn(),
+    revokeContribution: vi.fn(),
     previewInvite: vi.fn(),
     join: vi.fn(),
     recoverJoin: vi.fn(),
@@ -92,6 +96,7 @@ const completeOwnerUsage = {
     totalTokens: '1200000',
     estimatedCostUsdMicros: '1750000',
   },
+  ownedAccounts: [],
 } as const
 
 function translate(key: TeamSettingsKey, params?: Record<string, unknown>): string {
@@ -254,6 +259,21 @@ beforeEach(() => {
     return { migrationVersion, acknowledged: true }
   })
   managementApi.usage.mockResolvedValue(completeOwnerUsage)
+  managementApi.startOAuth.mockResolvedValue({
+    account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
+    method: 'device_code',
+    verificationUrl: 'https://auth.openai.com/device',
+    userCode: 'ABCD-EFGH',
+    expiresAt: NOW + 600_000,
+  })
+  managementApi.cancelOAuth.mockResolvedValue({ account: { ...mine, status: 'revoked' } })
+  managementApi.reauthorizeOAuth.mockResolvedValue({
+    account: { ...mine, status: 'authorizing' },
+    method: 'device_code',
+    verificationUrl: 'https://auth.openai.com/device',
+    userCode: 'ABCD-EFGH',
+    expiresAt: NOW + 600_000,
+  })
   managementApi.updateContribution.mockImplementation(async (accountId: string, patch: { status?: string }) => {
     overviewState = {
       ...overviewState,
@@ -262,6 +282,7 @@ beforeEach(() => {
     }
     return { account: overviewState.contributions.find((account: any) => account.id === accountId) }
   })
+  managementApi.revokeContribution.mockResolvedValue({ account: { ...mine, status: 'revoked' } })
   managementApi.previewInvite.mockResolvedValue({
     teamName: '周末造物局', label: '周末协作', expiresAt: NOW + 86_400_000, teamStatus: 'active',
     joinHandle: `dsh_join_${'a'.repeat(43)}`,
@@ -330,6 +351,10 @@ afterEach(() => {
 })
 
 async function openTeamSettings(view?: 'usage' | 'members' | 'invitations') {
+  const existing = screen.queryByRole('region', { name: zh.teamSettingsTitle })
+  if (existing === null) {
+    fireEvent.click(await screen.findByRole('button', { name: zh.teamSettings }))
+  }
   const settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
   if (view !== undefined) {
     const navigation = within(settings).getByRole('navigation', { name: zh.workspaceNavigation })
@@ -373,20 +398,67 @@ async function submitDissolution() {
 }
 
 describe('Team subscription-pool workspace', () => {
-  it('uses the final Team task navigation without repeating personal account management', async () => {
+  it('opens management only from the Team panel', async () => {
     render(<TeamSettings t={translate} embedded />)
 
-    const navigation = await screen.findByRole('navigation', { name: 'Team 工作区' })
+    const panel = await screen.findByRole('region', { name: '团队面板' })
+    expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
+    expect(within(panel).getByRole('region', { name: zh.accountsNavigation })).toBeDefined()
+    const trigger = within(panel).getByRole('button', { name: zh.teamSettings })
+
+    fireEvent.click(trigger)
+    const settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
+    expect(within(settings).getByText(zh.workspaceKicker)).toBeDefined()
+    expect(within(settings).getByRole('heading', { name: zh.workspaceTitle })).toBeDefined()
+    expect(within(settings).queryByText(zh.workspaceBreadcrumb)).toBeNull()
+    expect(within(settings).getByRole('heading', { name: overviewState.team.name })).toBeDefined()
+    expect(within(settings).getByRole('navigation', { name: zh.workspaceNavigation })).toBeDefined()
+    expect(within(settings).getByRole('button', { name: zh.teamManagement })).toBeDefined()
+    expect(within(settings).queryByRole('button', { name: zh.accountsNavigation })).toBeNull()
+    expect(within(settings).queryByRole('region', { name: zh.accountsNavigation })).toBeNull()
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+    expect(await screen.findByRole('region', { name: '团队面板' })).toBeDefined()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: zh.teamSettings }))
+    expect(screen.getByRole('button', { name: zh.addAccount })).toBeDefined()
+  })
+
+  it('opens only after the Team settings button and returns focus when closed', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
+    const trigger = await screen.findByRole('button', { name: zh.teamSettings })
+
+    fireEvent.click(trigger)
+    expect(screen.getByRole('region', { name: zh.teamSettingsTitle })).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: zh.backToTeam }))
+    expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: zh.teamSettings }))
+  })
+
+  it('keeps account sharing in the Team panel and management behind Team settings', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    expect(screen.queryByRole('navigation', { name: 'Team 工作区' })).toBeNull()
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    expect(within(panel).getByText('个人 Pro')).toBeDefined()
+    expect(within(panel).getByText('备用账号')).toBeDefined()
+    expect(within(panel).queryByText('Mia 的账号')).toBeNull()
+    expect(within(panel).getByRole('button', { name: zh.addAccount })).toBeDefined()
+
+    const settings = await openTeamSettings()
+    const navigation = within(settings).getByRole('navigation', { name: 'Team 工作区' })
     const usageEntry = within(navigation).getByRole('button', { name: '用量' })
     const membersEntry = within(navigation).getByRole('button', { name: '成员' })
     const invitationsEntry = within(navigation).getByRole('button', { name: '邀请码' })
 
     expect(usageEntry.getAttribute('aria-current')).toBe('page')
-    expect(screen.getByRole('region', { name: '用量' })).toBeDefined()
-    expect(screen.queryByRole('region', { name: zh.sharedAccounts })).toBeNull()
-    expect(screen.queryByRole('region', { name: zh.unsharedAccounts })).toBeNull()
-    expect(document.body.textContent).not.toMatch(/个人|容量|Credits|这些数字是什么/u)
+    expect(within(settings).queryByRole('button', { name: '账号' })).toBeNull()
+    expect(within(settings).queryByRole('region', { name: zh.accountsNavigation })).toBeNull()
     expect(fetch).not.toHaveBeenCalled()
+
+    expect(screen.getByRole('region', { name: '用量' })).toBeDefined()
 
     fireEvent.click(membersEntry)
     expect(membersEntry.getAttribute('aria-current')).toBe('page')
@@ -401,7 +473,138 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('heading', { name: '成员' })).toBeNull()
   })
 
-  it('places Team context before task navigation in the document reading order', async () => {
+  it('starts a separate Team account authorization from the post-click account page', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const dialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(dialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
+
+    await waitFor(() => {
+      expect(managementApi.startOAuth).toHaveBeenCalledWith('朋友 Pro', expectedContext())
+    })
+    expect(await screen.findByRole('dialog', { name: zh.deviceTitle })).toBeDefined()
+    expect(screen.getByText('ABCD-EFGH')).toBeDefined()
+  })
+
+  it('edits sharing limits from the owned account card', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
+
+    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    const dialog = screen.getByRole('dialog', { name: zh.editProtection })
+    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+
+    await waitFor(() => {
+      expect(managementApi.updateContribution).toHaveBeenCalledWith('mine-active', {
+        personalReservePercent: 30,
+        maxSharedRequestsPerWindow: null,
+        weeklySharedEstimatedApiCostLimitMicros: null,
+        allowedModels: [],
+      }, expectedContext())
+    })
+  })
+
+  it('shows an immediate saving state while sharing limits are being updated', async () => {
+    let resolveUpdate!: (value: { account: typeof mine }) => void
+    managementApi.updateContribution.mockImplementationOnce(() => new Promise(resolve => {
+      resolveUpdate = resolve
+    }))
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+
+    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    const dialog = screen.getByRole('dialog', { name: zh.editProtection })
+    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+
+    const saving = await within(dialog).findByRole('button', { name: zh.savingContribution })
+    expect(saving).toHaveProperty('disabled', true)
+    expect(saving.getAttribute('aria-busy')).toBe('true')
+
+    resolveUpdate({ account: { ...mine, personalReservePercent: 30 } })
+    await waitFor(() => { expect(screen.queryByRole('dialog', { name: zh.editProtection })).toBeNull() })
+  })
+
+  it('shows which account action is pending while sharing is being stopped', async () => {
+    let resolveUpdate!: (value: { account: typeof mine }) => void
+    managementApi.updateContribution.mockImplementationOnce(() => new Promise(resolve => {
+      resolveUpdate = resolve
+    }))
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+
+    fireEvent.click(within(account).getByRole('button', { name: zh.pauseContribution }))
+
+    const stopping = await within(account).findByRole('button', { name: zh.stoppingContribution })
+    expect(stopping).toHaveProperty('disabled', true)
+    expect(stopping.getAttribute('aria-busy')).toBe('true')
+
+    resolveUpdate({ account: { ...mine, status: 'paused' } })
+    await waitFor(() => {
+      expect(managementApi.updateContribution).toHaveBeenCalledWith(
+        mine.id,
+        { status: 'paused' },
+        expectedContext(),
+      )
+    })
+  })
+
+  it('shows weekly spend and recent requests in the Team panel', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: overviewState.contributions.map((account: any) => account.id === mine.id
+        ? { ...account, weeklySharedEstimatedApiCostLimitMicros: 1_000_000 }
+        : account),
+    }
+    managementApi.usage.mockResolvedValueOnce({
+      ...completeOwnerUsage,
+      ownedAccounts: [{
+        accountId: mine.id,
+        label: mine.label,
+        aggregate: {
+          requestCount: 3,
+          tokenMeasuredRequestCount: 3,
+          pricedRequestCount: 3,
+          totalTokens: '12500',
+          estimatedCostUsdMicros: '157500',
+        },
+        recentRequests: [{
+          id: 'recent-1',
+          model: 'gpt-5-codex',
+          status: 'succeeded',
+          startedAt: NOW - 60_000,
+          totalTokens: '2500',
+          estimatedCostUsdMicros: '31500',
+        }],
+      }],
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+    expect(within(account).getByText(/本周约.*0\.16.*\/.*1\.00/u)).toBeDefined()
+    expect(within(account).getByText('近 7 天：3 次请求 · 12500 tokens')).toBeDefined()
+    expect(within(account).queryByText(/共享上限|（估算）/u)).toBeNull()
+
+    fireEvent.click(within(account).getByRole('button', { name: zh.edit }))
+    expect((within(screen.getByRole('dialog', { name: zh.editProtection }))
+      .getByLabelText(zh.weeklyLimitLabel) as HTMLInputElement).value).toBe('1')
+    fireEvent.click(within(screen.getByRole('dialog', { name: zh.editProtection })).getByRole('button', { name: zh.cancel }))
+
+    fireEvent.click(within(account).getByRole('button', { name: zh.recentRequests }))
+    const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
+    expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
+    expect(within(recent).getByText('2500 tokens')).toBeDefined()
+  })
+
+  it('places the workspace rail before Team context in the document reading order', async () => {
     render(<TeamSettings t={translate} embedded />)
 
     const settings = await openTeamSettings()
@@ -409,7 +612,7 @@ describe('Team subscription-pool workspace', () => {
     const navigation = within(settings).getByRole('navigation', { name: zh.workspaceNavigation })
 
     expect(context).not.toBeNull()
-    expect(context!.compareDocumentPosition(navigation) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(navigation.compareDocumentPosition(context!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
   it('shows the one-time display-name migration notice until the server ACK succeeds', async () => {
@@ -423,11 +626,11 @@ describe('Team subscription-pool workspace', () => {
     }))
     render(<TeamSettings t={translate} embedded />)
 
-    const workspaceNoticeTitle = await screen.findByText('你的成员名称已更新')
+    const settings = await openTeamSettings('usage')
+    const workspaceNoticeTitle = await within(settings).findByText('你的成员名称已更新')
     expect(workspaceNoticeTitle.parentElement?.getAttribute('aria-live')).toBe('polite')
     expect(screen.getByText(/当前的成员名称是「Edison」/u)).toBeDefined()
 
-    const settings = await openTeamSettings()
     expect(within(settings).getByText('你的成员名称已更新')).toBeDefined()
     expect(within(settings).getByText(/当前的成员名称是「Edison」/u)).toBeDefined()
     expect(within(settings).queryByText(/原名称|旧名称|repair|migration/iu)).toBeNull()
@@ -453,7 +656,7 @@ describe('Team subscription-pool workspace', () => {
     }))
     render(<TeamSettings t={translate} embedded />)
 
-    const settings = await openTeamSettings()
+    const settings = await openTeamSettings('usage')
     fireEvent.click(within(settings).getByRole('button', { name: '知道了' }))
     await waitFor(() => { expect(managementApi.acknowledgeDisplayNameMigration).toHaveBeenCalledWith(20, expectedContext()) })
 
@@ -478,7 +681,7 @@ describe('Team subscription-pool workspace', () => {
     }
     render(<TeamSettings t={translate} embedded />)
 
-    const settings = await openTeamSettings()
+    const settings = await openTeamSettings('usage')
     const delayedOverview = {
       ...overviewState,
       currentMember: { ...overviewState.currentMember, displayName: 'Edison' },
@@ -520,7 +723,7 @@ describe('Team subscription-pool workspace', () => {
     }
     render(<TeamSettings t={translate} embedded />)
 
-    const settings = await openTeamSettings()
+    const settings = await openTeamSettings('usage')
     let resolveStaleStatus: ((value: {
       enabled: boolean
       keyConfigured: boolean
@@ -625,7 +828,7 @@ describe('Team subscription-pool workspace', () => {
     }))
     render(<TeamSettings t={translate} embedded />)
 
-    const settings = await openTeamSettings()
+    const settings = await openTeamSettings('usage')
     fireEvent.click(within(settings).getByRole('button', { name: '知道了' }))
     await waitFor(() => {
       expect(managementApi.acknowledgeDisplayNameMigration).toHaveBeenCalledWith(20, expectedContext())
@@ -698,16 +901,17 @@ describe('Team subscription-pool workspace', () => {
   })
 
   it('keeps a configured but invalid Team key out of onboarding and lets the user clear it locally', async () => {
-    managementApi.status
-      .mockResolvedValueOnce({
-        enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false,
-        serverOrigin: 'https://team.example.test',
-        serverOrigin: 'https://team.example.test',
-      })
-      .mockResolvedValue({
+    managementApi.status.mockResolvedValue({
+      enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false,
+      serverOrigin: 'https://team.example.test',
+    })
+    managementApi.disconnect.mockImplementationOnce(async () => {
+      managementApi.status.mockResolvedValue({
         enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
         serverOrigin: 'https://team.example.test',
       })
+      return { ok: true, remoteRevoked: false }
+    })
     managementApi.overview.mockRejectedValue(Object.assign(new Error('Team API key is revoked'), { status: 401 }))
 
     render(<TeamSettings t={translate} embedded />)
@@ -725,8 +929,9 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('周末造物局')).toBeDefined()
-    expect(screen.getByText('用量暂时无法获取')).toBeDefined()
+    const settings = await openTeamSettings('usage')
+    expect(within(settings).getByText('周末造物局')).toBeDefined()
+    expect(within(settings).getByText('用量暂时无法获取')).toBeDefined()
     expect(screen.queryByText('usage temporarily unavailable')).toBeNull()
     expect(screen.getByRole('button', { name: zh.retry })).toBeDefined()
     expect(screen.queryByRole('button', { name: zh.previewInvitation })).toBeNull()
@@ -1169,10 +1374,10 @@ describe('Team subscription-pool workspace', () => {
     managementApi.setTeamStatus.mockRejectedValueOnce(Object.assign(new Error('remote Team connection is terminal'), { status: 410 }))
     render(<TeamSettings t={translate} embedded />)
 
-    const usage = await screen.findByRole('region', { name: zh.usageSectionTitle })
+    const settings = await openTeamSettings('usage')
+    const usage = within(settings).getByRole('region', { name: zh.usageSectionTitle })
     fireEvent.click(within(usage).getByRole('button', { name: zh.refresh }))
     await waitFor(() => { expect(managementApi.overview).toHaveBeenCalledTimes(2) })
-    const settings = await openTeamSettings()
     openTeamManagement(settings)
     fireEvent.click(screen.getByRole('menuitem', { name: zh.pauseTeam }))
     fireEvent.click(within(screen.getByRole('dialog', { name: '暂停“周末造物局”？' })).getByRole('button', { name: '确认暂停' }))
@@ -1203,7 +1408,8 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    const usage = await screen.findByRole('region', { name: '用量' })
+    const settings = await openTeamSettings('usage')
+    const usage = within(settings).getByRole('region', { name: '用量' })
     expect(within(usage).queryByRole('group', { name: zh.teamUsage })).toBeNull()
     const mineUsage = within(usage).getByRole('group', { name: zh.myTeamUsage })
     expect(within(mineUsage).getByText('US$1.75')).toBeDefined()
@@ -1250,7 +1456,8 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    const mineUsage = within(await screen.findByRole('region', { name: '用量' }))
+    const settings = await openTeamSettings('usage')
+    const mineUsage = within(within(settings).getByRole('region', { name: '用量' }))
       .getByRole('group', { name: zh.myTeamUsage })
     expect(within(mineUsage).getByText(state)).toBeDefined()
     if (amount === tokens) {
@@ -1273,7 +1480,8 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    let usage = await screen.findByRole('region', { name: '用量' })
+    const settings = await openTeamSettings('usage')
+    let usage = within(settings).getByRole('region', { name: '用量' })
     expect(within(usage).getByText('US$5.88')).toBeDefined()
     fireEvent.click(within(usage).getByRole('button', { name: zh.refresh }))
 
@@ -1291,7 +1499,8 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    const usage = await screen.findByRole('region', { name: '用量' })
+    const settings = await openTeamSettings('usage')
+    const usage = within(settings).getByRole('region', { name: '用量' })
     expect(screen.getByText(/Team 已暂停/u)).toBeDefined()
     expect(usage.textContent).toContain('US$5.88')
     expect(managementApi.usage).toHaveBeenCalledTimes(1)

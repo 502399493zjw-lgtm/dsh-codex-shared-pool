@@ -34,6 +34,7 @@ export interface TeamRouteLease {
   readonly sessionId: string
   readonly consumerMemberId: string
   readonly accountId: string
+  readonly model: string
   readonly source: TeamRouteSource
   readonly reservedAt: number
 }
@@ -221,6 +222,7 @@ export class TeamRequestRouter implements TeamRequestAdmissionRouter {
       sessionId: request.sessionId,
       consumerMemberId: request.consumerMemberId,
       accountId: candidate.account.id,
+      model: request.model,
       source,
       reservedAt: this.now(),
     }

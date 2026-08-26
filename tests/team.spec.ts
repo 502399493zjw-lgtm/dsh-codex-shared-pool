@@ -1472,6 +1472,30 @@ describe('Team control plane', () => {
       .rejects.toThrow(/not active/u)
   })
 
+  it('enforces the weekly estimated-cost limit for shared use and releases cancelled reservations', async () => {
+    const store = new MemoryTeamStore({ now: () => Date.UTC(2026, 7, 24, 12) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const created = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.updateContributionAccount(owner, created.id, {
+      weeklySharedEstimatedApiCostLimitMicros: 100_000,
+    })
+    const account = await store.setContributionAccountStatus(owner.teamId, created.id, 'active')
+
+    await store.beginUsageEvent(friend, 'weekly-held', account.id, 'gpt-5-codex')
+    await expect(store.beginUsageEvent(friend, 'weekly-blocked', account.id, 'gpt-5-codex'))
+      .rejects.toThrow(/weekly shared estimated API cost limit/iu)
+    await expect(store.beginUsageEvent(owner, 'owner-own', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+
+    await store.settleUsageEvent(owner.teamId, 'weekly-held', 'cancelled')
+    await expect(store.beginUsageEvent(friend, 'weekly-after-cancel', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+  })
+
   it('aggregates shared account use for a rolling day and seven UTC calendar days', async () => {
     const current = Date.UTC(2026, 7, 20, 12)
     let now = current - 25 * 60 * 60 * 1_000
@@ -1592,6 +1616,7 @@ describe('Team control plane', () => {
         totalTokens: '50',
         estimatedCostUsdMicros: null,
       },
+      ownedAccounts: expect.any(Array),
     })
     await expect(store.readUsageProjection(friend)).resolves.toEqual({
       role: 'member',
@@ -1604,7 +1629,25 @@ describe('Team control plane', () => {
         totalTokens: '120',
         estimatedCostUsdMicros: '1234',
       },
+      ownedAccounts: expect.any(Array),
     })
+    const ownerOwnedUsage = (await store.readUsageProjection(owner)).ownedAccounts
+    expect(ownerOwnedUsage).toHaveLength(1)
+    expect(ownerOwnedUsage[0]).toMatchObject({
+      accountId: ownerAccount.id,
+      aggregate: {
+        requestCount: 2,
+        tokenMeasuredRequestCount: 1,
+        pricedRequestCount: 1,
+        totalTokens: '120',
+        estimatedCostUsdMicros: '1234',
+      },
+      recentRequests: expect.arrayContaining([
+        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model' }),
+        expect.objectContaining({ id: 'friend-unmeasured', model: 'untrusted-request-model' }),
+      ]),
+    })
+    expect(JSON.stringify(ownerOwnedUsage)).not.toContain(friend.memberId)
 
     await lifecycleStore(store).setTeamStatus(owner, {
       operationId: '00000000-0000-4000-8000-000000000706',

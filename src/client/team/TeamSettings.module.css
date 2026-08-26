@@ -7,6 +7,7 @@
   --team-muted: var(--dsw-alias-label-secondary, #646a73);
   --team-faint: var(--dsw-alias-label-tertiary, #8f959e);
   --team-line: var(--dsw-alias-border-subtle, rgba(31, 35, 41, 0.12));
+  --team-line-strong: var(--dsw-alias-border-default, rgba(31, 35, 41, 0.2));
   --team-layer: var(--dsw-alias-bg-layer-1, #fff);
   --team-layer-soft: var(--dsw-alias-bg-layer-2, #f5f6f7);
   box-sizing: border-box;
@@ -33,45 +34,31 @@
   gap: 20px;
 }
 
-.workspaceShell {
-  display: grid;
-  min-height: 620px;
-  grid-template-columns: minmax(190px, 226px) minmax(0, 1fr);
-  grid-template-areas:
-    'brand context'
-    'navigation body';
-  grid-template-rows: auto 1fr;
-  overflow: visible;
+.teamPanel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0;
   border: 1px solid var(--team-line);
   border-radius: 14px;
   background: var(--team-layer);
 }
 
-.workspaceRail {
-  display: contents;
-}
-
-.workspaceBrand {
+.teamContext {
   display: flex;
-  grid-area: brand;
-  flex-direction: column;
-  gap: 4px;
-  border-right: 1px solid var(--team-line);
-  border-radius: 14px 0 0;
-  padding: 28px 28px 18px;
-  background: color-mix(in srgb, var(--team-layer-soft) 54%, var(--team-layer));
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 28px 32px;
 }
 
-.workspaceKicker {
-  color: var(--team-faint);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  line-height: 16px;
-  text-transform: uppercase;
+.teamContextCopy {
+  min-width: 0;
 }
 
-.workspaceTitle {
+.teamContextTitle {
+  overflow-wrap: anywhere;
+  margin: 0;
   color: var(--team-ink);
   font-size: 24px;
   font-weight: 680;
@@ -79,16 +66,94 @@
   line-height: 32px;
 }
 
-.workspaceNavigation {
+.teamAccounts {
+  min-width: 0;
+  border-top: 1px solid var(--team-line);
+  padding: 24px 32px 32px;
+}
+
+.teamSettingsTrigger,
+.workspaceBack {
+  min-height: 44px;
+  border: 1px solid var(--team-line);
+  border-radius: 9px;
+  padding: 10px 14px;
+  background: var(--team-layer);
+  color: var(--team-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 20px;
+}
+
+.teamSettingsTrigger {
+  flex: 0 0 auto;
+}
+
+.teamSettingsTrigger:hover,
+.teamSettingsTrigger:focus-visible,
+.workspaceBack:hover,
+.workspaceBack:focus-visible {
+  border-color: color-mix(in srgb, var(--team-blue) 38%, var(--team-line));
+  background: color-mix(in srgb, var(--team-blue) 6%, var(--team-layer));
+}
+
+.workspaceBack {
+  flex: 0 0 auto;
+  margin: 0;
+  border-color: transparent;
+  padding-inline: 8px 10px;
+  color: var(--team-muted);
+}
+
+.workspaceShell {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(132px, 152px) minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--team-line);
+  border-radius: 14px;
+  background: var(--team-layer);
+}
+
+.workspaceRail {
   display: flex;
-  grid-area: navigation;
   min-width: 0;
   flex-direction: column;
-  gap: 4px;
   border-right: 1px solid var(--team-line);
-  border-radius: 0 0 0 14px;
-  padding: 10px 18px 28px;
-  background: color-mix(in srgb, var(--team-layer-soft) 54%, var(--team-layer));
+  padding: 24px 13px;
+  background: color-mix(in srgb, var(--team-layer-soft) 72%, var(--team-layer));
+}
+
+.workspaceBrand {
+  padding: 0 10px;
+}
+
+.workspaceKicker {
+  margin: 0 0 2px;
+  color: var(--team-faint);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  line-height: 16px;
+}
+
+.workspaceTitle {
+  margin: 0 0 23px;
+  color: var(--team-ink);
+  font-size: 21px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 28px;
+}
+
+.workspaceNavigation {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 0;
+  background: transparent;
 }
 
 .workspaceNavigation button {
@@ -96,8 +161,8 @@
   width: 100%;
   min-height: 44px;
   border: 0;
-  border-radius: 9px;
-  padding: 10px 32px 10px 14px;
+  border-radius: 8px;
+  padding: 10px 12px;
   background: transparent;
   color: var(--team-muted);
   cursor: pointer;
@@ -114,7 +179,7 @@
 }
 
 .workspaceNavigation button[aria-current='page'] {
-  background: var(--team-layer-soft);
+  background: color-mix(in srgb, var(--team-blue) 7%, var(--team-layer-soft));
   color: var(--team-ink);
   font-weight: 650;
 }
@@ -122,39 +187,48 @@
 .workspaceNavigation button[aria-current='page']::after {
   position: absolute;
   top: 50%;
-  right: 14px;
-  width: 6px;
-  height: 6px;
+  right: 11px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
+  transform: translateY(-50%);
   background: var(--team-blue);
   content: '';
-  transform: translateY(-50%);
 }
 
 .workspaceMain {
-  display: contents;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 27px 28px 44px;
 }
 
 .workspaceBody {
   display: flex;
-  grid-area: body;
   min-width: 0;
   flex-direction: column;
   gap: 28px;
-  padding: 0 40px 42px;
+  padding: 24px 0 0;
 }
 
 .workspaceHeader {
   display: flex;
-  grid-area: context;
   min-width: 0;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  padding: 32px 40px 28px;
+  gap: 16px;
+  padding: 0 0 22px;
 }
 
 .workspaceHeaderCopy {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.workspaceIdentity {
   min-width: 0;
 }
 
@@ -169,17 +243,17 @@
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--team-ink);
-  font-size: 28px;
+  font-size: clamp(25px, 4.4cqi, 32px);
   font-weight: 680;
   letter-spacing: -0.025em;
-  line-height: 36px;
+  line-height: 1.12;
 }
 
 .workspaceMeta {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  margin-top: 12px;
+  margin-top: 4px;
   color: var(--team-muted);
   font-size: 12px;
   line-height: 18px;
@@ -207,7 +281,14 @@
 }
 
 .teamMenu > button {
+  width: 44px;
   min-height: 44px;
+  padding-inline: 0;
+}
+
+.teamMenuDots {
+  letter-spacing: 2px;
+  transform: translateX(1px);
 }
 
 .teamMenuPopover {
@@ -310,9 +391,8 @@
 
 .workspaceBody > .usageWorkspace {
   border: 0;
-  border-top: 1px solid var(--team-line);
   border-radius: 0;
-  padding: 24px 0 0;
+  padding: 0;
   background: transparent;
 }
 
@@ -386,6 +466,11 @@
   gap: 14px;
 }
 
+.usageHeader > button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .usageHeading,
 .usageCardTitle {
   margin: 0;
@@ -394,14 +479,17 @@
 }
 
 .usageHeading {
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  line-height: 30px;
 }
 
 .usageCards {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: 0;
+  border-top: 1px solid var(--team-line-strong);
+  border-bottom: 1px solid var(--team-line-strong);
 }
 
 .usageCards[data-owner='true'] {
@@ -410,15 +498,18 @@
 
 .usageCard {
   min-width: 0;
-  border: 1px solid var(--team-line);
-  border-radius: 11px;
-  padding: 15px;
-  background: var(--team-layer-soft);
+  padding: 24px 0 26px;
+  background: transparent;
+}
+
+.usageCard + .usageCard {
+  border-left: 1px solid var(--team-line);
+  padding-left: 24px;
 }
 
 .usageCardTitle {
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 16px;
+  line-height: 23px;
 }
 
 .usageStatus {
@@ -446,23 +537,27 @@
 
 .usageMetricGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
-  margin: 14px 0 0;
+  margin: 0;
 }
 
 .usageMetric {
   min-width: 0;
-  border-left: 1px solid var(--team-line);
-  padding: 0 12px;
+  margin: 0;
 }
 
 .usageMetric:first-child {
-  border-left: 0;
-  padding-left: 0;
+  padding: 24px 0 20px;
 }
 
-.usageMetric:last-child { padding-right: 0; }
+.usageMetric:not(:first-child) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  border-top: 1px solid var(--team-line);
+  padding: 10px 0;
+}
 
 .usageMetric dt {
   color: var(--team-faint);
@@ -471,15 +566,23 @@
 }
 
 .usageMetric dd {
-  overflow: hidden;
   margin: 3px 0 0;
   color: var(--team-ink);
-  font-size: 15px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
-  font-weight: 650;
-  line-height: 22px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 21px;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.usageMetric:first-child dd {
+  margin-top: 6px;
+  font-size: clamp(24px, 4cqi, 32px);
+  font-weight: 540;
+  letter-spacing: -0.045em;
+  line-height: 1.12;
+  text-align: left;
 }
 
 .usageUnavailable {
@@ -1402,6 +1505,44 @@
   border-color: color-mix(in srgb, var(--team-blue) 35%, var(--team-line));
 }
 
+.weeklyAmount {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-weight: 650;
+}
+
+.inlineEdit {
+  border: 0;
+  padding: 0 2px;
+  color: var(--dsh-color-text-secondary, #666);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.recentRequestList {
+  display: grid;
+  gap: 10px;
+}
+
+.recentRequest {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--dsh-color-border, #ddd);
+  border-radius: 10px;
+}
+
+.recentRequest > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--dsh-color-text-secondary, #666);
+}
+
 .accountHeader {
   display: flex;
   align-items: flex-start;
@@ -1709,56 +1850,32 @@
   animation: team-spin 700ms linear infinite;
 }
 
+.actionSpinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: team-spin 700ms linear infinite;
+}
+
 @keyframes team-spin { to { transform: rotate(360deg); } }
 
 @container team-settings (max-width: 800px) {
-  .workspaceShell {
-    min-height: 0;
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      'context'
-      'navigation'
-      'body';
-    grid-template-rows: auto auto 1fr;
-  }
-
-  .workspaceBrand {
-    display: none;
-  }
-
-  .workspaceNavigation {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    border-right: 0;
-    border-bottom: 1px solid var(--team-line);
-    border-radius: 0;
-    padding: 0 24px 18px;
-    background: var(--team-layer);
-  }
-
-  .workspaceNavigation button {
-    padding-right: 14px;
-    text-align: center;
-  }
-
-  .workspaceNavigation button[aria-current='page']::after {
-    top: auto;
-    right: 50%;
-    bottom: 5px;
-    transform: translateX(50%);
-  }
-
   .workspaceHeader {
-    padding: 26px 24px 22px;
+    padding-bottom: 18px;
   }
 
   .workspaceBody {
-    padding: 26px 24px 34px;
+    padding-top: 22px;
   }
 }
 
 @container team-settings (max-width: 620px) {
-  .workspaceHeader,
+  .teamContext,
   .workspaceSectionHeader,
   .memberRow,
   .inviteRow {
@@ -1768,21 +1885,24 @@
 
   .workspaceBody {
     gap: 24px;
-    padding: 24px 18px 30px;
+    padding-bottom: 30px;
   }
 
-  .workspaceHeader {
-    padding: 24px 18px 20px;
+  .teamContext {
+    padding: 24px 18px;
   }
 
-  .workspaceNavigation {
-    padding-right: 18px;
-    padding-left: 18px;
+  .teamAccounts {
+    padding: 22px 18px 28px;
+  }
+
+  .teamSettingsTrigger {
+    align-self: flex-start;
   }
 
   .workspaceTeamName {
-    font-size: 25px;
-    line-height: 32px;
+    font-size: 20px;
+    line-height: 26px;
   }
 
   .teamMenu,
@@ -1809,40 +1929,101 @@
     padding-left: 0;
   }
 
+}
+
+@container team-settings (max-width: 520px) {
   .usageCards[data-owner='true'] {
     grid-template-columns: 1fr;
   }
+
+  .usageCard + .usageCard {
+    border-top: 1px solid var(--team-line);
+    border-left: 0;
+    padding-left: 0;
+  }
 }
 
-@container team-settings (max-width: 420px) {
-  .workspaceShell {
+@container team-settings (max-width: 460px) {
+  .teamPanel {
     border-right: 0;
     border-left: 0;
     border-radius: 0;
   }
 
-  .workspaceNavigation {
-    grid-template-columns: 1fr;
+  .teamContext,
+  .teamAccounts {
     padding-right: 14px;
     padding-left: 14px;
   }
 
+  .workspaceShell {
+    min-width: 0;
+    grid-template-columns: 1fr;
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .workspaceRail {
+    display: flex;
+    flex-flow: row wrap;
+    align-items: center;
+    gap: 4px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--team-line);
+    padding: 14px;
+  }
+
+  .workspaceBrand {
+    flex: 0 0 100%;
+    padding: 0 6px;
+  }
+
+  .workspaceKicker {
+    display: none;
+  }
+
+  .workspaceTitle {
+    margin: 0 0 4px;
+    font-size: 19px;
+    line-height: 25px;
+  }
+
+  .workspaceNavigation {
+    display: flex;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
   .workspaceNavigation button {
-    padding-right: 32px;
+    width: auto;
+    flex: 0 0 auto;
+    border-radius: 7px;
+    padding: 10px 13px;
     text-align: left;
   }
 
   .workspaceNavigation button[aria-current='page']::after {
-    top: 50%;
-    right: 14px;
-    bottom: auto;
-    transform: translateY(-50%);
+    display: none;
   }
 
-  .workspaceBody,
+  .workspaceMain {
+    padding: 22px 18px 36px;
+  }
+
   .workspaceHeader {
-    padding-right: 14px;
-    padding-left: 14px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspaceHeaderCopy {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .teamMenu {
+    align-self: flex-end;
   }
 
   .workspaceMeta {
@@ -1854,22 +2035,6 @@
     content: none;
   }
 
-  .usageMetricGrid {
-    grid-template-columns: 1fr;
-  }
-
-  .usageMetric,
-  .usageMetric:first-child,
-  .usageMetric:last-child {
-    border-top: 1px solid var(--team-line);
-    border-left: 0;
-    padding: 9px 0;
-  }
-
-  .usageMetric:first-child {
-    border-top: 0;
-    padding-top: 0;
-  }
 }
 
 @media (max-width: 1320px) {
@@ -1877,61 +2042,6 @@
 }
 
 @media (max-width: 860px) {
-  .workspaceShell {
-    min-height: 0;
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      'context'
-      'navigation'
-      'body';
-    grid-template-rows: auto auto 1fr;
-  }
-
-  .workspaceBrand {
-    display: none;
-  }
-
-  .workspaceNavigation {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    border-right: 0;
-    border-bottom: 1px solid var(--team-line);
-    border-radius: 0;
-    padding: 0 24px 18px;
-    background: var(--team-layer);
-  }
-
-  .workspaceNavigation button {
-    padding-right: 14px;
-    text-align: center;
-  }
-
-  .workspaceNavigation button[aria-current='page']::after {
-    top: auto;
-    right: 50%;
-    bottom: 5px;
-    transform: translateX(50%);
-  }
-
-  .workspaceHeader {
-    padding: 26px 24px 22px;
-  }
-
-  .workspaceBody {
-    padding: 26px 24px 34px;
-  }
-
-  .settingsWorkspace {
-    position: fixed;
-    z-index: 3;
-    inset: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
-      max(24px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
-    background: var(--team-layer);
-  }
-
   .dangerZone,
   .ownershipPanel {
     align-items: stretch;
@@ -1945,10 +2055,10 @@
 
 @media (max-width: 720px) {
   .header,
+  .teamContext,
   .sectionHeader,
   .accountHeader,
   .banner,
-  .workspaceHeader,
   .workspaceSectionHeader,
   .settingsPageHeader,
   .settingsStatus,
@@ -1959,33 +2069,16 @@
     flex-direction: column;
   }
 
-  .workspaceBody {
-    gap: 24px;
-    padding: 24px 18px 30px;
+  .teamContext {
+    padding: 24px 18px;
   }
 
-  .workspaceHeader {
-    padding: 24px 18px 20px;
+  .teamAccounts {
+    padding: 22px 18px 28px;
   }
 
-  .workspaceNavigation {
-    padding-right: 18px;
-    padding-left: 18px;
-  }
-
-  .workspaceTeamName {
-    font-size: 25px;
-    line-height: 32px;
-  }
-
-  .teamMenu {
+  .teamSettingsTrigger {
     align-self: flex-start;
-  }
-
-  .teamMenuPopover {
-    right: auto;
-    left: 0;
-    width: min(276px, calc(100vw - 36px));
   }
 
   .workspaceSectionHeader > button {
@@ -2057,67 +2150,26 @@
 
   .routeHint { max-width: none; }
   .previewFacts { grid-template-columns: 1fr; }
-  .usageCards[data-owner='true'] { grid-template-columns: 1fr; }
-
-  .usageMetricGrid { grid-template-columns: 1fr; }
-
-  .usageMetric,
-  .usageMetric:first-child,
-  .usageMetric:last-child {
-    border-top: 1px solid var(--team-line);
-    border-left: 0;
-    padding: 9px 0;
-  }
-
-  .usageMetric:first-child {
-    border-top: 0;
-    padding-top: 0;
-  }
 }
 
 @media (max-width: 420px) {
-  .workspaceShell {
+  .teamPanel {
     border-right: 0;
     border-left: 0;
     border-radius: 0;
   }
 
-  .workspaceNavigation {
-    grid-template-columns: 1fr;
+  .teamContext,
+  .teamAccounts {
     padding-right: 14px;
     padding-left: 14px;
   }
 
-  .workspaceNavigation button {
-    padding-right: 32px;
-    text-align: left;
-  }
-
-  .workspaceNavigation button[aria-current='page']::after {
-    top: 50%;
-    right: 14px;
-    bottom: auto;
-    transform: translateY(-50%);
-  }
-
-  .workspaceBody,
-  .workspaceHeader {
-    padding-right: 14px;
-    padding-left: 14px;
-  }
-
-  .workspaceMeta {
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .workspaceMeta > span + span::before {
-    content: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .spinner { animation: none; }
+  .spinner,
+  .actionSpinner { animation: none; }
 }
 
 .page :global(button:focus-visible),

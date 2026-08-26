@@ -58,6 +58,7 @@ export type TeamContributionCapacityReason =
   | 'shared_concurrency_reached'
   | 'request_cap_reset_unavailable'
   | 'request_cap_reached'
+  | 'weekly_shared_cost_reached'
   | 'runtime_unavailable'
 
 export interface TeamSummary {
@@ -278,6 +279,8 @@ export interface TeamContributionAccountSummary {
   readonly maxSharedRequestsPerWindow: number | null
   /** Optional UTC-day budget for requests consumed by other Team members. */
   readonly dailySharedCreditLimit: number | null
+  /** Optional API-equivalent USD budget for shared requests in one UTC ISO week. */
+  readonly weeklySharedEstimatedApiCostLimitMicros: number | null
   /** Fixed safety guard; not a member consumption quota. */
   readonly maxSharedConcurrency: number
   readonly allowedModels: readonly string[]
@@ -308,6 +311,7 @@ export interface TeamContributionAccountPatch {
   readonly personalReservePercent?: number
   readonly maxSharedRequestsPerWindow?: number | null
   readonly dailySharedCreditLimit?: number | null
+  readonly weeklySharedEstimatedApiCostLimitMicros?: number | null
   readonly maxSharedConcurrency?: number
   readonly allowedModels?: readonly string[]
 }
@@ -337,6 +341,11 @@ export interface TeamUsageEventSummary {
   /** Settled weighted-token Credits. Omitted while unmeasured or in progress. */
   readonly credits?: number
   readonly creditsFormulaVersion?: 'credits-v1'
+  /** Total provider-reported input and output Tokens. */
+  readonly totalTokens?: number
+  /** Estimated standard-API equivalent cost in integer micro-USD. */
+  readonly estimatedCostUsdMicros?: string
+  readonly pricingCatalogVersion?: string
   readonly startedAt: number
   readonly finishedAt?: number
 }
@@ -385,6 +394,25 @@ export interface TeamUsageWindow {
   readonly endedAt: number
 }
 
+/** Browser-safe recent request for an account owned by the current member. */
+export interface TeamOwnedAccountRecentRequest {
+  readonly id: string
+  readonly model: string
+  readonly status: TeamUsageEventStatus
+  readonly startedAt: number
+  readonly finishedAt?: number
+  readonly totalTokens?: number
+  readonly estimatedCostUsdMicros?: string
+}
+
+/** Seven-day projection for one contribution account owned by the current member. */
+export interface TeamOwnedAccountUsageSummary {
+  readonly accountId: string
+  readonly window: TeamUsageWindow
+  readonly aggregate: TeamUsageAggregateSummary
+  readonly recentRequests: readonly TeamOwnedAccountRecentRequest[]
+}
+
 /** Browser-safe role projection. A member response structurally cannot contain Team totals. */
 export type TeamUsageProjection =
   | {
@@ -393,12 +421,14 @@ export type TeamUsageProjection =
       readonly currency: 'USD'
       readonly team: TeamUsageAggregateSummary
       readonly mine: TeamUsageAggregateSummary
+      readonly ownedAccounts: readonly TeamOwnedAccountUsageSummary[]
     }
   | {
       readonly role: 'member'
       readonly window: TeamUsageWindow
       readonly currency: 'USD'
       readonly mine: TeamUsageAggregateSummary
+      readonly ownedAccounts: readonly TeamOwnedAccountUsageSummary[]
     }
 
 /** One-time result returned immediately after a Team bootstrap. */

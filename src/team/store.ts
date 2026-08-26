@@ -68,6 +68,13 @@ export class TeamDailyCreditsLimitError extends Error {
   }
 }
 
+export class TeamWeeklyEstimatedCostLimitError extends Error {
+  constructor() {
+    super('contribution weekly shared estimated API cost limit reached')
+    this.name = 'TeamWeeklyEstimatedCostLimitError'
+  }
+}
+
 /** Expected Owner reveal rejection after the fixed-window allowance is exhausted. */
 export class TeamInviteRevealRateLimitError extends Error {
   constructor(readonly retryAfterSeconds: number) {
@@ -307,6 +314,7 @@ interface ContributionRecord {
   personalReservePercent: number
   maxSharedRequestsPerWindow: number | null
   dailySharedCreditLimit: number | null
+  weeklySharedEstimatedApiCostLimitMicros: number | null
   maxSharedConcurrency: number
   allowedModels: string[]
   createdAt: number
@@ -354,6 +362,7 @@ interface UsageEventRecord {
   unit: 'request'
   status: TeamUsageEventStatus
   reservedCredits: number
+  reservedEstimatedCostUsdMicros: bigint
   credits?: number
   creditsFormulaVersion?: 'credits-v1'
   totalTokens?: number
@@ -383,6 +392,8 @@ const MAX_MODEL_NAME_LENGTH = 120
 const DEFAULT_PERSONAL_RESERVE_PERCENT = 20
 const DEFAULT_MAX_SHARED_CONCURRENCY = 1
 const MAX_DAILY_SHARED_CREDIT_LIMIT = 1_000_000_000_000
+const MIN_WEEKLY_SHARED_ESTIMATED_API_COST_LIMIT_MICROS = 10_000
+const MAX_WEEKLY_SHARED_ESTIMATED_API_COST_LIMIT_MICROS = 10_000_000_000
 
 function nonEmpty(value: string, field: string, maxLength: number): string {
   const result = value.trim().replace(/\s+/gu, ' ')
@@ -563,6 +574,7 @@ function summaryContribution(account: ContributionRecord): TeamContributionAccou
     personalReservePercent: account.personalReservePercent,
     maxSharedRequestsPerWindow: account.maxSharedRequestsPerWindow,
     dailySharedCreditLimit: account.dailySharedCreditLimit,
+    weeklySharedEstimatedApiCostLimitMicros: account.weeklySharedEstimatedApiCostLimitMicros,
     maxSharedConcurrency: account.maxSharedConcurrency,
     allowedModels: [...account.allowedModels],
     createdAt: account.createdAt,
@@ -583,6 +595,9 @@ function summaryUsageEvent(event: UsageEventRecord): TeamUsageEventSummary {
     status: event.status,
     ...(event.credits === undefined ? {} : { credits: event.credits }),
     ...(event.creditsFormulaVersion === undefined ? {} : { creditsFormulaVersion: event.creditsFormulaVersion }),
+    ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
+    ...(event.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: event.estimatedCostUsdMicros.toString() }),
+    ...(event.pricingCatalogVersion === undefined ? {} : { pricingCatalogVersion: event.pricingCatalogVersion }),
     startedAt: event.startedAt,
     ...(event.finishedAt === undefined ? {} : { finishedAt: event.finishedAt }),
   }
@@ -611,6 +626,38 @@ function aggregateUsage(events: readonly UsageEventRecord[]): TeamUsageAggregate
     totalTokens: requestCount === 0 ? '0' : tokenMeasuredRequestCount === 0 ? null : totalTokens.toString(),
     estimatedCostUsdMicros: requestCount === 0 ? '0' : pricedRequestCount === 0 ? null : estimatedCostUsdMicros.toString(),
   }
+}
+
+function ownedAccountUsage(
+  events: readonly UsageEventRecord[],
+  accounts: readonly ContributionRecord[],
+  memberId: string,
+  endedAt: number,
+): TeamUsageProjection['ownedAccounts'] {
+  const startedAt = endedAt - 7 * 86_400_000
+  return accounts
+    .filter(account => account.ownerMemberId === memberId && account.status !== 'revoked')
+    .map(account => {
+      const matching = events
+        .filter(event => event.upstreamAccountId === account.id
+          && event.consumerMemberId !== event.upstreamOwnerMemberId
+          && event.startedAt >= startedAt && event.startedAt <= endedAt)
+        .sort((left, right) => right.startedAt - left.startedAt)
+      return {
+        accountId: account.id,
+        window: { startedAt, endedAt },
+        aggregate: aggregateUsage(matching),
+        recentRequests: matching.slice(0, 10).map(event => ({
+          id: event.id,
+          model: event.model,
+          status: event.status,
+          startedAt: event.startedAt,
+          ...(event.finishedAt === undefined ? {} : { finishedAt: event.finishedAt }),
+          ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
+          ...(event.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: event.estimatedCostUsdMicros.toString() }),
+        })),
+      }
+    })
 }
 
 /**
@@ -1196,6 +1243,7 @@ export class MemoryTeamStore implements TeamStore {
       personalReservePercent: DEFAULT_PERSONAL_RESERVE_PERCENT,
       maxSharedRequestsPerWindow: null,
       dailySharedCreditLimit: null,
+      weeklySharedEstimatedApiCostLimitMicros: null,
       maxSharedConcurrency: DEFAULT_MAX_SHARED_CONCURRENCY,
       allowedModels: [],
       createdAt: now,
@@ -1266,6 +1314,15 @@ export class MemoryTeamStore implements TeamStore {
       }
       account.dailySharedCreditLimit = value
     }
+    if (patch.weeklySharedEstimatedApiCostLimitMicros !== undefined) {
+      const value = patch.weeklySharedEstimatedApiCostLimitMicros
+      if (value !== null && (!Number.isSafeInteger(value)
+        || value < MIN_WEEKLY_SHARED_ESTIMATED_API_COST_LIMIT_MICROS
+        || value > MAX_WEEKLY_SHARED_ESTIMATED_API_COST_LIMIT_MICROS)) {
+        throw new Error('weeklySharedEstimatedApiCostLimitMicros must be null or an integer from 10000 to 10000000000')
+      }
+      account.weeklySharedEstimatedApiCostLimitMicros = value
+    }
     if (patch.maxSharedConcurrency !== undefined) {
       if (!Number.isSafeInteger(patch.maxSharedConcurrency) || patch.maxSharedConcurrency < 1 || patch.maxSharedConcurrency > 16) {
         throw new Error('maxSharedConcurrency must be an integer from 1 to 16')
@@ -1321,8 +1378,8 @@ export class MemoryTeamStore implements TeamStore {
     }
     const shared = account.ownerMemberId !== member.id
     const effectiveReservation = shared ? reservedCredits : 0
+    const startedAt = this.now()
     if (shared && account.dailySharedCreditLimit !== null) {
-      const startedAt = this.now()
       const dayStart = utcDayStart(startedAt)
       const usedCredits = [...this.usageEvents.values()]
         .filter(event => event.teamId === member.teamId
@@ -1335,6 +1392,23 @@ export class MemoryTeamStore implements TeamStore {
         throw new TeamDailyCreditsLimitError()
       }
     }
+    const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros
+    const estimatedCostReservation = shared && weeklyLimit !== null
+      ? BigInt(Math.min(weeklyLimit, 250_000))
+      : 0n
+    if (shared && weeklyLimit !== null) {
+      const weekStart = utcIsoWeekStart(startedAt)
+      const used = [...this.usageEvents.values()]
+        .filter(event => event.teamId === member.teamId
+          && event.upstreamAccountId === account.id
+          && event.consumerMemberId !== event.upstreamOwnerMemberId
+          && event.startedAt >= weekStart
+          && event.startedAt < weekStart + 7 * 86_400_000)
+        .reduce((total, event) => total + (event.status === 'in_progress'
+          ? event.reservedEstimatedCostUsdMicros
+          : (event.estimatedCostUsdMicros ?? 0n)), 0n)
+      if (used + estimatedCostReservation > BigInt(weeklyLimit)) throw new TeamWeeklyEstimatedCostLimitError()
+    }
     const event: UsageEventRecord = {
       id: nonEmpty(eventId, 'eventId', 128),
       teamId: member.teamId,
@@ -1345,7 +1419,8 @@ export class MemoryTeamStore implements TeamStore {
       unit: 'request',
       status: 'in_progress',
       reservedCredits: effectiveReservation,
-      startedAt: this.now(),
+      reservedEstimatedCostUsdMicros: estimatedCostReservation,
+      startedAt,
     }
     this.usageEvents.set(event.id, event)
     return summaryUsageEvent(event)
@@ -1385,7 +1460,11 @@ export class MemoryTeamStore implements TeamStore {
       }
       event.estimatedCostUsdMicros = costEstimate.estimatedCostUsdMicros
       event.pricingCatalogVersion = nonEmpty(costEstimate.pricingCatalogVersion, 'pricingCatalogVersion', 128)
+    } else if (status !== 'cancelled' && event.reservedEstimatedCostUsdMicros > 0n) {
+      event.estimatedCostUsdMicros = event.reservedEstimatedCostUsdMicros
+      event.pricingCatalogVersion = 'admission-reservation-v1'
     }
+    event.reservedEstimatedCostUsdMicros = 0n
     event.finishedAt = this.now()
     return summaryUsageEvent(event)
   }
@@ -1462,8 +1541,14 @@ export class MemoryTeamStore implements TeamStore {
       && event.startedAt >= startedAt
       && event.startedAt <= endedAt)
     const mine = aggregateUsage(sharedInWindow.filter(event => event.consumerMemberId === member.id))
+    const ownedAccounts = ownedAccountUsage(
+      [...this.usageEvents.values()].filter(event => event.teamId === member.teamId),
+      [...this.contributions.values()].filter(account => account.teamId === member.teamId),
+      member.id,
+      endedAt,
+    )
     if (member.role !== 'owner') {
-      return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine }
+      return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts }
     }
     return {
       role: 'owner',
@@ -1471,6 +1556,7 @@ export class MemoryTeamStore implements TeamStore {
       currency: 'USD',
       team: aggregateUsage(sharedInWindow),
       mine,
+      ownedAccounts,
     }
   }
 
@@ -1847,4 +1933,10 @@ export class MemoryTeamStore implements TeamStore {
 function utcDayStart(timestamp: number): number {
   const value = new Date(timestamp)
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())
+}
+
+function utcIsoWeekStart(timestamp: number): number {
+  const dayStart = utcDayStart(timestamp)
+  const day = new Date(dayStart).getUTCDay()
+  return dayStart - ((day + 6) % 7) * 86_400_000
 }

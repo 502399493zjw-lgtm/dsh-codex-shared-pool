@@ -18,7 +18,9 @@ import type {
   TeamDissolutionView,
   TeamManagementInvitePreview,
   TeamManagementInviteRevealResult,
+  TeamManagementContributionSummary,
   TeamManagementMemberSummary,
+  TeamManagementOAuthResult,
   TeamManagementOverview,
   TeamManagementExpectedContext,
   TeamManagementStatus,
@@ -33,6 +35,7 @@ import {
   canMemberLeaveTeam,
   canRemoveTeamMember,
   canTransferTeamOwnership,
+  parseContributionProtectionDraft,
 } from './team-settings-contract.ts'
 import styles from './TeamSettings.module.css'
 
@@ -88,6 +91,14 @@ type TeamStatusDisposition = 'connected' | 'unconnected' | 'terminal'
 type DisplayNameMigrationAckState = 'pending' | 'failed'
 type TeamWorkspaceView = 'usage' | 'members' | 'invitations'
 
+interface ContributionProtectionEdit {
+  readonly account: TeamManagementContributionSummary
+  readonly reserve: string
+  readonly requestCap: string
+  readonly weeklyLimitUsd: string
+  readonly models: string
+}
+
 type PendingTeamInvite = Extract<TeamManagementOverview, { readonly viewerRole: 'owner' }>['invites'][number]
 
 type TeamSettingsDialogFocusTarget = 'dissolve' | 'invite' | 'invite-result' | 'invite-reveal' | 'invite-revoke' | 'leave' | 'remove' | 'team-status' | 'transfer'
@@ -136,6 +147,13 @@ function formatTime(value: number): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+function formatUsdMicros(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  const micros = typeof value === 'number' ? value : Number(value)
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .format(micros / 1_000_000)
 }
 
 function documentAllowsInviteSecret(): boolean {
@@ -322,7 +340,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [leaveAuthorizationContext, setLeaveAuthorizationContext] = useState<string>()
   const [teamSettingsOpen, setTeamSettingsOpen] = useState(false)
   const [workspaceView, setWorkspaceView] = useState<TeamWorkspaceView>('usage')
+  const [addAccountOpen, setAddAccountOpen] = useState(false)
+  const [accountLabel, setAccountLabel] = useState('')
+  const [oauth, setOAuth] = useState<TeamManagementOAuthResult>()
+  const [protectionEdit, setProtectionEdit] = useState<ContributionProtectionEdit>()
+  const [recentUsageAccount, setRecentUsageAccount] = useState<TeamManagementContributionSummary>()
   const [teamMenuOpen, setTeamMenuOpen] = useState(false)
+  const teamSettingsTriggerRef = useRef<HTMLButtonElement>(null)
+  const restoreTeamSettingsTriggerFocus = useRef(false)
   const inviteCreationPresentationId = useRef(0)
   const teamExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
   const ownerExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
@@ -644,7 +669,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         setOverview(projectedOverview)
         setAuthorizationSnapshotReady(true)
         setAuthorizationSnapshotPending(false)
-        setTeamSettingsOpen(true)
         setConnectionIssue(undefined)
       } catch (cause: unknown) {
         if (requestId !== overviewRequestId.current) return
@@ -798,6 +822,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       setInviteRevealRequest(undefined)
       setMemberMenuId(undefined)
     }
+  }, [teamSettingsOpen])
+
+  useEffect(() => {
+    if (teamSettingsOpen || !restoreTeamSettingsTriggerFocus.current) return
+    restoreTeamSettingsTriggerFocus.current = false
+    teamSettingsTriggerRef.current?.focus()
   }, [teamSettingsOpen])
 
   useEffect(() => {
@@ -1129,6 +1159,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     ? overview.invites.filter(invite => invite.status === 'pending' && invite.expiresAt > Date.now())
     : []
   const pendingInviteCount = pendingInvites.length
+  const ownedContributions = overview.contributions.filter(account => account.ownerMemberId === overview.currentMember.id)
 
   const renderDisplayNameMigrationNotice = () => {
     const notice = overview.displayNameMigrationNotice
@@ -1159,6 +1190,94 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
+  const renderAccountsPanel = () => (
+    <section className={styles.teamAccounts} role="region" aria-labelledby="team-accounts-title">
+      <div className={styles.workspaceSectionHeader}>
+        <div>
+          <h3 id="team-accounts-title" className={styles.workspaceSectionTitle}>{t('accountsNavigation')}</h3>
+          <p className={styles.hint}>{t('accountDirectoryHint')}</p>
+        </div>
+        <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} onClick={() => {
+          setAccountLabel('')
+          setAddAccountOpen(true)
+        }}>{t('addAccount')}</Button>
+      </div>
+      {ownedContributions.length === 0 ? (
+        <p className={styles.empty}>{t('noUnsharedAccounts')}</p>
+      ) : (
+        <div className={styles.accountList} role="list" aria-label={t('accountsTitle', { count: ownedContributions.length })}>
+          {ownedContributions.map(account => {
+            const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
+            const accountToggleBusy = busy === `toggle-${account.id}`
+            const openProtection = () => {
+              setProtectionEdit({
+                account,
+                reserve: String(account.personalReservePercent),
+                requestCap: account.maxSharedRequestsPerWindow === null ? '' : String(account.maxSharedRequestsPerWindow),
+                weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
+                  ? ''
+                  : String(account.weeklySharedEstimatedApiCostLimitMicros / 1_000_000),
+                models: account.allowedModels.join(', '),
+              })
+            }
+            return (
+              <article className={styles.accountCard} data-mine="true" role="listitem" key={account.id}>
+                <div className={styles.accountHeader}>
+                  <div>
+                    <h4 className={styles.accountLabel}>{account.label}</h4>
+                    <span className={styles.statusText}>{t(account.status)}</span>
+                  </div>
+                  <Pill>{t('myAccount')}</Pill>
+                </div>
+                <div className={styles.accountFacts}>
+                  <span className={styles.weeklyAmount}>
+                    {t('weeklyAmount', { used: formatUsdMicros(accountUsage?.aggregate.estimatedCostUsdMicros) })}
+                    {account.weeklySharedEstimatedApiCostLimitMicros == null ? null : <> / {formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)}</>}
+                    <button type="button" className={styles.inlineEdit} disabled={busy !== undefined} onClick={openProtection}>{t('edit')}</button>
+                  </span>
+                  <span>{t('recentSevenDays', {
+                    requests: accountUsage?.aggregate.requestCount ?? 0,
+                    tokens: accountUsage?.aggregate.totalTokens ?? '0',
+                  })}</span>
+                  <span>{t('reserve', { percent: account.personalReservePercent })}</span>
+                  <span>{account.maxSharedRequestsPerWindow === null
+                    ? t('noRequestCap')
+                    : t('requestCap', { count: account.maxSharedRequestsPerWindow })}</span>
+                  <span>{account.maxSharedConcurrency === 1
+                    ? t('concurrency', { count: account.maxSharedConcurrency })
+                    : t('concurrencyPlural', { count: account.maxSharedConcurrency })}</span>
+                </div>
+                {account.status === 'revoked' ? null : (
+                  <div className={styles.compactActions}>
+                    <Button size="sm" variant="outline" disabled={busy !== undefined} onClick={openProtection}>{t('editProtection')}</Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setRecentUsageAccount(account) }}>{t('recentRequests')}</Button>
+                    {account.status === 'reauth_required' ? (
+                      <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void run(`reauthorize-${account.id}`, async () => {
+                        const expectedContext = teamExpectedContextRef.current
+                        if (expectedContext === undefined) return
+                        setOAuth(await api.reauthorizeOAuth(account.id, expectedContext))
+                        await refresh(false)
+                      }) }}>{t('reauthorize')}</Button>
+                    ) : account.status === 'authorizing' ? null : (
+                      <Button size="sm" variant="ghost" disabled={busy !== undefined} aria-busy={accountToggleBusy} onClick={() => { void run(`toggle-${account.id}`, async () => {
+                        const expectedContext = teamExpectedContextRef.current
+                        if (expectedContext === undefined) return
+                        await api.updateContribution(account.id, { status: account.status === 'paused' ? 'active' : 'paused' }, expectedContext)
+                        await refresh(false)
+                      }) }}>{accountToggleBusy ? (
+                        <><span className={styles.actionSpinner} aria-hidden="true" />{t(account.status === 'paused' ? 'resumingContribution' : 'stoppingContribution')}</>
+                      ) : t(account.status === 'paused' ? 'resumeContribution' : 'pauseContribution')}</Button>
+                    )}
+                  </div>
+                )}
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+
   return (
     <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
@@ -1166,22 +1285,57 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
       {teamSettingsOpen ? (
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
-          <aside className={styles.workspaceRail}>
+          <aside className={styles.workspaceRail} aria-label={t('workspaceNavigation')}>
             <div className={styles.workspaceBrand}>
-              <span className={styles.workspaceKicker}>{t('workspaceKicker')}</span>
-              <span className={styles.workspaceTitle}>Team</span>
+              <p className={styles.workspaceKicker}>{t('workspaceKicker')}</p>
+              <h2 className={styles.workspaceTitle}>{t('workspaceTitle')}</h2>
             </div>
+            <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
+              <button type="button" aria-current={workspaceView === 'usage' ? 'page' : undefined} onClick={() => {
+                setWorkspaceView('usage')
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+              }}>{t('usageSectionTitle')}</button>
+              <button type="button" aria-current={workspaceView === 'members' ? 'page' : undefined} onClick={() => {
+                setWorkspaceView('members')
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+              }}>{t('membersTitle')}</button>
+              {overview.viewerRole === 'owner' ? (
+                <button type="button" aria-current={workspaceView === 'invitations' ? 'page' : undefined} onClick={() => {
+                  setWorkspaceView('invitations')
+                  setTeamMenuOpen(false)
+                  setMemberMenuId(undefined)
+                  setInviteRevealRequest(undefined)
+                }}>{t('invitationsTitle')}</button>
+              ) : null}
+            </nav>
           </aside>
-
           <div className={styles.workspaceMain}>
             <header className={styles.workspaceHeader}>
               <div className={styles.workspaceHeaderCopy}>
-                <p className={styles.workspaceBreadcrumb}>{t('workspaceBreadcrumb')}</p>
-                <h2 className={styles.workspaceTeamName}>{team.name}</h2>
-                <div className={styles.workspaceMeta}>
-                  <span className={styles.workspaceStatus}><StateDot state={team.status === 'active' ? 'done' : 'warning'} />{team.status === 'active' ? t('teamActive') : t('teamPaused')}</span>
-                  <span>{overview.viewerRole === 'owner' ? t('teamOwnerRole') : t('teamMemberRole')}</span>
-                  <span>{t('membersCount', { count: activeMembers.length })}</span>
+                <button
+                  type="button"
+                  className={styles.workspaceBack}
+                  onClick={() => {
+                    setTeamMenuOpen(false)
+                    setMemberMenuId(undefined)
+                    setInviteRevealRequest(undefined)
+                    restoreTeamSettingsTriggerFocus.current = true
+                    setTeamSettingsOpen(false)
+                  }}
+                >
+                  <span aria-hidden="true">←</span> {t('backToTeam')}
+                </button>
+                <div className={styles.workspaceIdentity}>
+                  <h2 className={styles.workspaceTeamName}>{team.name}</h2>
+                  <div className={styles.workspaceMeta}>
+                    <span className={styles.workspaceStatus}><StateDot state={team.status === 'active' ? 'done' : 'warning'} />{team.status === 'active' ? t('teamActive') : t('teamPaused')}</span>
+                    <span>{overview.viewerRole === 'owner' ? t('teamOwnerRole') : t('teamMemberRole')}</span>
+                    <span>{t('membersCount', { count: activeMembers.length })}</span>
+                  </div>
                 </div>
               </div>
 
@@ -1189,12 +1343,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 <Button
                   size="sm"
                   variant="outline"
+                  aria-label={t('teamManagement')}
+                  title={t('teamManagement')}
                   aria-haspopup="menu"
                   aria-expanded={teamMenuOpen}
                   data-team-settings-focus="team-menu"
                   disabled={busy !== undefined}
                   onClick={() => { setTeamMenuOpen(open => !open) }}
-                >{t('teamManagement')} <span aria-hidden="true">···</span></Button>
+                ><span className={styles.teamMenuDots} aria-hidden="true">•••</span></Button>
                 {teamMenuOpen ? (
                   <div className={styles.teamMenuPopover} role="menu" aria-label={t('teamManagement')}>
                     {canManageTeam ? (
@@ -1250,29 +1406,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 ) : null}
               </div>
             </header>
-
-            <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
-              <button type="button" aria-current={workspaceView === 'usage' ? 'page' : undefined} onClick={() => {
-                setWorkspaceView('usage')
-                setTeamMenuOpen(false)
-                setMemberMenuId(undefined)
-                setInviteRevealRequest(undefined)
-              }}>{t('usageSectionTitle')}</button>
-              <button type="button" aria-current={workspaceView === 'members' ? 'page' : undefined} onClick={() => {
-                setWorkspaceView('members')
-                setTeamMenuOpen(false)
-                setMemberMenuId(undefined)
-                setInviteRevealRequest(undefined)
-              }}>{t('membersTitle')}</button>
-              {overview.viewerRole === 'owner' ? (
-                <button type="button" aria-current={workspaceView === 'invitations' ? 'page' : undefined} onClick={() => {
-                  setWorkspaceView('invitations')
-                  setTeamMenuOpen(false)
-                  setMemberMenuId(undefined)
-                  setInviteRevealRequest(undefined)
-                }}>{t('invitationsTitle')}</button>
-              ) : null}
-            </nav>
 
             <div className={styles.workspaceBody}>
 
@@ -1472,7 +1605,164 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             </div>
           </div>
         </section>
-      ) : null}
+      ) : (
+        <section className={styles.teamPanel} role="region" aria-label={t('teamPanelTitle')}>
+          <header className={styles.teamContext}>
+            <div className={styles.teamContextCopy}>
+              <p className={styles.workspaceBreadcrumb}>{t('workspaceBreadcrumb')}</p>
+              <h2 className={styles.teamContextTitle}>{team.name}</h2>
+              <div className={styles.workspaceMeta}>
+                <span className={styles.workspaceStatus}><StateDot state={team.status === 'active' ? 'done' : 'warning'} />{team.status === 'active' ? t('teamActive') : t('teamPaused')}</span>
+                <span>{overview.viewerRole === 'owner' ? t('teamOwnerRole') : t('teamMemberRole')}</span>
+                <span>{t('membersCount', { count: activeMembers.length })}</span>
+              </div>
+            </div>
+            <button
+              ref={teamSettingsTriggerRef}
+              type="button"
+              className={styles.teamSettingsTrigger}
+              onClick={() => {
+                setWorkspaceView('usage')
+                setTeamSettingsOpen(true)
+              }}
+            >{t('teamSettings')}</button>
+          </header>
+          {renderAccountsPanel()}
+        </section>
+      )}
+
+      <Modal
+        open={addAccountOpen}
+        onClose={() => { if (busy === undefined) setAddAccountOpen(false) }}
+        title={t('addAccountTitle')}
+        closeLabel={t('close')}
+        description={t('addAccountHint')}
+        footer={(
+          <div className={styles.modalActions}>
+            <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setAddAccountOpen(false) }}>{t('cancel')}</Button>
+            <Button size="sm" variant="primary" disabled={busy !== undefined || accountLabel.trim() === ''} onClick={() => { void run('oauth-start', async () => {
+              const expectedContext = teamExpectedContextRef.current
+              if (expectedContext === undefined) return
+              const result = await api.startOAuth(accountLabel.trim(), expectedContext)
+              setAddAccountOpen(false)
+              setOAuth(result)
+              await refresh(false)
+            }) }}>{busy === 'oauth-start' ? t('working') : t('startAuthorization')}</Button>
+          </div>
+        )}
+      >
+        <label className={styles.field}>
+          <span className={styles.label}>{t('accountLabel')}</span>
+          <Input value={accountLabel} placeholder={t('accountLabelPlaceholder')} onChange={event => { setAccountLabel(event.target.value) }} />
+        </label>
+      </Modal>
+
+      <Modal
+        open={oauth !== undefined}
+        onClose={() => { if (busy === undefined) setOAuth(undefined) }}
+        title={t('deviceTitle')}
+        closeLabel={t('close')}
+        description={t('deviceHint')}
+        footer={(
+          <div className={styles.modalActions}>
+            <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void run('oauth-cancel', async () => {
+              if (oauth === undefined) return
+              const expectedContext = teamExpectedContextRef.current
+              if (expectedContext === undefined) return
+              await api.cancelOAuth(oauth.account.id, expectedContext)
+              setOAuth(undefined)
+              await refresh(false)
+            }) }}>{t('cancelAuthorization')}</Button>
+            {oauth === undefined ? null : <a href={oauth.verificationUrl} target="_blank" rel="noreferrer">{t('openProvider')}</a>}
+            <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { setOAuth(undefined); void refresh(false) }}>{t('checkAuthorization')}</Button>
+          </div>
+        )}
+      >
+        {oauth === undefined ? null : (
+          <div className={styles.panel}>
+            <span className={styles.label}>{t('deviceCode')}</span>
+            <strong>{oauth.userCode}</strong>
+            <span className={styles.meta}>{t('expiresAt', { time: formatTime(oauth.expiresAt) })}</span>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={protectionEdit !== undefined}
+        onClose={() => { if (busy === undefined) setProtectionEdit(undefined) }}
+        title={t('editProtection')}
+        closeLabel={t('close')}
+        footer={(
+          <div className={styles.modalActions}>
+            <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setProtectionEdit(undefined) }}>{t('cancel')}</Button>
+            <Button size="sm" variant="primary" disabled={busy !== undefined} aria-busy={busy?.startsWith('protection-') === true} onClick={() => {
+              if (protectionEdit === undefined) return
+              const result = parseContributionProtectionDraft(protectionEdit)
+              if (!result.ok) {
+                setError(t(result.field === 'reserve'
+                  ? 'reserveValidation'
+                  : result.field === 'requestCap'
+                    ? 'requestCapValidation'
+                    : result.field === 'weeklyLimitUsd'
+                      ? 'weeklyLimitValidation'
+                      : 'allowedModelsValidation'))
+                return
+              }
+              void run(`protection-${protectionEdit.account.id}`, async () => {
+                const expectedContext = teamExpectedContextRef.current
+                if (expectedContext === undefined) return
+                await api.updateContribution(protectionEdit.account.id, result.patch, expectedContext)
+                setProtectionEdit(undefined)
+                await refresh(false)
+              })
+            }}>{busy?.startsWith('protection-') === true
+              ? <><span className={styles.actionSpinner} aria-hidden="true" />{t('savingContribution')}</>
+              : t('save')}</Button>
+          </div>
+        )}
+      >
+        {protectionEdit === undefined ? null : (
+          <div className={styles.connectionGrid}>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="team-account-weekly-limit">{t('weeklyLimitLabel')}</label>
+              <Input id="team-account-weekly-limit" value={protectionEdit.weeklyLimitUsd} placeholder={t('weeklyLimitPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, weeklyLimitUsd: event.target.value }) }} />
+              <span className={styles.hint}>{t('weeklyLimitHint')}</span>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="team-account-reserve">{t('reserveLabel')}</label>
+              <Input id="team-account-reserve" value={protectionEdit.reserve} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, reserve: event.target.value }) }} />
+              <span className={styles.hint}>{t('reserveHint')}</span>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="team-account-request-cap">{t('requestCapLabel')}</label>
+              <Input id="team-account-request-cap" value={protectionEdit.requestCap} placeholder={t('requestCapPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, requestCap: event.target.value }) }} />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="team-account-models">{t('allowedModelsLabel')}</label>
+              <Input id="team-account-models" value={protectionEdit.models} placeholder={t('allowedModelsPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, models: event.target.value }) }} />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={recentUsageAccount !== undefined}
+        onClose={() => { setRecentUsageAccount(undefined) }}
+        title={recentUsageAccount === undefined ? t('recentRequests') : t('recentRequestsFor', { label: recentUsageAccount.label })}
+        closeLabel={t('close')}
+      >
+        {recentUsageAccount === undefined ? null : (() => {
+          const requests = usageProjection?.ownedAccounts?.find(item => item.accountId === recentUsageAccount.id)?.recentRequests ?? []
+          return requests.length === 0
+            ? <p className={styles.empty}>{t('noRecentRequests')}</p>
+            : <div className={styles.recentRequestList}>{requests.map(request => (
+              <div className={styles.recentRequest} key={request.id}>
+                <div><strong>{request.model}</strong><span>{formatTime(request.startedAt)}</span></div>
+                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span><span>{formatUsdMicros(request.estimatedCostUsdMicros)}</span></div>
+              </div>
+            ))}</div>
+        })()}
+      </Modal>
 
       <Modal
         open={activeTeamStatusConfirmation !== undefined}

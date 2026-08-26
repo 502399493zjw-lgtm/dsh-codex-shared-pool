@@ -43,6 +43,7 @@ interface ContributionRoutingRow extends QueryResultRow {
   personal_reserve_percent: number
   max_shared_requests_per_window: number | null
   daily_shared_credit_limit: string | number | null
+  weekly_shared_estimated_api_cost_limit_micros: string | number | null
   max_shared_concurrency: number
   allowed_models: unknown
   created_at: string | number
@@ -168,6 +169,7 @@ export class PostgresTeamRequestRouter implements TeamRequestAdmissionRouter {
         sessionId,
         consumerMemberId: request.consumerMemberId,
         accountId: selected.candidate.account.id,
+        model: request.model,
         source: selected.source,
         reservedAt: now,
       }
@@ -357,6 +359,9 @@ function contributionSummary(row: ContributionRoutingRow): TeamContributionAccou
     personalReservePercent: row.personal_reserve_percent,
     maxSharedRequestsPerWindow: row.max_shared_requests_per_window,
     dailySharedCreditLimit: row.daily_shared_credit_limit === null ? null : numberValue(row.daily_shared_credit_limit),
+    weeklySharedEstimatedApiCostLimitMicros: row.weekly_shared_estimated_api_cost_limit_micros === null
+      ? null
+      : numberValue(row.weekly_shared_estimated_api_cost_limit_micros),
     maxSharedConcurrency: row.max_shared_concurrency,
     allowedModels: models,
     createdAt: numberValue(row.created_at),

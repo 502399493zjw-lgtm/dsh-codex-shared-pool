@@ -122,25 +122,32 @@ describe('Team Settings contribution-protection contract', () => {
     expect(parseContributionProtectionDraft({
       reserve: '99',
       requestCap: '1000000',
+      weeklyLimitUsd: '10000',
       models: 'gpt-5-codex, gpt-5-mini',
     })).toEqual({
       ok: true,
       patch: {
         personalReservePercent: 99,
         maxSharedRequestsPerWindow: 1_000_000,
+        weeklySharedEstimatedApiCostLimitMicros: 10_000_000_000,
         allowedModels: ['gpt-5-codex', 'gpt-5-mini'],
       },
     })
   })
 
   it.each(['', '1.5', '100', 'Infinity'])('rejects reserve value %j before submission', reserve => {
-    expect(parseContributionProtectionDraft({ reserve, requestCap: '', models: '' }))
+    expect(parseContributionProtectionDraft({ reserve, requestCap: '', weeklyLimitUsd: '', models: '' }))
       .toEqual({ ok: false, field: 'reserve' })
   })
 
   it.each(['0', '1.5', '1000001', 'Infinity'])('rejects request-cap value %j before submission', requestCap => {
-    expect(parseContributionProtectionDraft({ reserve: '20', requestCap, models: '' }))
+    expect(parseContributionProtectionDraft({ reserve: '20', requestCap, weeklyLimitUsd: '', models: '' }))
       .toEqual({ ok: false, field: 'requestCap' })
+  })
+
+  it.each(['0', '0.001', '10000.01', 'Infinity'])('rejects weekly USD limit %j before submission', weeklyLimitUsd => {
+    expect(parseContributionProtectionDraft({ reserve: '20', requestCap: '', weeklyLimitUsd, models: '' }))
+      .toEqual({ ok: false, field: 'weeklyLimitUsd' })
   })
 
   it('rejects model lists the Host cannot store', () => {

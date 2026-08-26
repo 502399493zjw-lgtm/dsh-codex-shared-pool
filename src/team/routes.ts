@@ -250,7 +250,7 @@ function contributionPatch(value: Record<string, unknown>): { accountId: string;
   const accountId = accountIdValue.trim()
   const patch: Record<string, unknown> = { ...value }
   delete patch.accountId
-  const allowed = new Set(['label', 'status', 'personalReservePercent', 'maxSharedRequestsPerWindow', 'dailySharedCreditLimit', 'maxSharedConcurrency', 'allowedModels'])
+  const allowed = new Set(['label', 'status', 'personalReservePercent', 'maxSharedRequestsPerWindow', 'dailySharedCreditLimit', 'weeklySharedEstimatedApiCostLimitMicros', 'maxSharedConcurrency', 'allowedModels'])
   if (Object.keys(patch).some(key => !allowed.has(key))) throw new Error('request contains an unknown contribution field')
   if (patch.label !== undefined && (typeof patch.label !== 'string' || patch.label.trim().length === 0)) throw new Error('label must be a non-empty string')
   if (patch.status !== undefined && patch.status !== 'active' && patch.status !== 'paused') throw new Error('status must be active or paused')
@@ -264,6 +264,9 @@ function contributionPatch(value: Record<string, unknown>): { accountId: string;
   }
   if (patch.dailySharedCreditLimit !== undefined && patch.dailySharedCreditLimit !== null && !Number.isSafeInteger(patch.dailySharedCreditLimit)) {
     throw new Error('dailySharedCreditLimit must be null or an integer')
+  }
+  if (patch.weeklySharedEstimatedApiCostLimitMicros !== undefined && patch.weeklySharedEstimatedApiCostLimitMicros !== null && !Number.isSafeInteger(patch.weeklySharedEstimatedApiCostLimitMicros)) {
+    throw new Error('weeklySharedEstimatedApiCostLimitMicros must be null or an integer')
   }
   if (patch.allowedModels !== undefined && (!Array.isArray(patch.allowedModels) || patch.allowedModels.some(model => typeof model !== 'string'))) {
     throw new Error('allowedModels must be an array of strings')

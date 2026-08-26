@@ -412,6 +412,7 @@ describe('Team management browser API', () => {
         requestCount: 2, tokenMeasuredRequestCount: 1, pricedRequestCount: 0,
         totalTokens: '8750', estimatedCostUsdMicros: null,
       },
+      ownedAccounts: [],
     })
     expect(JSON.stringify(result)).not.toContain('must-not-survive')
     expect(result).not.toHaveProperty('team')
