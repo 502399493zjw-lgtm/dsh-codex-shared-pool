@@ -1969,7 +1969,6 @@
 
 @container team-settings (max-width: 620px) {
   .teamContext,
-  .workspaceSectionHeader,
   .memberRow,
   .inviteRow {
     align-items: stretch;
@@ -2017,8 +2016,7 @@
     line-height: 15px;
   }
 
-  .teamMenu,
-  .workspaceSectionHeader > button {
+  .teamMenu {
     align-self: flex-start;
   }
 
@@ -2044,6 +2042,15 @@
 }
 
 @container team-settings (max-width: 460px) {
+  .workspaceSectionHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .workspaceSectionHeader > button {
+    align-self: flex-start;
+  }
+
   .usageCards[data-owner='true'] {
     grid-template-columns: 1fr;
   }
@@ -2177,7 +2184,6 @@
   .sectionHeader,
   .accountHeader,
   .banner,
-  .workspaceSectionHeader,
   .settingsPageHeader,
   .settingsStatus,
   .settingsCardHeader,
@@ -2196,10 +2202,6 @@
   }
 
   .teamSettingsTrigger {
-    align-self: flex-start;
-  }
-
-  .workspaceSectionHeader > button {
     align-self: flex-start;
   }
 

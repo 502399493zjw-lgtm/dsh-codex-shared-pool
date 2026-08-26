@@ -60,4 +60,21 @@ describe('Team Settings responsive container contract', () => {
       /\.usageRefresh\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*padding:\s*0;/s,
     )
   })
+
+  it('keeps member and invitation actions at the upper-right until the workspace becomes mobile', () => {
+    const mediumContainer = css.slice(
+      css.indexOf('@container team-settings (max-width: 620px)'),
+      css.indexOf('@container team-settings (max-width: 460px)'),
+    )
+    const narrowViewport = css.slice(
+      css.indexOf('@media (max-width: 720px)'),
+      css.indexOf('@media (max-width: 420px)'),
+    )
+
+    expect(mediumContainer).not.toContain('.workspaceSectionHeader,')
+    expect(narrowViewport).not.toContain('.workspaceSectionHeader,')
+    expect(css).toMatch(
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceSectionHeader\s*\{[^}]*align-items:\s*stretch;[^}]*flex-direction:\s*column;/,
+    )
+  })
 })
