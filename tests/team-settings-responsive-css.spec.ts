@@ -25,15 +25,36 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/s)
   })
 
+  it('uses visible structural rules to separate the workspace and usage rows', () => {
+    expect(css).toMatch(/--team-line:\s*color-mix\(in srgb, var\(--team-ink\) 18%, transparent\);/)
+    expect(css).toMatch(/--team-line-strong:\s*color-mix\(in srgb, var\(--team-ink\) 30%, transparent\);/)
+    expect(css).toMatch(/\.workspaceShell\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-top:\s*0;[^}]*border-radius:\s*0 0 14px 14px;/s)
+    expect(css).toMatch(/\.workspaceRail\s*\{[^}]*border-right:\s*1px solid var\(--team-line-strong\);/s)
+    expect(css).toMatch(/\.workspaceHeader\s*\{[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
+    expect(css).toMatch(/\.usageCardHeader\s*\{[^}]*border-bottom:\s*1px solid var\(--team-line\);/s)
+    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:\s*1px solid var\(--team-line\);/s)
+    expect(css).toMatch(/\.usageCardTitle\s*\{[^}]*overflow-wrap:\s*anywhere;/s)
+    expect(css).toMatch(/\.usageMetric dt\s*\{[^}]*white-space:\s*nowrap;/s)
+    expect(css).toMatch(/\.usageMetric dd\s*\{[^}]*white-space:\s*nowrap;/s)
+  })
+
+  it('does not repeat the workspace header divider above member and invite sections', () => {
+    expect(css).toMatch(/\.workspaceSection\s*\{[^}]*border-top:\s*0;[^}]*padding-top:\s*0;/s)
+  })
+
+  it('keeps the rail return action visually compact with a full touch target', () => {
+    expect(css).toMatch(/\.workspaceBack\s*\{[^}]*width:\s*44px;[^}]*min-height:\s*44px;[^}]*justify-content:\s*center;/s)
+  })
+
   it('stacks owner usage groups only when the settings slot is genuinely narrow', () => {
     expect(css).toMatch(
-      /@container team-settings \(max-width: 520px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 620px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
     )
   })
 
   it('keeps the invitation entry action on one line', () => {
     expect(css).toMatch(
-      /\.workspaceSectionHeader\s*>\s*button\s*\{[^}]*white-space:\s*nowrap;/s,
+      /\.workspaceSectionHeader\s*>\s*button\s*\{[^}]*min-height:\s*36px;[^}]*padding:\s*7px 12px;[^}]*font-size:\s*13px;[^}]*white-space:\s*nowrap;/s,
     )
     expect(css).toMatch(
       /\.usageHeader\s*>\s*button\s*\{[^}]*white-space:\s*nowrap;/s,

@@ -450,6 +450,55 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [childDialogFocusTarget])
 
   useEffect(() => {
+    if (childDialogFocusTarget === undefined) return
+    const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'))
+    const dialog = dialogs[dialogs.length - 1]
+    const dialogLayer = dialog?.parentElement
+    if (dialog === undefined || dialogLayer === null || dialogLayer === undefined) return
+
+    const backgroundLayers = Array.from(document.body.children)
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element !== dialogLayer)
+      .map(element => ({ element, inert: element.inert }))
+    for (const { element } of backgroundLayers) element.inert = true
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        if (childDialogFocusTarget === 'invite' && busy === 'invite') return
+        const closeButton = Array.from(dialog.querySelectorAll<HTMLButtonElement>('button'))
+          .find(button => button.getAttribute('aria-label') === t('close'))
+        closeButton?.click()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
+      )).filter(element => !element.hasAttribute('hidden'))
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = focusable[0]!
+      const last = focusable[focusable.length - 1]!
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true)
+      for (const { element, inert } of backgroundLayers) element.inert = inert
+    }
+  }, [busy, childDialogFocusTarget, t])
+
+  useEffect(() => {
     teamExpectedContextRef.current = teamExpectedContext
   }, [teamExpectedContext])
 
@@ -1287,7 +1336,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
           <aside className={styles.workspaceRail} aria-label={t('workspaceNavigation')}>
             <div className={styles.workspaceBrand}>
-              <p className={styles.workspaceKicker}>{t('workspaceKicker')}</p>
+              <button
+                type="button"
+                className={styles.workspaceBack}
+                aria-label={t('backToTeam')}
+                title={t('backToTeam')}
+                onClick={() => {
+                  setTeamMenuOpen(false)
+                  setMemberMenuId(undefined)
+                  setInviteRevealRequest(undefined)
+                  restoreTeamSettingsTriggerFocus.current = true
+                  setTeamSettingsOpen(false)
+                }}
+              >
+                <svg aria-hidden="true" viewBox="0 0 20 20" width="20" height="20" fill="none">
+                  <path d="M11.75 4.75 6.5 10l5.25 5.25M7 10h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
               <h2 className={styles.workspaceTitle}>{t('workspaceTitle')}</h2>
             </div>
             <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
@@ -1316,19 +1381,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <div className={styles.workspaceMain}>
             <header className={styles.workspaceHeader}>
               <div className={styles.workspaceHeaderCopy}>
-                <button
-                  type="button"
-                  className={styles.workspaceBack}
-                  onClick={() => {
-                    setTeamMenuOpen(false)
-                    setMemberMenuId(undefined)
-                    setInviteRevealRequest(undefined)
-                    restoreTeamSettingsTriggerFocus.current = true
-                    setTeamSettingsOpen(false)
-                  }}
-                >
-                  <span aria-hidden="true">←</span> {t('backToTeam')}
-                </button>
                 <div className={styles.workspaceIdentity}>
                   <h2 className={styles.workspaceTeamName}>{team.name}</h2>
                   <div className={styles.workspaceMeta}>
@@ -1539,13 +1591,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   if (team.status !== 'active' || ownerAuthorizationContext === undefined) return
                   inviteCreationPresentationId.current += 1
                   teamSettingsReturnFocus.current = 'invite'
+                  setError(undefined)
                   setInviteDraft({
                     label: '',
                     expiresInMs: 7 * 86_400_000,
                     authorizationContext: ownerAuthorizationContext,
                   })
                 }}>
-                  {t('inviteFriend')}
+                  {t('createInvite')}
                 </Button>
               </div>
               {team.status === 'paused' ? <p className={styles.invitePauseNotice}>{t('invitesPausedHint')}</p> : null}
@@ -1889,14 +1942,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
       <Modal
         open={activeInviteDraft !== undefined}
-        onClose={closeInviteDraft}
+        onClose={() => { if (busy !== 'invite') closeInviteDraft() }}
         title={t('createInviteTitle')}
         closeLabel={t('close')}
         description={t('createInviteHint')}
+        className={styles.inviteModal!}
         footer={(
           <div className={styles.modalActions}>
-            <Button variant="ghost" onClick={closeInviteDraft}>{t('cancel')}</Button>
-            <Button variant="primary" disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active' || activeInviteDraft?.label.trim() === ''} onClick={() => { if (activeInviteDraft !== undefined && ownerAuthorizationContext !== undefined && team.status === 'active') void run('invite', async () => {
+            <Button variant="ghost" disabled={busy === 'invite'} onClick={closeInviteDraft}>{t('cancel')}</Button>
+            <Button type="submit" form="team-invite-create-form" variant="primary" aria-busy={busy === 'invite'} disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active' || activeInviteDraft?.label.trim() === ''}>{busy === 'invite' ? t('working') : t('createInvite')}</Button>
+          </div>
+        )}
+      >
+        {activeInviteDraft === undefined ? null : (
+          <form id="team-invite-create-form" className={styles.modalBody} onSubmit={event => {
+            event.preventDefault()
+            if (busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active' || activeInviteDraft.label.trim() === '') return
+            void run('invite', async () => {
               const authorizationContext = activeInviteDraft.authorizationContext
               if (ownerAuthorizationContextRef.current !== authorizationContext) return
               const expectedContext = ownerExpectedContextRef.current
@@ -1919,28 +1981,38 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 expiresAt: result.invite.expiresAt,
                 authorizationContext,
               })
-            }) }}>{busy === 'invite' ? t('working') : t('createInvite')}</Button>
-          </div>
-        )}
-      >
-        {activeInviteDraft === undefined ? null : (
-          <div className={styles.modalBody}>
+            })
+          }}>
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
-            <Field label={t('inviteLabel')} hint={t('inviteLabelHint')}>
-              <Input aria-label={t('inviteLabel')} data-team-dialog-focus="invite" value={activeInviteDraft.label} maxLength={120} placeholder={t('inviteLabelPlaceholder')} onChange={event => {
+            <Field label={t('inviteLabel')} hint={t('inviteLabelHint')} hintId="team-invite-label-hint">
+              <Input aria-label={t('inviteLabel')} aria-describedby="team-invite-label-hint" data-team-dialog-focus="invite" value={activeInviteDraft.label} maxLength={120} placeholder={t('inviteLabelPlaceholder')} disabled={busy === 'invite'} onChange={event => {
                 setInviteDraft({ ...activeInviteDraft, label: event.target.value })
               }} />
             </Field>
-            <Field label={t('inviteExpiry')}>
-              <select aria-label={t('inviteExpiry')} className={styles.select} value={activeInviteDraft.expiresInMs} onChange={event => {
-                setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
-              }}>
-                <option value={86_400_000}>{t('inviteOneDay')}</option>
-                <option value={7 * 86_400_000}>{t('inviteSevenDays')}</option>
-                <option value={30 * 86_400_000}>{t('inviteThirtyDays')}</option>
-              </select>
-            </Field>
-          </div>
+            <fieldset className={styles.expiryFieldset}>
+              <legend className={styles.label}>{t('inviteExpiry')}</legend>
+              <div className={styles.expiryOptions}>
+                {([
+                  [86_400_000, t('inviteOneDay')],
+                  [7 * 86_400_000, t('inviteSevenDays')],
+                  [30 * 86_400_000, t('inviteThirtyDays')],
+                ] as const).map(([value, label]) => (
+                  <label className={styles.expiryOption} key={value}>
+                    <input
+                      className={styles.expiryRadio}
+                      type="radio"
+                      name="team-invite-expiry"
+                      value={value}
+                      checked={activeInviteDraft.expiresInMs === value}
+                      disabled={busy === 'invite'}
+                      onChange={() => { setInviteDraft({ ...activeInviteDraft, expiresInMs: value }) }}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </form>
         )}
       </Modal>
 
@@ -2167,12 +2239,12 @@ function Notice({ tone, title, detail, children, live }: {
   )
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, hint, hintId, children }: { label: string; hint?: string; hintId?: string; children: React.ReactNode }) {
   return (
     <label className={styles.field}>
       <span className={styles.label}>{label}</span>
       {children}
-      {hint === undefined ? null : <span className={styles.hint}>{hint}</span>}
+      {hint === undefined ? null : <span className={styles.hint} id={hintId}>{hint}</span>}
     </label>
   )
 }
