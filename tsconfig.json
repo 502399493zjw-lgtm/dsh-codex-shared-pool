@@ -18,7 +18,7 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "declaration": true,
-    "declarationMap": false,
+    "declarationMap": true,
     "emitDeclarationOnly": true
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]

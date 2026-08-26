@@ -10,14 +10,18 @@ import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from './compat-slots.d.ts'
-import { OpenAICodexSettings } from './OpenAICodexSettings.tsx'
 import type { OpenAICodexSettingsInjected } from './OpenAICodexSettings.tsx'
+import { CodexSubscriptionPoolSettings } from './CodexSubscriptionPoolSettings.tsx'
+import type { CodexSubscriptionPoolSettingsInjected } from './CodexSubscriptionPoolSettings.tsx'
 import { ImagegenToolView } from './ImagegenToolView.tsx'
 import type { ImageLoader } from './ImagegenToolView.tsx'
 import { CodexModelSelect } from './CodexModelSelect.tsx'
 import { en, zh } from './locales.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
 import { apply as applyCodexQuota } from './quota/index.ts'
+import type { TeamSettingsInjected } from './team/TeamSettings.tsx'
+import { en as teamEn, zh as teamZh } from './team/locales.ts'
+import type { TeamSettingsKey } from './team/locales.ts'
 import { CLIENT_INJECT } from './runtime-contract.ts'
 import { CODEX_SETTINGS_SECTION_ID } from './settings-section-navigation.ts'
 
@@ -25,6 +29,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** OpenAI Codex account page copy. */
     'settings.openai-codex': OpenAICodexSettingsKey
+    /** Invite-only Team capacity page copy. */
+    'settings.codex-team': TeamSettingsKey
   }
 }
 
@@ -39,6 +45,9 @@ export function apply(ctx: ClientContext): void {
   const namespace = 'settings.openai-codex'
   ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-openai-codex: settings copy')
   const t = ctx.locale.bind(namespace) as OpenAICodexSettingsInjected['t']
+  const teamNamespace = 'settings.codex-team'
+  ctx.effect(() => ctx.locale.register(teamNamespace, { zh: teamZh, en: teamEn }), 'dsh-codex-team: settings copy')
+  const teamT = ctx.locale.bind(teamNamespace) as TeamSettingsInjected['t']
   const imageUrls = new Map<string, Promise<string>>()
   const createdUrls = new Set<string>()
   const loadImage = (sessionId: SessionId, attachment: ImageAttachmentRef): Promise<string> => {
@@ -74,8 +83,8 @@ export function apply(ctx: ClientContext): void {
     id: CODEX_SETTINGS_SECTION_ID,
     order: 15,
     label: () => t('nav'),
-    inject: (): OpenAICodexSettingsInjected => ({ t }),
-  }, OpenAICodexSettings))
+    inject: (): CodexSubscriptionPoolSettingsInjected => ({ localT: t, teamT }),
+  }, CodexSubscriptionPoolSettings))
   ctx.slots.inject('tool.call.toolview', () => ctx.slots.register({
     name: 'tool.call.toolview',
     key: 'imagegen',

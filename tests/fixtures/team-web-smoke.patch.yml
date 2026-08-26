@@ -1,0 +1,13 @@
+- id: codex-shared-pool
+  name: dsh-codex-shared-pool
+  config:
+    team:
+      enabled: true
+      storage: postgres
+      databaseUrlRef: DSH_CODEX_SHARED_POOL_DATABASE_URL
+      credentialMasterKeyRef: DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY
+      inviteTokenMasterKeyRef: DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY
+      bootstrapTokenRef: DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN
+    teamClient:
+      enabled: true
+      baseUrl: http://127.0.0.1:3099/plugins/dsh-codex-shared-pool/team
