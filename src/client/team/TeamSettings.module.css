@@ -520,14 +520,15 @@
 
 .usageCardHeader {
   gap: 8px;
-  border-bottom: 1px solid var(--team-line);
-  padding-bottom: 14px;
+  border-bottom: 0;
+  padding-bottom: 6px;
 }
 
 .usageCardTitle {
   font-size: 16px;
   line-height: 23px;
   overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .usageStatus {
@@ -555,7 +556,7 @@
 
 .usageMetricGrid {
   display: grid;
-  gap: 0;
+  gap: 4px;
   margin: 0;
 }
 
@@ -565,7 +566,7 @@
 }
 
 .usageMetric:first-child {
-  padding: 18px 0 20px;
+  padding: 12px 0 14px;
 }
 
 .usageMetric:not(:first-child) {
@@ -573,8 +574,8 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  border-top: 1px solid var(--team-line);
-  padding: 10px 0;
+  border-top: 0;
+  padding: 7px 0;
 }
 
 .usageMetric dt {
@@ -1990,6 +1991,25 @@
     line-height: 26px;
   }
 
+  .usageCard {
+    padding: 14px;
+  }
+
+  .usageCardHeader {
+    gap: 6px;
+  }
+
+  .usageCardTitle {
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .usageStatus {
+    padding: 2px 6px;
+    font-size: 10px;
+    line-height: 15px;
+  }
+
   .teamMenu,
   .workspaceSectionHeader > button {
     align-self: flex-start;
@@ -2016,7 +2036,7 @@
 
 }
 
-@container team-settings (max-width: 620px) {
+@container team-settings (max-width: 460px) {
   .usageCards[data-owner='true'] {
     grid-template-columns: 1fr;
   }
@@ -2025,9 +2045,7 @@
     border-top: 1px solid var(--team-line);
     border-left: 0;
   }
-}
 
-@container team-settings (max-width: 460px) {
   .teamPanel {
     border-right: 0;
     border-left: 0;

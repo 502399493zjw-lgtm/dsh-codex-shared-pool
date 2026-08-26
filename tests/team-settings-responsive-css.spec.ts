@@ -25,15 +25,15 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/s)
   })
 
-  it('uses visible structural rules to separate the workspace and usage rows', () => {
+  it('uses structural rules without boxing every usage row', () => {
     expect(css).toMatch(/--team-line:\s*color-mix\(in srgb, var\(--team-ink\) 18%, transparent\);/)
     expect(css).toMatch(/--team-line-strong:\s*color-mix\(in srgb, var\(--team-ink\) 30%, transparent\);/)
     expect(css).toMatch(/\.workspaceShell\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-top:\s*0;[^}]*border-radius:\s*0 0 14px 14px;/s)
     expect(css).toMatch(/\.workspaceRail\s*\{[^}]*border-right:\s*1px solid var\(--team-line-strong\);/s)
     expect(css).toMatch(/\.workspaceHeader\s*\{[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
-    expect(css).toMatch(/\.usageCardHeader\s*\{[^}]*border-bottom:\s*1px solid var\(--team-line\);/s)
-    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:\s*1px solid var\(--team-line\);/s)
-    expect(css).toMatch(/\.usageCardTitle\s*\{[^}]*overflow-wrap:\s*anywhere;/s)
+    expect(css).toMatch(/\.usageCardHeader\s*\{[^}]*border-bottom:\s*0;/s)
+    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:\s*0;/s)
+    expect(css).toMatch(/\.usageCardTitle\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*nowrap;/s)
     expect(css).toMatch(/\.usageMetric dt\s*\{[^}]*white-space:\s*nowrap;/s)
     expect(css).toMatch(/\.usageMetric dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
@@ -48,7 +48,7 @@ describe('Team Settings responsive container contract', () => {
 
   it('stacks owner usage groups only when the settings slot is genuinely narrow', () => {
     expect(css).toMatch(
-      /@container team-settings \(max-width: 620px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
     )
   })
 
