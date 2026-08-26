@@ -19,6 +19,16 @@ describe('Team Settings responsive container contract', () => {
     )
   })
 
+  it('keeps the desktop workspace at a stable, taller height while letting mobile grow naturally', () => {
+    expect(css).toMatch(
+      /\.workspaceShell\s*\{[^}]*height:\s*clamp\(500px,\s*58vh,\s*580px\);/s,
+    )
+    expect(css).toMatch(/\.workspaceMain\s*\{[^}]*overflow-y:\s*auto;/s)
+    expect(css).toMatch(
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*height:\s*auto;/,
+    )
+  })
+
   it('keeps the prototype usage hierarchy instead of equal metric tiles', () => {
     expect(css).toMatch(/\.usageCards\s*\{[^}]*border-top:\s*1px solid var\(--team-line-strong\);[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
     expect(css).toMatch(/\.usageMetric:first-child\s+dd\s*\{[^}]*font-size:\s*clamp\(24px,\s*4cqi,\s*32px\);/s)
