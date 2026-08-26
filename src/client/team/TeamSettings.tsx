@@ -1336,23 +1336,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
           <aside className={styles.workspaceRail} aria-label={t('workspaceNavigation')}>
             <div className={styles.workspaceBrand}>
-              <button
-                type="button"
-                className={styles.workspaceBack}
-                aria-label={t('backToTeam')}
-                title={t('backToTeam')}
-                onClick={() => {
-                  setTeamMenuOpen(false)
-                  setMemberMenuId(undefined)
-                  setInviteRevealRequest(undefined)
-                  restoreTeamSettingsTriggerFocus.current = true
-                  setTeamSettingsOpen(false)
-                }}
-              >
-                <svg aria-hidden="true" viewBox="0 0 20 20" width="20" height="20" fill="none">
-                  <path d="M11.75 4.75 6.5 10l5.25 5.25M7 10h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
               <h2 className={styles.workspaceTitle}>{t('workspaceTitle')}</h2>
             </div>
             <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
@@ -1377,6 +1360,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 }}>{t('invitationsTitle')}</button>
               ) : null}
             </nav>
+            <button
+              type="button"
+              className={styles.workspaceBack}
+              aria-label={t('backToTeam')}
+              title={t('backToTeam')}
+              onClick={() => {
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+                restoreTeamSettingsTriggerFocus.current = true
+                setTeamSettingsOpen(false)
+              }}
+            >
+              <svg aria-hidden="true" viewBox="0 0 20 20" width="18" height="18" fill="none">
+                <path d="M11.75 4.75 6.5 10l5.25 5.25M7 10h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
           </aside>
           <div className={styles.workspaceMain}>
             <header className={styles.workspaceHeader}>

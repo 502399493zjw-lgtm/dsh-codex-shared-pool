@@ -607,7 +607,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(recent).getByText('2500 tokens')).toBeDefined()
   })
 
-  it('uses an icon-only return action above the workspace name in the rail', async () => {
+  it('uses a quiet icon-only return action at the bottom of the rail', async () => {
     render(<TeamSettings t={translate} embedded />)
 
     const settings = await openTeamSettings()
@@ -620,8 +620,7 @@ describe('Team subscription-pool workspace', () => {
     const back = within(rail).getByRole('button', { name: zh.backToTeam })
     expect(back.querySelector('svg')).not.toBeNull()
     expect(within(context!).queryByRole('button', { name: zh.backToTeam })).toBeNull()
-    const workspaceName = within(rail).getByRole('heading', { name: '团队设置' })
-    expect(back.compareDocumentPosition(workspaceName) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(navigation.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(navigation.compareDocumentPosition(context!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 

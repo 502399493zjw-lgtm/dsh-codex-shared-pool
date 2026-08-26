@@ -42,8 +42,8 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.workspaceSection\s*\{[^}]*border-top:\s*0;[^}]*padding-top:\s*0;/s)
   })
 
-  it('keeps the rail return action visually compact with a full touch target', () => {
-    expect(css).toMatch(/\.workspaceBack\s*\{[^}]*width:\s*44px;[^}]*min-height:\s*44px;[^}]*justify-content:\s*center;/s)
+  it('keeps the rail return action quiet and pinned to the lower-left', () => {
+    expect(css).toMatch(/\.workspaceBack\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;[^}]*margin:\s*auto 10px 0;[^}]*border:\s*0;[^}]*background:\s*transparent;/s)
   })
 
   it('stacks owner usage groups only when the settings slot is genuinely narrow', () => {

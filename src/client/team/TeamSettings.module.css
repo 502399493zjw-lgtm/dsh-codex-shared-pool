@@ -101,16 +101,18 @@
 
 .workspaceBack {
   display: flex;
-  width: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  height: 44px;
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  height: 36px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin: 0;
-  border-color: transparent;
+  margin: auto 10px 0;
+  border: 0;
+  border-radius: 7px;
   padding: 0;
+  background: transparent;
   color: var(--team-muted);
   font-size: 18px;
   line-height: 1;
@@ -2084,6 +2086,11 @@
   .workspaceBrand {
     flex: 0 0 100%;
     padding: 0 6px;
+  }
+
+  .workspaceBack {
+    order: 3;
+    margin: 0 0 0 auto;
   }
 
   .workspaceTitle {
