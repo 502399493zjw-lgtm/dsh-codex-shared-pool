@@ -7,6 +7,7 @@ import type { TeamService } from './service.ts'
 import {
   TEAM_BOOTSTRAP_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
+  TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
   TEAM_CONTRIBUTION_REVOKE_PATH,
@@ -39,7 +40,9 @@ import type {
   TeamContributionAccountPatch,
   TeamDissolutionInput,
   TeamLifecycleTransitionInput,
+  TeamOAuthMethod,
 } from './types.ts'
+import type { TeamCredentialHandoffEnvelope } from './oauth-handoff.ts'
 import { TeamDissolutionRecoveryRateLimitError, TeamInviteRevealRateLimitError } from './store.ts'
 import type { TeamAuthContext } from './store.ts'
 import { safeTeamErrorMessage as safeMessage } from './safe-message.ts'
@@ -118,6 +121,55 @@ function exactStrings<const Key extends string>(value: Record<string, unknown>, 
     result[key] = candidate.trim()
   }
   return result
+}
+
+function oauthMethod(value: unknown): TeamOAuthMethod {
+  if (value !== 'browser' && value !== 'device_code') throw new Error('method must be browser or device_code')
+  return value
+}
+
+function oauthStartInput(value: Record<string, unknown>): { label: string; method: TeamOAuthMethod } {
+  exactFields(value, ['label', 'method'])
+  const label = exactStrings({ label: value.label }, ['label']).label
+  return { label, method: value.method === undefined ? 'device_code' : oauthMethod(value.method) }
+}
+
+function oauthReauthorizeInput(value: Record<string, unknown>): { accountId: string; method: TeamOAuthMethod } {
+  exactFields(value, ['accountId', 'method'])
+  const accountId = exactStrings({ accountId: value.accountId }, ['accountId']).accountId
+  return { accountId, method: value.method === undefined ? 'device_code' : oauthMethod(value.method) }
+}
+
+function oauthCancelInput(value: Record<string, unknown>): { accountId: string; discardInitial: boolean } {
+  exactFields(value, ['accountId', 'discardInitial'])
+  const accountId = exactStrings({ accountId: value.accountId }, ['accountId']).accountId
+  if (value.discardInitial !== undefined && typeof value.discardInitial !== 'boolean') {
+    throw new Error('discardInitial must be a boolean')
+  }
+  return { accountId, discardInitial: value.discardInitial === true }
+}
+
+function oauthHandoffInput(value: Record<string, unknown>): {
+  accountId: string
+  envelope: TeamCredentialHandoffEnvelope
+} {
+  exactFields(value, ['accountId', 'envelope'])
+  const accountId = exactStrings({ accountId: value.accountId }, ['accountId']).accountId
+  const envelope = value.envelope
+  if (typeof envelope !== 'object' || envelope === null || Array.isArray(envelope)) {
+    throw new Error('envelope must be an object')
+  }
+  const item = envelope as Record<string, unknown>
+  const keys = ['version', 'sessionId', 'clientPublicKey', 'iv', 'ciphertext', 'tag']
+  if (Object.keys(item).some(key => !keys.includes(key)) || item.version !== 1) {
+    throw new Error('OAuth handoff envelope is invalid')
+  }
+  for (const key of keys.slice(1)) {
+    if (typeof item[key] !== 'string' || (item[key] as string).length === 0) {
+      throw new Error('OAuth handoff envelope is invalid')
+    }
+  }
+  return { accountId, envelope: item as unknown as TeamCredentialHandoffEnvelope }
 }
 
 function exactFields(value: Record<string, unknown>, fields: readonly string[]): void {
@@ -469,8 +521,8 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
         handler: async (req, res) => {
           if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
           try {
-            const { label } = exactStrings(await readJson(req), ['label'])
-            json(res, 201, await service.startContributionOAuth(requireAuth(await authenticate(req, service)), label))
+            const { label, method } = oauthStartInput(await readJson(req))
+            json(res, 201, await service.startContributionOAuth(requireAuth(await authenticate(req, service)), label, method))
           } catch (error: unknown) {
             const message = safeMessage(error)
             json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })
@@ -483,8 +535,14 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
         handler: async (req, res) => {
           if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
           try {
-            const { accountId } = exactStrings(await readJson(req), ['accountId'])
-            json(res, 200, { account: await service.cancelContributionOAuth(requireAuth(await authenticate(req, service)), accountId) })
+            const { accountId, discardInitial } = oauthCancelInput(await readJson(req))
+            json(res, 200, {
+              account: await service.cancelContributionOAuth(
+                requireAuth(await authenticate(req, service)),
+                accountId,
+                { discardInitial },
+              ),
+            })
           } catch (error: unknown) {
             const message = safeMessage(error)
             json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })
@@ -497,8 +555,31 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
         handler: async (req, res) => {
           if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
           try {
-            const { accountId } = exactStrings(await readJson(req), ['accountId'])
-            json(res, 200, await service.reauthorizeContributionOAuth(requireAuth(await authenticate(req, service)), accountId))
+            const { accountId, method } = oauthReauthorizeInput(await readJson(req))
+            json(res, 200, await service.reauthorizeContributionOAuth(
+              requireAuth(await authenticate(req, service)),
+              accountId,
+              method,
+            ))
+          } catch (error: unknown) {
+            const message = safeMessage(error)
+            json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            const { accountId, envelope } = oauthHandoffInput(await readJson(req))
+            const account = await service.completeContributionOAuthHandoff(
+              requireAuth(await authenticate(req, service)),
+              accountId,
+              envelope,
+            )
+            json(res, 200, { account })
           } catch (error: unknown) {
             const message = safeMessage(error)
             json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })

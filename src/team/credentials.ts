@@ -11,8 +11,15 @@ import { OPENAI_CODEX_PROVIDER, OpenAICodexCredentialStore, openAICodexAuthPath 
 import type { OpenAICodexProfileStore } from '../store.ts'
 import { readOpenAICodexRateLimits } from '../usage.ts'
 import type { OpenAICodexUsage } from '../usage.ts'
-import { safeTeamErrorMessage } from './safe-message.ts'
-import type { TeamContributionStatus, TeamOAuthDeviceChallenge } from './types.ts'
+import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from './safe-message.ts'
+import { TeamCredentialHandoffRegistry } from './oauth-handoff.ts'
+import type { TeamCredentialHandoffEnvelope } from './oauth-handoff.ts'
+import type {
+  TeamContributionStatus,
+  TeamOAuthBrokerChallenge,
+  TeamOAuthDeviceChallenge,
+  TeamOAuthMethod,
+} from './types.ts'
 
 export interface TeamCredentialRef {
   readonly teamId: string
@@ -28,18 +35,29 @@ export interface TeamResponsesForwardRequest {
   readonly signal?: AbortSignal
 }
 
-/** Secret-free result used to reconcile persisted control-plane state. */
-export interface TeamCredentialAuthorizationState {
-  /** Remote brokers may still own an OAuth operation after the Team Host restarts. */
-  readonly status: 'authorizing' | 'active' | 'reauth_required'
-  readonly lastError?: string
+/** Secret-free provider-authenticated result used to activate one contribution atomically. */
+export interface TeamCredentialActiveState {
+  readonly status: 'active'
+  readonly accountLabel: string
 }
 
+/** Secret-free result used to reconcile persisted control-plane state. */
+export type TeamCredentialAuthorizationState =
+  /** Remote brokers may still own an OAuth operation after the Team Host restarts. */
+  | { readonly status: 'authorizing' }
+  | { readonly status: 'active'; readonly accountLabel?: string }
+  | { readonly status: 'reauth_required'; readonly lastError?: string }
+
 export interface TeamCredentialBroker {
-  /** Start an isolated device-code login and return no provider credential. */
-  startOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge>
-  /** Replace this contribution's isolated stale credential and start device login again. */
-  restartOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge>
+  /** Start an isolated authorization ceremony and return no provider credential. */
+  startOAuth(ref: TeamCredentialRef, method?: TeamOAuthMethod): Promise<TeamOAuthBrokerChallenge>
+  /** Replace this contribution's isolated stale credential and start authorization again. */
+  restartOAuth(ref: TeamCredentialRef, method?: TeamOAuthMethod): Promise<TeamOAuthBrokerChallenge>
+  /** Consume one authenticated, encrypted credential handoff into isolated storage. */
+  completeOAuthHandoff(
+    ref: TeamCredentialRef,
+    envelope: TeamCredentialHandoffEnvelope,
+  ): Promise<TeamCredentialActiveState>
   /** Cancel an in-flight OAuth operation without returning credentials. */
   cancelOAuth(ref: TeamCredentialRef): Promise<void>
   /** Inspect Host-owned credential state without returning provider identity or tokens. */
@@ -74,6 +92,7 @@ export interface LocalTeamCredentialBrokerOptions {
     status: 'active' | 'reauth_required',
     lastError?: string,
     expectedStatus?: TeamContributionStatus,
+    providerAuthenticatedLabel?: string,
   ) => Promise<void> | void
   /** Receives only sanitized diagnostics from detached OAuth completion work. */
   onBackgroundError?: (message: string) => Promise<void> | void
@@ -104,6 +123,7 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
   private readonly fetch: typeof fetch
   private readonly loginProfile: typeof loginOpenAICodexProfile
   private readonly operations = new Map<string, Operation>()
+  private readonly handoffs = new TeamCredentialHandoffRegistry()
 
   constructor(options: LocalTeamCredentialBrokerOptions = {}) {
     this.storage = options.storage ?? new FileTeamCredentialStoreBackend(
@@ -115,7 +135,14 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
     this.loginProfile = options.loginProfile ?? loginOpenAICodexProfile
   }
 
-  async startOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge> {
+  async startOAuth(
+    ref: TeamCredentialRef,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthBrokerChallenge> {
+    if (method === 'browser') {
+      this.handoffs.cancel(ref)
+      return { method: 'browser_handoff', handoff: this.handoffs.create(ref) }
+    }
     const key = operationKey(ref)
     const existing = this.operations.get(key)
     if (existing !== undefined) return existing.challenge
@@ -154,10 +181,22 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
         rejectChallenge(new Error('OpenAI Codex device authorization returned no challenge'))
       }
       const profiles = await store.listProfiles()
-      if (profiles.length === 1) {
-        await this.notifyStatus(ref, 'active', undefined, 'authorizing')
+      const profile = profiles.length === 1 ? profiles[0] : undefined
+      if (profile !== undefined && !operation.suppressStatus) {
+        await this.notifyStatus(
+          ref,
+          'active',
+          undefined,
+          'authorizing',
+          authenticatedAccountLabel(profile.label),
+        )
       } else if (!operation.suppressStatus) {
-        await this.notifyStatus(ref, 'reauth_required', 'OAuth did not produce exactly one account', 'authorizing')
+        await this.notifyStatus(
+          ref,
+          'reauth_required',
+          safeTeamOAuthErrorMessage('OAuth did not produce exactly one account'),
+          'authorizing',
+        )
       }
     }).catch(async (error: unknown) => {
       if (!challengeSettled) {
@@ -165,7 +204,7 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
         rejectChallenge(error)
       }
       if (!operation.suppressStatus) {
-        await this.notifyStatus(ref, 'reauth_required', safeTeamErrorMessage(error), 'authorizing')
+        await this.notifyStatus(ref, 'reauth_required', safeTeamOAuthErrorMessage(error), 'authorizing')
       }
     }).finally(() => {
       if (this.operations.get(key) === operation) this.operations.delete(key)
@@ -181,16 +220,43 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
     }
   }
 
-  async restartOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge> {
+  async restartOAuth(
+    ref: TeamCredentialRef,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthBrokerChallenge> {
     const existing = this.operations.get(operationKey(ref))
     if (existing !== undefined) return existing.challenge
+    this.handoffs.cancel(ref)
     await this.storage.delete(ref)
-    return this.startOAuth(ref)
+    return this.startOAuth(ref, method)
+  }
+
+  async completeOAuthHandoff(
+    ref: TeamCredentialRef,
+    envelope: TeamCredentialHandoffEnvelope,
+  ): Promise<TeamCredentialActiveState> {
+    const payload = this.handoffs.complete(ref, envelope)
+    const store = this.storage.open(ref)
+    const existing = await store.listProfiles()
+    if (existing.length > 0) throw new Error('Team account already has an isolated credential')
+    try {
+      const accountLabel = authenticatedAccountLabel(payload.label)
+      await store.addProfile(accountLabel, payload.credential)
+      return { status: 'active', accountLabel }
+    } catch (error: unknown) {
+      await this.storage.delete(ref).catch(() => undefined)
+      await this.notifyStatus(ref, 'reauth_required', safeTeamOAuthErrorMessage(error), 'authorizing')
+      throw error
+    }
   }
 
   async cancelOAuth(ref: TeamCredentialRef): Promise<void> {
+    this.handoffs.cancel(ref)
     const operation = this.operations.get(operationKey(ref))
     if (operation === undefined) return
+    // TeamService owns the final cancellation state. Suppress the detached
+    // device-login rejection so it cannot race that transition.
+    operation.suppressStatus = true
     operation.cancellation.abort(new Error('OpenAI Codex contribution authorization cancelled'))
     await operation.completion
   }
@@ -198,8 +264,9 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
   async inspectAuthorization(ref: TeamCredentialRef): Promise<TeamCredentialAuthorizationState> {
     if (this.operations.has(operationKey(ref))) return { status: 'authorizing' }
     const profiles = await this.store(ref).listProfiles()
-    return profiles.length === 1
-      ? { status: 'active' }
+    const profile = profiles.length === 1 ? profiles[0] : undefined
+    return profile !== undefined
+      ? { status: 'active', accountLabel: authenticatedAccountLabel(profile.label) }
       : {
           status: 'reauth_required',
           lastError: 'authorization was interrupted; authorize this account again',
@@ -211,7 +278,7 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
       return await readOpenAICodexRateLimits(this.store(ref), signal)
     } catch (error: unknown) {
       if (/sign-in|signed out|oauth|credential/iu.test(safeTeamErrorMessage(error))) {
-        await this.notifyStatus(ref, 'reauth_required', safeTeamErrorMessage(error), 'active')
+        await this.notifyStatus(ref, 'reauth_required', safeTeamOAuthErrorMessage(error), 'active')
       }
       throw error
     }
@@ -257,6 +324,7 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
   }
 
   async revoke(ref: TeamCredentialRef): Promise<void> {
+    this.handoffs.cancel(ref)
     const key = operationKey(ref)
     const operation = this.operations.get(key)
     if (operation !== undefined) {
@@ -270,6 +338,7 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
   }
 
   async dispose(): Promise<void> {
+    this.handoffs.dispose()
     const operations = [...this.operations.values()]
     for (const operation of operations) {
       operation.suppressStatus = true
@@ -289,9 +358,21 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
     status: 'active' | 'reauth_required',
     lastError?: string,
     expectedStatus?: TeamContributionStatus,
+    providerAuthenticatedLabel?: string,
   ): Promise<void> {
     try {
-      await this.onStatusChange(ref.teamId, ref.accountId, status, lastError, expectedStatus)
+      if (providerAuthenticatedLabel === undefined) {
+        await this.onStatusChange(ref.teamId, ref.accountId, status, lastError, expectedStatus)
+      } else {
+        await this.onStatusChange(
+          ref.teamId,
+          ref.accountId,
+          status,
+          lastError,
+          expectedStatus,
+          providerAuthenticatedLabel,
+        )
+      }
     } catch (error: unknown) {
       try {
         await this.onBackgroundError(safeTeamErrorMessage(error))
@@ -365,6 +446,14 @@ function forwardedHeaders(input: Readonly<Record<string, string>>): Headers {
 
 function operationKey(ref: TeamCredentialRef): string {
   return `${ref.teamId}:${ref.accountId}`
+}
+
+function authenticatedAccountLabel(value: string): string {
+  const label = value.trim()
+  if (label.length === 0 || label.length > 80 || /[\r\n]/u.test(label)) {
+    throw new Error('OpenAI Codex returned an invalid account label')
+  }
+  return label
 }
 
 function credentialFilename(rootDir: string, ref: TeamCredentialRef): string {

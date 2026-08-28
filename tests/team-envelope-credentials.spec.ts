@@ -335,7 +335,10 @@ describe('PostgreSQL Team envelope credential backend', () => {
 
     await expect(broker.startOAuth(ref)).resolves.toMatchObject({ userCode: 'ABCD-EFGH' })
     await vi.waitFor(async () => {
-      await expect(broker.inspectAuthorization(ref)).resolves.toEqual({ status: 'active' })
+      await expect(broker.inspectAuthorization(ref)).resolves.toEqual({
+        status: 'active',
+        accountLabel: 'Owner Codex',
+      })
     })
     await expect(broker.forwardResponses(ref, {
       model: 'gpt-5-codex',

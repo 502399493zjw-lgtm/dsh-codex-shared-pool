@@ -4,18 +4,26 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OpenAICodexUsage } from '../shared/types.ts'
 import type {
+  TeamCredentialActiveState,
   TeamCredentialAuthorizationState,
   TeamCredentialBroker,
   TeamCredentialRef,
   TeamResponsesForwardRequest,
 } from './credentials.ts'
-import { safeTeamErrorMessage } from './safe-message.ts'
-import type { TeamContributionStatus, TeamOAuthDeviceChallenge } from './types.ts'
+import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from './safe-message.ts'
+import type { TeamCredentialHandoffEnvelope, TeamCredentialHandoffOffer } from './oauth-handoff.ts'
+import type {
+  TeamContributionStatus,
+  TeamOAuthBrokerChallenge,
+  TeamOAuthDeviceChallenge,
+  TeamOAuthMethod,
+} from './types.ts'
 
 export const TEAM_CREDENTIAL_BROKER_PATH_PREFIX = '/v1/dsh-team-credential-broker'
 export const TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/start`
 export const TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/restart`
 export const TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/cancel`
+export const TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/handoff/complete`
 export const TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/authorization`
 export const TEAM_CREDENTIAL_BROKER_USAGE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/usage`
 export const TEAM_CREDENTIAL_BROKER_RESPONSES_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/responses`
@@ -23,7 +31,7 @@ export const TEAM_CREDENTIAL_BROKER_REVOKE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH
 
 const FORWARD_METADATA_HEADER = 'x-dsh-team-broker-forward'
 const UPSTREAM_RESPONSE_HEADER = 'x-dsh-team-broker-upstream'
-const DEFAULT_MAX_JSON_BODY_BYTES = 16 * 1024
+const DEFAULT_MAX_JSON_BODY_BYTES = 256 * 1024
 const DEFAULT_MAX_FORWARD_BODY_BYTES = 32 * 1024 * 1024
 const DEFAULT_JSON_TIMEOUT_MS = 15_000
 const DEFAULT_POLL_INTERVAL_MS = 1_000
@@ -131,17 +139,39 @@ export class RemoteTeamCredentialBroker implements TeamCredentialBroker {
     this.onBackgroundError = options.onBackgroundError ?? (() => undefined)
   }
 
-  async startOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge> {
-    const challenge = parseDeviceChallenge(await this.postJson(TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH, ref))
-    this.ensureMonitor(ref)
+  async startOAuth(
+    ref: TeamCredentialRef,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthBrokerChallenge> {
+    const challenge = parseBrokerChallenge(await this.postJson(
+      TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH,
+      { ...ref, method },
+    ), method)
+    if (challenge.method === 'device_code') this.ensureMonitor(ref)
     return challenge
   }
 
-  async restartOAuth(ref: TeamCredentialRef): Promise<TeamOAuthDeviceChallenge> {
+  async restartOAuth(
+    ref: TeamCredentialRef,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthBrokerChallenge> {
     await this.stopMonitor(ref)
-    const challenge = parseDeviceChallenge(await this.postJson(TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH, ref))
-    this.ensureMonitor(ref)
+    const challenge = parseBrokerChallenge(await this.postJson(
+      TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH,
+      { ...ref, method },
+    ), method)
+    if (challenge.method === 'device_code') this.ensureMonitor(ref)
     return challenge
+  }
+
+  async completeOAuthHandoff(
+    ref: TeamCredentialRef,
+    envelope: TeamCredentialHandoffEnvelope,
+  ): Promise<TeamCredentialActiveState> {
+    return parseCredentialActiveState(await this.postJson(
+      TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH,
+      { ...ref, envelope },
+    ))
   }
 
   async cancelOAuth(ref: TeamCredentialRef): Promise<void> {
@@ -252,7 +282,13 @@ export class RemoteTeamCredentialBroker implements TeamCredentialBroker {
         await delay(this.pollIntervalMs, signal)
         const state = parseAuthorizationState(await this.postJson(TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH, ref, signal))
         if (state.status === 'authorizing') continue
-        await this.onStatusChange(ref.teamId, ref.accountId, state.status, state.lastError, 'authorizing')
+        await this.onStatusChange(
+          ref.teamId,
+          ref.accountId,
+          state.status,
+          state.status === 'reauth_required' ? state.lastError : undefined,
+          'authorizing',
+        )
         return
       } catch (error: unknown) {
         if (signal.aborted) return
@@ -347,18 +383,27 @@ export function createTeamCredentialBrokerHttpHandler(
       req.once('aborted', onDisconnected)
       res.once('close', onResponseClose)
       try {
-        const ref = parseCredentialRef(await readJson(req, maxJsonBodyBytes))
+        const body = await readJson(req, maxJsonBodyBytes)
         if (path === TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH) {
-          writeJson(res, 200, parseDeviceChallenge(await options.broker.startOAuth(ref)))
+          const { ref, method } = parseOAuthRequest(body)
+          writeJson(res, 200, parseBrokerChallenge(await options.broker.startOAuth(ref, method), method))
         } else if (path === TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH) {
-          writeJson(res, 200, parseDeviceChallenge(await options.broker.restartOAuth(ref)))
+          const { ref, method } = parseOAuthRequest(body)
+          writeJson(res, 200, parseBrokerChallenge(await options.broker.restartOAuth(ref, method), method))
+        } else if (path === TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH) {
+          const { ref, envelope } = parseHandoffRequest(body)
+          writeJson(res, 200, parseCredentialActiveState(await options.broker.completeOAuthHandoff(ref, envelope)))
         } else if (path === TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH) {
+          const ref = parseCredentialRef(body)
           await options.broker.cancelOAuth(ref); writeJson(res, 200, { ok: true })
         } else if (path === TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH) {
+          const ref = parseCredentialRef(body)
           writeJson(res, 200, parseAuthorizationState(await options.broker.inspectAuthorization(ref)))
         } else if (path === TEAM_CREDENTIAL_BROKER_USAGE_PATH) {
+          const ref = parseCredentialRef(body)
           writeJson(res, 200, parseUsage(await options.broker.readUsage(ref, cancellation.signal)))
         } else if (path === TEAM_CREDENTIAL_BROKER_REVOKE_PATH) {
+          const ref = parseCredentialRef(body)
           await options.broker.revoke(ref); writeJson(res, 200, { ok: true })
         }
       } finally {
@@ -384,6 +429,7 @@ const BROKER_PATHS = new Set([
   TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH,
+  TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH,
   TEAM_CREDENTIAL_BROKER_USAGE_PATH,
   TEAM_CREDENTIAL_BROKER_RESPONSES_PATH,
@@ -496,7 +542,9 @@ function identifier(value: unknown, label: string): string {
 }
 
 function parseDeviceChallenge(value: unknown): TeamOAuthDeviceChallenge {
-  if (!isRecord(value) || value['method'] !== 'device_code'
+  if (!isRecord(value)
+    || !exactKeys(value, ['method', 'verificationUrl', 'userCode', 'expiresAt'])
+    || value['method'] !== 'device_code'
     || typeof value['verificationUrl'] !== 'string'
     || typeof value['userCode'] !== 'string'
     || !Number.isSafeInteger(value['expiresAt'])) {
@@ -518,18 +566,107 @@ function parseDeviceChallenge(value: unknown): TeamOAuthDeviceChallenge {
   }
 }
 
-function parseAuthorizationState(value: unknown): TeamCredentialAuthorizationState {
-  if (!isRecord(value) || !['authorizing', 'active', 'reauth_required'].includes(String(value['status']))) {
-    throw new BrokerInputError(502, 'credential broker returned an invalid authorization state')
+function parseBrokerChallenge(value: unknown, expectedMethod: TeamOAuthMethod): TeamOAuthBrokerChallenge {
+  let challenge: TeamOAuthBrokerChallenge
+  if (isRecord(value) && value['method'] === 'browser_handoff') {
+    if (!exactKeys(value, ['method', 'handoff'])) {
+      throw new BrokerInputError(502, 'credential broker returned an invalid OAuth handoff')
+    }
+    challenge = { method: 'browser_handoff', handoff: parseHandoffOffer(value['handoff']) }
+  } else {
+    challenge = parseDeviceChallenge(value)
   }
-  const lastError = value['lastError']
-  if (lastError !== undefined && (typeof lastError !== 'string' || lastError.length > 500)) {
-    throw new BrokerInputError(502, 'credential broker returned an invalid authorization state')
+  if ((expectedMethod === 'browser' && challenge.method !== 'browser_handoff')
+    || (expectedMethod === 'device_code' && challenge.method !== 'device_code')) {
+    throw new BrokerInputError(502, 'credential broker returned an OAuth challenge for the wrong method')
+  }
+  return challenge
+}
+
+function parseHandoffOffer(value: unknown): TeamCredentialHandoffOffer {
+  if (!isRecord(value) || !exactKeys(value, ['version', 'sessionId', 'serverPublicKey', 'expiresAt'])
+    || value['version'] !== 1 || !Number.isSafeInteger(value['expiresAt'])
+    || (value['expiresAt'] as number) <= 0) {
+    throw new BrokerInputError(502, 'credential broker returned an invalid OAuth handoff')
   }
   return {
-    status: value['status'] as TeamCredentialAuthorizationState['status'],
-    ...typeof lastError === 'string' ? { lastError: safeTeamErrorMessage(lastError) } : {},
+    version: 1,
+    sessionId: handoffSessionId(value['sessionId'], 502),
+    serverPublicKey: canonicalBase64Url(value['serverPublicKey'], 'handoff server public key', 44, 44, 502),
+    expiresAt: value['expiresAt'] as number,
   }
+}
+
+function parseOAuthRequest(value: unknown): { ref: TeamCredentialRef, method: TeamOAuthMethod } {
+  if (!isRecord(value) || !exactKeys(value, ['teamId', 'accountId', 'method'])) {
+    throw new BrokerInputError(400, 'OAuth request is invalid')
+  }
+  const method = value['method']
+  if (method !== 'browser' && method !== 'device_code') {
+    throw new BrokerInputError(400, 'OAuth method is invalid')
+  }
+  return {
+    ref: parseCredentialRef({ teamId: value['teamId'], accountId: value['accountId'] }),
+    method,
+  }
+}
+
+function parseHandoffRequest(value: unknown): { ref: TeamCredentialRef, envelope: TeamCredentialHandoffEnvelope } {
+  if (!isRecord(value) || !exactKeys(value, ['teamId', 'accountId', 'envelope'])) {
+    throw new BrokerInputError(400, 'OAuth handoff request is invalid')
+  }
+  const envelope = value['envelope']
+  if (!isRecord(envelope)
+    || !exactKeys(envelope, ['version', 'sessionId', 'clientPublicKey', 'iv', 'ciphertext', 'tag'])
+    || envelope['version'] !== 1) {
+    throw new BrokerInputError(400, 'OAuth handoff envelope is invalid')
+  }
+  return {
+    ref: parseCredentialRef({ teamId: value['teamId'], accountId: value['accountId'] }),
+    envelope: {
+      version: 1,
+      sessionId: handoffSessionId(envelope['sessionId'], 400),
+      clientPublicKey: canonicalBase64Url(envelope['clientPublicKey'], 'handoff client public key', 44, 44, 400),
+      iv: canonicalBase64Url(envelope['iv'], 'handoff iv', 12, 12, 400),
+      ciphertext: canonicalBase64Url(envelope['ciphertext'], 'handoff ciphertext', 1, 128 * 1024, 400),
+      tag: canonicalBase64Url(envelope['tag'], 'handoff tag', 16, 16, 400),
+    },
+  }
+}
+
+function parseAuthorizationState(value: unknown): TeamCredentialAuthorizationState {
+  if (!isRecord(value)) {
+    throw new BrokerInputError(502, 'credential broker returned an invalid authorization state')
+  }
+  if (value['status'] === 'authorizing' && exactKeys(value, ['status'])) return { status: 'authorizing' }
+  if (value['status'] === 'active') {
+    const accountLabel = value['accountLabel']
+    const keys = accountLabel === undefined ? ['status'] : ['status', 'accountLabel']
+    if (!exactKeys(value, keys)
+      || (accountLabel !== undefined && !validAccountLabel(accountLabel))) {
+      throw new BrokerInputError(502, 'credential broker returned an invalid authorization state')
+    }
+    return accountLabel === undefined
+      ? { status: 'active' }
+      : { status: 'active', accountLabel: accountLabel.trim() }
+  }
+  const lastError = value['lastError']
+  if (value['status'] !== 'reauth_required'
+    || !exactKeys(value, lastError === undefined ? ['status'] : ['status', 'lastError'])
+    || (lastError !== undefined && (typeof lastError !== 'string' || lastError.length > 500))) {
+    throw new BrokerInputError(502, 'credential broker returned an invalid authorization state')
+  }
+  return typeof lastError === 'string'
+    ? { status: 'reauth_required', lastError: safeTeamOAuthErrorMessage(lastError) }
+    : { status: 'reauth_required' }
+}
+
+function parseCredentialActiveState(value: unknown): TeamCredentialActiveState {
+  const state = parseAuthorizationState(value)
+  if (state.status !== 'active' || state.accountLabel === undefined) {
+    throw new BrokerInputError(502, 'credential broker returned a non-active handoff result')
+  }
+  return { status: 'active', accountLabel: state.accountLabel }
 }
 
 function parseUsage(value: unknown): OpenAICodexUsage {
@@ -760,6 +897,34 @@ function boundedString(value: unknown, label: string, maxLength: number): string
     throw new BrokerInputError(400, `${label} is invalid`)
   }
   return value
+}
+
+function handoffSessionId(value: unknown, status: number): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/u.test(value)) {
+    throw new BrokerInputError(status, 'handoff session id is invalid')
+  }
+  return value
+}
+
+function canonicalBase64Url(
+  value: unknown,
+  label: string,
+  minBytes: number,
+  maxBytes: number,
+  status: number,
+): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(value)) {
+    throw new BrokerInputError(status, `${label} is invalid`)
+  }
+  const decoded = Buffer.from(value, 'base64url')
+  if (decoded.byteLength < minBytes || decoded.byteLength > maxBytes || decoded.toString('base64url') !== value) {
+    throw new BrokerInputError(status, `${label} is invalid`)
+  }
+  return value
+}
+
+function validAccountLabel(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 80 && !/[\r\n]/u.test(value)
 }
 
 function boundedInteger(value: number, label: string, min: number, max: number): number {

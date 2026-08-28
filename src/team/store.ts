@@ -186,6 +186,7 @@ export interface TeamStore {
     status: TeamContributionStatus,
     lastError?: string,
     expectedStatus?: TeamContributionStatus,
+    providerAuthenticatedLabel?: string,
   ): Promise<TeamContributionAccountSummary>
   beginUsageEvent(
     auth: TeamAuthContext,
@@ -635,6 +636,9 @@ function ownedAccountUsage(
   endedAt: number,
 ): TeamUsageProjection['ownedAccounts'] {
   const startedAt = endedAt - 7 * 86_400_000
+  const last24HoursStartedAt = endedAt - 86_400_000
+  const currentUtcWeekStartedAt = utcIsoWeekStart(endedAt)
+  const currentUtcWeekResetAt = currentUtcWeekStartedAt + 7 * 86_400_000
   return accounts
     .filter(account => account.ownerMemberId === memberId && account.status !== 'revoked')
     .map(account => {
@@ -647,6 +651,15 @@ function ownedAccountUsage(
         accountId: account.id,
         window: { startedAt, endedAt },
         aggregate: aggregateUsage(matching),
+        currentUtcWeek: {
+          window: { startedAt: currentUtcWeekStartedAt, endedAt },
+          resetAt: currentUtcWeekResetAt,
+          aggregate: aggregateUsage(matching.filter(event => event.startedAt >= currentUtcWeekStartedAt)),
+        },
+        last24Hours: {
+          window: { startedAt: last24HoursStartedAt, endedAt },
+          aggregate: aggregateUsage(matching.filter(event => event.startedAt >= last24HoursStartedAt)),
+        },
         recentRequests: matching.slice(0, 10).map(event => ({
           id: event.id,
           model: event.model,
@@ -1349,11 +1362,16 @@ export class MemoryTeamStore implements TeamStore {
     status: TeamContributionStatus,
     lastError?: string,
     expectedStatus?: TeamContributionStatus,
+    providerAuthenticatedLabel?: string,
   ): Promise<TeamContributionAccountSummary> {
     const account = this.requireContribution(accountId, teamId)
     if (this.requireTeam(teamId).status === 'dissolved' && status !== 'revoked') return summaryContribution(account)
     if (account.status === 'revoked' && status !== 'revoked') return summaryContribution(account)
     if (expectedStatus !== undefined && account.status !== expectedStatus) return summaryContribution(account)
+    if (providerAuthenticatedLabel !== undefined) {
+      if (status !== 'active') throw new Error('providerAuthenticatedLabel requires active status')
+      account.label = nonEmpty(providerAuthenticatedLabel, 'providerAuthenticatedLabel', MAX_KEY_LABEL_LENGTH)
+    }
     account.status = status
     if (lastError === undefined) delete account.lastError
     else account.lastError = nonEmpty(safeTeamErrorMessage(lastError), 'lastError', 240)

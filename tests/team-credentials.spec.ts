@@ -6,8 +6,47 @@ import type { AuthInteraction, OAuthCredential } from '@earendil-works/pi-ai'
 import { LocalTeamCredentialBroker } from '../src/team/credentials.ts'
 import { OpenAICodexCredentialStore } from '../src/store.ts'
 import { OPENAI_CODEX_RESPONSES_URL } from '../src/responses.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
+import { sealTeamCredentialHandoff } from '../src/team/oauth-handoff.ts'
+
+const usage = vi.hoisted(() => ({
+  readOpenAICodexRateLimits: vi.fn(),
+}))
+
+vi.mock('../src/usage.ts', () => usage)
 
 describe('Local Team credential broker', () => {
+  it('accepts a one-time encrypted browser OAuth handoff without exposing the credential', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-browser-auth-'))
+    const ref = { teamId: 'team-1', accountId: 'account-1' }
+    try {
+      const broker = new LocalTeamCredentialBroker({ rootDir })
+      const challenge = await broker.startOAuth(ref, 'browser')
+      expect(challenge.method).toBe('browser_handoff')
+      if (challenge.method !== 'browser_handoff') throw new Error('expected browser handoff')
+      const envelope = sealTeamCredentialHandoff(challenge.handoff, ref, {
+        label: 'Owner Codex',
+        credential: {
+          type: 'oauth',
+          access: 'host-only-access-token',
+          refresh: 'host-only-refresh-token',
+          expires: Date.now() + 60_000,
+          accountId: 'chatgpt-account-1',
+        },
+      })
+
+      await expect(broker.completeOAuthHandoff(ref, envelope)).resolves.toEqual({
+        status: 'active',
+        accountLabel: 'Owner Codex',
+      })
+      await expect(broker.completeOAuthHandoff(ref, envelope)).rejects.toThrow(/unknown|already used/iu)
+      expect(JSON.stringify(challenge)).not.toMatch(/host-only|chatgpt-account/iu)
+      await broker.dispose()
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
   it('inspects isolated credential state without returning OAuth material', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-inspect-auth-'))
     try {
@@ -29,7 +68,7 @@ describe('Local Team credential broker', () => {
         accountId: 'chatgpt-account-1',
       })
       const active = await broker.inspectAuthorization(ref)
-      expect(active).toEqual({ status: 'active' })
+      expect(active).toEqual({ status: 'active', accountLabel: 'Owner Codex' })
       expect(JSON.stringify(active)).not.toMatch(/access|refresh|chatgpt-account/iu)
       await broker.dispose()
     } finally {
@@ -167,7 +206,7 @@ describe('Local Team credential broker', () => {
     }
   })
 
-  it('redacts provider failures before notifying contribution status persistence', async () => {
+  it('projects provider failures to a closed stable code before status persistence', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-provider-error-auth-'))
     try {
       const onStatusChange = vi.fn()
@@ -192,12 +231,56 @@ describe('Local Team credential broker', () => {
           'team-1',
           'account-1',
           'reauth_required',
-          expect.stringContaining('[redacted]'),
+          TEAM_AUTHORIZATION_FAILED_CODE,
           'authorizing',
         )
       })
       const diagnostic = String(onStatusChange.mock.calls[0]?.[3])
-      expect(diagnostic).not.toMatch(/opaque-provider-token|provider-client-secret/u)
+      expect(diagnostic).not.toMatch(/OAuth failed|opaque-provider-token|provider-client-secret/u)
+      await broker.dispose()
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists a closed OAuth code when a usage refresh discovers stale authentication', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-usage-auth-'))
+    const ref = { teamId: 'team-1', accountId: 'account-1' }
+    const providerError = new Error(
+      'OpenAI Codex OAuth credential expired Authorization: Bearer opaque-provider-token',
+    )
+    try {
+      const onStatusChange = vi.fn()
+      usage.readOpenAICodexRateLimits.mockRejectedValueOnce(providerError)
+      const broker = new LocalTeamCredentialBroker({ rootDir, onStatusChange })
+
+      await expect(broker.readUsage(ref)).rejects.toBe(providerError)
+      expect(onStatusChange).toHaveBeenCalledWith(
+        'team-1',
+        'account-1',
+        'reauth_required',
+        TEAM_AUTHORIZATION_FAILED_CODE,
+        'active',
+      )
+      expect(JSON.stringify(onStatusChange.mock.calls))
+        .not.toMatch(/opaque-provider-token|Authorization: Bearer/iu)
+      await broker.dispose()
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps non-authentication usage failures transient and does not rewrite durable status', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-usage-transient-'))
+    const ref = { teamId: 'team-1', accountId: 'account-1' }
+    const providerError = new Error('OpenAI Codex usage request failed with HTTP 429')
+    try {
+      const onStatusChange = vi.fn()
+      usage.readOpenAICodexRateLimits.mockRejectedValueOnce(providerError)
+      const broker = new LocalTeamCredentialBroker({ rootDir, onStatusChange })
+
+      await expect(broker.readUsage(ref)).rejects.toBe(providerError)
+      expect(onStatusChange).not.toHaveBeenCalled()
       await broker.dispose()
     } finally {
       await rm(rootDir, { recursive: true, force: true })
@@ -230,7 +313,14 @@ describe('Local Team credential broker', () => {
 
       await broker.startOAuth({ teamId: 'team-1', accountId: 'account-1' })
       await vi.waitFor(() => {
-        expect(onStatusChange).toHaveBeenCalledWith('team-1', 'account-1', 'active', undefined, 'authorizing')
+        expect(onStatusChange).toHaveBeenCalledWith(
+          'team-1',
+          'account-1',
+          'active',
+          undefined,
+          'authorizing',
+          'Owner Codex',
+        )
       })
       await broker.dispose()
     } finally {

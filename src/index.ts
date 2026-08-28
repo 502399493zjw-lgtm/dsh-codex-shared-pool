@@ -446,7 +446,9 @@ export function apply(ctx: Context, config: Config): void {
     registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network, routingEvents)
   })
   ctx.inject(['webServer', 'credentials'], (teamClientCtx) => {
-    registerTeamManagementRoutes(teamClientCtx, config.teamClient ?? {}, teamClientCtx.credentials)
+    registerTeamManagementRoutes(teamClientCtx, config.teamClient ?? {}, teamClientCtx.credentials, {
+      localProfiles: credentials,
+    })
   })
   if (config.team?.enabled === true) {
     ctx.inject(['webServer', 'credentials'], async (teamCtx) => {

@@ -253,7 +253,7 @@ describe('Team Host runtime', () => {
     })
 
     await expect(service.broker.inspectAuthorization({ teamId: account.teamId, accountId: account.id }))
-      .resolves.toEqual({ status: 'active' })
+      .resolves.toEqual({ status: 'active', accountLabel: 'Owner Codex' })
     await expect(store.listContributionAccounts(owner)).resolves.toMatchObject([{ id: account.id, status: 'active' }])
     expect(resolve.mock.calls.map(([ref]) => String(ref))).toContain('PREVIOUS_TEAM_KEK')
     await service.dispose()

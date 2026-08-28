@@ -11,10 +11,13 @@ import {
 } from '../src/team/store.ts'
 import { TeamService } from '../src/team/service.ts'
 import type { TeamCredentialBroker, TeamCredentialRef } from '../src/team/credentials.ts'
+import type { TeamCredentialHandoffEnvelope } from '../src/team/oauth-handoff.ts'
+import type { TeamOAuthMethod } from '../src/team/types.ts'
 import { TeamRequestRouter } from '../src/team/routing.ts'
 import { TeamInviteCipher } from '../src/team/invite-cipher.ts'
 import type { TeamInviteKeyEncryptionProvider } from '../src/team/invite-cipher.ts'
 import { Aes256GcmTeamInviteKeyEncryptionProvider } from '../src/team/invite-key-encryption.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
 function blockingRevealCipher(): {
   cipher: TeamInviteCipher
@@ -141,6 +144,8 @@ class FakeCredentialBroker implements TeamCredentialBroker {
   readonly cancelled: TeamCredentialRef[] = []
   readonly revoked: TeamCredentialRef[] = []
   readonly inspected: TeamCredentialRef[] = []
+  readonly completed: Array<{ ref: TeamCredentialRef; envelope: TeamCredentialHandoffEnvelope }> = []
+  readonly methods: TeamOAuthMethod[] = []
 
   constructor(
     private readonly onCancel: (ref: TeamCredentialRef) => Promise<void> = async () => undefined,
@@ -148,8 +153,20 @@ class FakeCredentialBroker implements TeamCredentialBroker {
     private readonly onRevoke: (ref: TeamCredentialRef) => Promise<void> = async () => undefined,
   ) {}
 
-  startOAuth(ref: TeamCredentialRef): Promise<{ method: 'device_code'; verificationUrl: string; userCode: string; expiresAt: number }> {
+  startOAuth(ref: TeamCredentialRef, method: TeamOAuthMethod = 'device_code'): ReturnType<TeamCredentialBroker['startOAuth']> {
     this.started.push(ref)
+    this.methods.push(method)
+    if (method === 'browser') {
+      return Promise.resolve({
+        method: 'browser_handoff',
+        handoff: {
+          version: 1,
+          sessionId: '00000000-0000-4000-8000-000000000001',
+          serverPublicKey: 'test-public-key',
+          expiresAt: 1_800_000,
+        },
+      })
+    }
     return Promise.resolve({
       method: 'device_code',
       verificationUrl: 'https://auth.example.test/codex/device',
@@ -158,9 +175,17 @@ class FakeCredentialBroker implements TeamCredentialBroker {
     })
   }
 
-  restartOAuth(ref: TeamCredentialRef): Promise<{ method: 'device_code'; verificationUrl: string; userCode: string; expiresAt: number }> {
+  restartOAuth(ref: TeamCredentialRef, method: TeamOAuthMethod = 'device_code'): ReturnType<TeamCredentialBroker['restartOAuth']> {
     this.restarted.push(ref)
-    return this.startOAuth(ref)
+    return this.startOAuth(ref, method)
+  }
+
+  completeOAuthHandoff(
+    ref: TeamCredentialRef,
+    envelope: TeamCredentialHandoffEnvelope,
+  ): ReturnType<TeamCredentialBroker['completeOAuthHandoff']> {
+    this.completed.push({ ref, envelope })
+    return Promise.resolve({ status: 'active', accountLabel: 'Owner Codex' })
   }
 
   async cancelOAuth(ref: TeamCredentialRef): Promise<void> {
@@ -1635,6 +1660,27 @@ describe('Team control plane', () => {
     expect(ownerOwnedUsage).toHaveLength(1)
     expect(ownerOwnedUsage[0]).toMatchObject({
       accountId: ownerAccount.id,
+      currentUtcWeek: {
+        window: { startedAt: Date.UTC(2026, 7, 17), endedAt: now },
+        resetAt: Date.UTC(2026, 7, 24),
+        aggregate: {
+          requestCount: 2,
+          tokenMeasuredRequestCount: 1,
+          pricedRequestCount: 1,
+          totalTokens: '120',
+          estimatedCostUsdMicros: '1234',
+        },
+      },
+      last24Hours: {
+        window: { startedAt: now - 86_400_000, endedAt: now },
+        aggregate: {
+          requestCount: 2,
+          tokenMeasuredRequestCount: 1,
+          pricedRequestCount: 1,
+          totalTokens: '120',
+          estimatedCostUsdMicros: '1234',
+        },
+      },
       aggregate: {
         requestCount: 2,
         tokenMeasuredRequestCount: 1,
@@ -1719,6 +1765,68 @@ describe('Team control plane', () => {
     expect(cancelled).toMatchObject({ id: started.account.id, status: 'reauth_required' })
     await service.revokeContributionAccount(owner, started.account.id)
     expect(broker.revoked).toEqual([{ teamId: owner.teamId, accountId: started.account.id }])
+  })
+
+  it('activates a browser OAuth handoff without returning provider credentials', async () => {
+    const broker = new FakeCredentialBroker()
+    const service = new TeamService({ store: new MemoryTeamStore(), broker })
+    const boot = await service.store.bootstrap('Friends', 'Owner')
+    const owner = await service.store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+
+    const started = await service.startContributionOAuth(owner, 'Pending account', 'browser')
+    expect(started).toMatchObject({ method: 'browser_handoff', account: { status: 'authorizing' } })
+    const envelope: TeamCredentialHandoffEnvelope = {
+      version: 1,
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      clientPublicKey: 'client-public-key',
+      iv: 'test-iv',
+      ciphertext: 'test-ciphertext',
+      tag: 'test-tag',
+    }
+
+    await expect(service.completeContributionOAuthHandoff(owner, started.account.id, envelope))
+      .resolves.toMatchObject({ id: started.account.id, label: 'Owner Codex', status: 'active' })
+    expect(broker.methods).toEqual(['browser'])
+    expect(broker.completed).toEqual([{
+      ref: { teamId: owner.teamId, accountId: started.account.id },
+      envelope,
+    }])
+    expect(JSON.stringify(started)).not.toMatch(/access|refresh|credential/iu)
+  })
+
+  it('discards a cancelled first browser authorization without leaving a ghost account', async () => {
+    const broker = new FakeCredentialBroker()
+    const service = new TeamService({ store: new MemoryTeamStore(), broker })
+    const boot = await service.store.bootstrap('Friends', 'Owner')
+    const owner = await service.store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const started = await service.startContributionOAuth(owner, 'Owner Codex', 'browser')
+
+    await expect(service.cancelContributionOAuth(owner, started.account.id, { discardInitial: true }))
+      .resolves.toMatchObject({ id: started.account.id, status: 'revoked' })
+    expect(broker.cancelled).toEqual([{ teamId: owner.teamId, accountId: started.account.id }])
+    expect(broker.revoked).toEqual([{ teamId: owner.teamId, accountId: started.account.id }])
+  })
+
+  it('projects a provider region failure as a stable authorization network error', async () => {
+    class RegionBlockedBroker extends FakeCredentialBroker {
+      override startOAuth(): ReturnType<TeamCredentialBroker['startOAuth']> {
+        return Promise.reject(new Error(
+          'OpenAI Codex device code request failed with status 403: {"error":{"message":"Country, region, or territory not supported","secret":"provider-detail"}}',
+        ))
+      }
+    }
+    const service = new TeamService({ store: new MemoryTeamStore(), broker: new RegionBlockedBroker() })
+    const boot = await service.store.bootstrap('Friends', 'Owner')
+    const owner = await service.store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+
+    await expect(service.startContributionOAuth(owner, 'Owner Codex'))
+      .rejects.toThrow('team_authorization_network_unavailable')
+    const persisted = (await service.store.listContributionAccounts(owner))[0]
+    expect(persisted).toMatchObject({ status: 'revoked', lastError: 'team_authorization_network_unavailable' })
+    expect(JSON.stringify(persisted)).not.toMatch(/Country, region|provider-detail|device code request/iu)
   })
 
   it('revokes a newly issued OAuth credential when Team dissolution wins the start race', async () => {
@@ -1930,11 +2038,15 @@ describe('Team control plane', () => {
     const contribution = await service.store.createContributionAccount(owner, 'Owner Codex')
     await service.store.setContributionAccountStatus(owner.teamId, contribution.id, 'reauth_required')
 
-    await expect(service.reauthorizeContributionOAuth(owner, contribution.id)).rejects.toThrow(/provider refused/iu)
+    await expect(service.reauthorizeContributionOAuth(owner, contribution.id))
+      .rejects.toThrow(TEAM_AUTHORIZATION_FAILED_CODE)
     const persisted = (await service.store.listContributionAccounts(owner))[0]
-    expect(persisted).toMatchObject({ id: contribution.id, status: 'reauth_required' })
-    expect(persisted?.lastError).toContain('[redacted]')
-    expect(persisted?.lastError).not.toContain('opaque-provider-token')
+    expect(persisted).toMatchObject({
+      id: contribution.id,
+      status: 'reauth_required',
+      lastError: TEAM_AUTHORIZATION_FAILED_CODE,
+    })
+    expect(JSON.stringify(persisted)).not.toMatch(/provider refused|opaque-provider-token|authorization: bearer/iu)
   })
 
   it('cleans up a restarted credential when revocation wins the race', async () => {

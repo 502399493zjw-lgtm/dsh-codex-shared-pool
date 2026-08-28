@@ -5,10 +5,12 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { describe, expect, it, vi } from 'vitest'
 import {
   OPENAI_CODEX_NETWORK_STATUS_PATH,
+  OPENAI_CODEX_PROFILE_DIRECTORY_PATH,
   OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH,
   OPENAI_CODEX_PROFILE_LOGIN_PATH,
   OPENAI_CODEX_PROFILES_PATH,
   OPENAI_CODEX_ROUTING_EVENTS_PATH,
+  OpenAICodexWebAuth,
   registerOpenAICodexAuthRoutes,
 } from '../src/auth-routes.ts'
 import { LocalRoutingEventLedger } from '../src/local-routing-events.ts'
@@ -88,6 +90,36 @@ async function request(route: WebRoute | undefined, method: string): Promise<{
 }
 
 describe('OpenAI Codex Web routes', () => {
+  it('returns the local profile directory without reading profile credentials or quota', async () => {
+    const listProfiles = vi.fn().mockResolvedValue([
+      { id: 'profile-a', label: 'Account A', createdAt: 100, updatedAt: 200, access: 'must-not-leak' },
+      { id: 'profile-b', label: 'Account B', createdAt: 300, updatedAt: 400 },
+    ])
+    const forProfile = vi.fn(() => { throw new Error('profile credentials must remain untouched') })
+    const store = { listProfiles, forProfile } as unknown as OpenAICodexCredentialStore
+    const { routes, routingEvents, dispose } = setupRoutes(new OutboundNetwork({}), store)
+    routingEvents.begin({
+      allocation: { profileId: 'profile-b', reason: 'quota_fallback', previousProfileId: 'profile-a' },
+      profileOrder: ['profile-a', 'profile-b'],
+      model: 'gpt-5.6-sol',
+    })
+
+    const result = await request(routes.get(OPENAI_CODEX_PROFILE_DIRECTORY_PATH), 'GET')
+
+    expect(result.status).toBe(200)
+    expect(JSON.parse(result.body)).toEqual({
+      status: 'ready',
+      profiles: [
+        { id: 'profile-a', label: 'Account A', createdAt: 100, updatedAt: 200, inUse: false },
+        { id: 'profile-b', label: 'Account B', createdAt: 300, updatedAt: 400, inUse: true },
+      ],
+    })
+    expect(listProfiles).toHaveBeenCalledTimes(1)
+    expect(forProfile).not.toHaveBeenCalled()
+    expect(result.body).not.toContain('must-not-leak')
+    await dispose()
+  })
+
   it('returns only secret-free outbound network flags', async () => {
     const network = new OutboundNetwork({
       HTTPS_PROXY: 'http://proxy-user:proxy-password@proxy.test:8080',
@@ -127,22 +159,44 @@ describe('OpenAI Codex Web routes', () => {
         interaction.signal?.addEventListener('abort', () => reject(interaction.signal?.reason), { once: true })
       })
     })
-    const store = {
-      listProfiles: () => Promise.resolve([]),
-    } as unknown as OpenAICodexCredentialStore
+    const listProfiles = vi.fn().mockResolvedValue([])
+    const store = { listProfiles } as unknown as OpenAICodexCredentialStore
     const { routes, dispose } = setupRoutes(new OutboundNetwork({}), store)
 
     const started = await request(routes.get(OPENAI_CODEX_PROFILE_LOGIN_PATH), 'POST')
+    const directoryDuringLogin = await request(routes.get(OPENAI_CODEX_PROFILE_DIRECTORY_PATH), 'GET')
+
+    expect(started.status).toBe(200)
+    expect(JSON.parse(started.body)).toEqual({ url: 'https://auth.openai.test/authorize' })
+    expect(JSON.parse(directoryDuringLogin.body)).toEqual({ status: 'signing-in' })
+    expect(listProfiles).not.toHaveBeenCalled()
+
     const firstCancel = await request(routes.get(OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH), 'POST')
     const secondCancel = await request(routes.get(OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH), 'POST')
     const status = await request(routes.get(OPENAI_CODEX_PROFILES_PATH), 'GET')
 
-    expect(started.status).toBe(200)
-    expect(JSON.parse(started.body)).toEqual({ url: 'https://auth.openai.test/authorize' })
     expect(JSON.parse(firstCancel.body)).toEqual({ cancelled: true })
     expect(JSON.parse(secondCancel.body)).toEqual({ cancelled: false })
     expect(JSON.parse(status.body)).toEqual({ status: 'ready', profiles: [] })
     await dispose()
+  })
+
+  it('keeps authorization failures in the fast directory lifecycle without listing profiles', async () => {
+    auth.loginOpenAICodexProfile.mockRejectedValueOnce(new Error('provider rejected login'))
+    const listProfiles = vi.fn().mockResolvedValue([])
+    const webAuth = new OpenAICodexWebAuth(
+      { listProfiles } as unknown as OpenAICodexCredentialStore,
+    )
+
+    await expect(webAuth.signInProfile()).rejects.toThrow('provider rejected login')
+    await webAuth.waitForCompletion()
+
+    await expect(webAuth.profileDirectoryStatus()).resolves.toEqual({
+      status: 'error',
+      reason: 'authorization-failed',
+    })
+    expect(listProfiles).not.toHaveBeenCalled()
+    await webAuth.dispose()
   })
 
   it('keeps the cancellation projection JSON-safe and rejects unsupported methods', async () => {

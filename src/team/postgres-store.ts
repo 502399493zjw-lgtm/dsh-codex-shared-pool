@@ -2084,6 +2084,7 @@ export class PostgresTeamStore implements TeamStore {
     status: TeamContributionStatus,
     lastError?: string,
     expectedStatus?: TeamContributionStatus,
+    providerAuthenticatedLabel?: string,
   ): Promise<TeamContributionAccountSummary> {
     await this.initialize()
     return this.transaction(async (client) => {
@@ -2092,12 +2093,18 @@ export class PostgresTeamStore implements TeamStore {
       if (team.status === 'dissolved') return summaryContribution(account)
       if (account.status === 'revoked' && status !== 'revoked') return summaryContribution(account)
       if (expectedStatus !== undefined && account.status !== expectedStatus) return summaryContribution(account)
+      if (providerAuthenticatedLabel !== undefined && status !== 'active') {
+        throw new Error('providerAuthenticatedLabel requires active status')
+      }
       const result = await client.query<ContributionRow>(`
-        UPDATE team_contributions SET status = $1, last_error = $2, updated_at = $3
-        WHERE id = $4 AND team_id = $5 RETURNING *
+        UPDATE team_contributions SET status = $1, last_error = $2, label = $3, updated_at = $4
+        WHERE id = $5 AND team_id = $6 RETURNING *
       `, [
         status,
         lastError === undefined ? null : nonEmpty(safeTeamErrorMessage(lastError), 'lastError', 240),
+        providerAuthenticatedLabel === undefined
+          ? account.label
+          : nonEmpty(providerAuthenticatedLabel, 'providerAuthenticatedLabel', MAX_KEY_LABEL_LENGTH),
         this.now(),
         account.id,
         account.team_id,
@@ -2340,6 +2347,9 @@ export class PostgresTeamStore implements TeamStore {
 
       const mine = await readAggregate(member.id)
       const ownedWindowStartedAt = endedAt - 7 * 86_400_000
+      const last24HoursStartedAt = endedAt - 86_400_000
+      const currentUtcWeekStartedAt = utcIsoWeekStart(endedAt)
+      const currentUtcWeekResetAt = currentUtcWeekStartedAt + 7 * 86_400_000
       const ownedRows = await client.query<UsageRow>(`
         SELECT usage.*
         FROM team_usage_events AS usage
@@ -2359,6 +2369,15 @@ export class PostgresTeamStore implements TeamStore {
           accountId,
           window: { startedAt: ownedWindowStartedAt, endedAt },
           aggregate: aggregateUsageRows(rows),
+          currentUtcWeek: {
+            window: { startedAt: currentUtcWeekStartedAt, endedAt },
+            resetAt: currentUtcWeekResetAt,
+            aggregate: aggregateUsageRows(rows.filter(row => numberValue(row.started_at) >= currentUtcWeekStartedAt)),
+          },
+          last24Hours: {
+            window: { startedAt: last24HoursStartedAt, endedAt },
+            aggregate: aggregateUsageRows(rows.filter(row => numberValue(row.started_at) >= last24HoursStartedAt)),
+          },
           recentRequests: rows.slice(0, 10).map(row => {
             const event = summaryUsage(row)
             return {

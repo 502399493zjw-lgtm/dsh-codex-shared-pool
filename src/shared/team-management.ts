@@ -12,12 +12,16 @@ import type {
   TeamMemberSummary,
   TeamOwnershipTransferAcceptanceResult,
   TeamOwnershipTransferSummary,
+  TeamSharedAccountDirectoryEntry,
   TeamStatus,
   TeamSummary,
   TeamUsageProjection,
 } from '../team/types.ts'
 
 export const TEAM_MANAGEMENT_PATH_PREFIX = '/plugins/dsh-codex-shared-pool/team-client'
+export const TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE = 'team_authorization_network_unavailable'
+export const TEAM_AUTHORIZATION_FAILED_CODE = 'team_authorization_failed'
+export const TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE = 'Team connection changed; refresh before trying again'
 export const TEAM_MANAGEMENT_SESSION_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/session`
 export const TEAM_MANAGEMENT_CAPABILITY_HEADER = 'x-dsh-team-management-capability'
 export const TEAM_MANAGEMENT_STATUS_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/status`
@@ -134,6 +138,14 @@ export type TeamManagementContributionSummary = Pick<TeamContributionAccountSumm
   | 'capacity'
 >
 
+/** Explicit minimum Browser projection for the Team-wide active sharing directory. */
+export type TeamManagementSharedAccountDirectoryEntry = Pick<TeamSharedAccountDirectoryEntry,
+  | 'id'
+  | 'label'
+  | 'ownerMemberId'
+  | 'status'
+>
+
 /** Browser writes may change only this explicit sharing-control allow-list. */
 export type TeamManagementContributionPatch = Pick<TeamContributionAccountPatch,
   | 'label'
@@ -155,6 +167,7 @@ interface TeamManagementOverviewBase {
   readonly currentMember: TeamMemberSummary
   readonly members: readonly TeamManagementMemberSummary[]
   readonly contributions: readonly TeamManagementContributionSummary[]
+  readonly activeSharedAccounts: readonly TeamManagementSharedAccountDirectoryEntry[]
   readonly displayNameMigrationNotice?: TeamDisplayNameMigrationNotice
   /** Present only for the current Owner or the nominated target while pending. */
   readonly ownershipTransfer?: TeamOwnershipTransferSummary
@@ -210,7 +223,15 @@ export interface TeamManagementInviteRevocationResult {
   readonly invite: TeamInviteSummary
 }
 
-export interface TeamManagementOAuthResult {
+export interface TeamManagementBrowserOAuthResult {
+  readonly account: TeamManagementContributionSummary
+  readonly method: 'browser'
+  /** Provider authorization URL opened by the local Browser; no handoff material is exposed. */
+  readonly authorizationUrl: string
+  readonly expiresAt: number
+}
+
+export interface TeamManagementDeviceOAuthResult {
   readonly account: TeamManagementContributionSummary
   readonly method: 'device_code'
   /** Provider verification URL intentionally returned; credentials remain on the Host. */
@@ -218,6 +239,8 @@ export interface TeamManagementOAuthResult {
   readonly userCode: string
   readonly expiresAt: number
 }
+
+export type TeamManagementOAuthResult = TeamManagementBrowserOAuthResult | TeamManagementDeviceOAuthResult
 
 export type TeamManagementUsageResult = TeamUsageProjection
 

@@ -1,13 +1,22 @@
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { CredentialInfo, CredentialRef, ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerTeamManagementRoutes } from '../src/team/management-routes.ts'
-import type { TeamManagementRouteSecurity } from '../src/team/management-routes.ts'
+import type { TeamManagementRouteOptions, TeamManagementRouteSecurity } from '../src/team/management-routes.ts'
+import type { OpenAICodexProfileStore } from '../src/store.ts'
+import { TeamCredentialHandoffRegistry } from '../src/team/oauth-handoff.ts'
 import {
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
+  TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH,
   TEAM_MANAGEMENT_CONTRIBUTIONS_PATH,
@@ -27,7 +36,9 @@ import {
   TEAM_MANAGEMENT_OVERVIEW_PATH,
   TEAM_MANAGEMENT_SESSION_PATH,
   TEAM_MANAGEMENT_MEMBERS_REMOVE_PATH,
+  TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
   TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+  TEAM_MANAGEMENT_OAUTH_START_PATH,
   TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_ACCEPT_PATH,
   TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_PATH,
   TEAM_MANAGEMENT_OWNERSHIP_TRANSFER_REJECT_PATH,
@@ -39,6 +50,7 @@ import {
 import type { TeamClientConfig } from '../src/team/client.ts'
 import {
   TEAM_CONNECTION_TERMINAL_PATH,
+  TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_DISPLAY_NAME_MIGRATION_ACK_PATH,
   TEAM_DISSOLVE_ACK_PATH,
   TEAM_DISSOLVE_PATH,
@@ -132,8 +144,9 @@ function setup(
   config: TeamClientConfig,
   credentials = new FakeCredentials(),
   fetch = vi.fn<typeof globalThis.fetch>(),
-  options: { realSecurity?: boolean; now?: () => number } = {},
+  options: Omit<TeamManagementRouteOptions, 'fetch' | 'security'> & { realSecurity?: boolean } = {},
 ): { routes: CapturedRoute[]; credentials: FakeCredentials; fetch: typeof fetch } {
+  const { realSecurity, ...routeOptions } = options
   const routes: CapturedRoute[] = []
   const fake = {
     webServer: {
@@ -152,8 +165,8 @@ function setup(
   } as unknown as Context
   registerTeamManagementRoutes(fake, config, credentials, {
     fetch,
-    ...options.now === undefined ? {} : { now: options.now },
-    ...options.realSecurity === true ? {} : { security: deterministicSecurity },
+    ...routeOptions,
+    ...realSecurity === true ? {} : { security: deterministicSecurity },
   })
   return { routes, credentials, fetch }
 }
@@ -262,6 +275,7 @@ function overview(extra: Record<string, unknown> = {}) {
       tokenHash: 'must-not-cross',
     }],
     contributions: [],
+    activeSharedAccounts: [],
     ...extra,
   }
 }
@@ -704,7 +718,7 @@ describe('local Team management routes', () => {
     })
   })
 
-  it('projects aggregate-only Team usage and drops remote event or account details', async () => {
+  it('projects aggregate-only Team usage plus safe owner windows and drops private remote details', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
@@ -726,6 +740,33 @@ describe('local Team management routes', () => {
         totalTokens: null,
         estimatedCostUsdMicros: null,
       },
+      ownedAccounts: [{
+        accountId: 'account-1',
+        window: { startedAt: 0, endedAt: 200_000_000 },
+        aggregate: {
+          requestCount: 2, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+          totalTokens: '8750', estimatedCostUsdMicros: '125000',
+        },
+        currentUtcWeek: {
+          window: { startedAt: 100_000_000, endedAt: 200_000_000 },
+          resetAt: 300_000_000,
+          aggregate: {
+            requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+            totalTokens: '4000', estimatedCostUsdMicros: '64000',
+          },
+          accessToken: 'must-not-cross',
+        },
+        last24Hours: {
+          window: { startedAt: 113_600_000, endedAt: 200_000_000 },
+          aggregate: {
+            requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 0,
+            totalTokens: null, estimatedCostUsdMicros: null,
+          },
+          prompt: 'must-not-cross',
+        },
+        recentRequests: [],
+        refreshToken: 'must-not-cross',
+      }],
       events: [{
         id: 'usage-1', teamId: 'team-1', consumerMemberId: 'member-2', upstreamOwnerMemberId: 'member-1',
         upstreamAccountId: 'account-1', model: 'gpt-5-codex', unit: 'request', status: 'succeeded',
@@ -762,6 +803,30 @@ describe('local Team management routes', () => {
           requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 0,
           totalTokens: null, estimatedCostUsdMicros: null,
         },
+        ownedAccounts: [{
+          accountId: 'account-1',
+          window: { startedAt: 0, endedAt: 200_000_000 },
+          aggregate: {
+            requestCount: 2, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+            totalTokens: '8750', estimatedCostUsdMicros: '125000',
+          },
+          currentUtcWeek: {
+            window: { startedAt: 100_000_000, endedAt: 200_000_000 },
+            resetAt: 300_000_000,
+            aggregate: {
+              requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+              totalTokens: '4000', estimatedCostUsdMicros: '64000',
+            },
+          },
+          last24Hours: {
+            window: { startedAt: 113_600_000, endedAt: 200_000_000 },
+            aggregate: {
+              requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 0,
+              totalTokens: null, estimatedCostUsdMicros: null,
+            },
+          },
+          recentRequests: [],
+        }],
       },
     })
     expect(result.body).not.toHaveProperty('events')
@@ -809,6 +874,70 @@ describe('local Team management routes', () => {
     })
     expect(contributions).toHaveLength(1)
     expect(JSON.stringify(result.body)).not.toContain('must-not-cross')
+  })
+
+  it('projects the active shared-account directory without private contribution fields', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const currentMember = { ...member(), id: 'member-2', role: 'member' }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(overview({
+      currentMember,
+      members: [member(), currentMember],
+      activeSharedAccounts: [{
+        id: 'account-1',
+        label: 'Owner Codex',
+        ownerMemberId: 'member-1',
+        status: 'active',
+      }],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        viewerRole: 'member',
+        activeSharedAccounts: [{
+          id: 'account-1', label: 'Owner Codex', ownerMemberId: 'member-1', status: 'active',
+        }],
+      },
+    })
+    expect(Object.keys((result.body.activeSharedAccounts as Array<Record<string, unknown>>)[0]!).sort())
+      .toEqual(['id', 'label', 'ownerMemberId', 'status'])
+  })
+
+  it('keeps rolling upgrades usable when an older Team Host omits the shared-account directory', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_owner-secret-1234567890'
+    const legacyOverview = overview()
+    delete legacyOverview.activeSharedAccounts
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(legacyOverview), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(result).toMatchObject({ status: 200, body: { activeSharedAccounts: [] } })
+  })
+
+  it('fails closed when a remote shared-account directory entry contains private fields', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_owner-secret-1234567890'
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(overview({
+      activeSharedAccounts: [{
+        id: 'account-1', label: 'Owner Codex', ownerMemberId: 'member-1', status: 'active',
+        capacity: { buckets: [] },
+      }],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(result.status).toBe(502)
+    expect(JSON.stringify(result.body)).not.toContain('capacity')
   })
 
   it('strips owner-only and sibling data from a legacy broad member overview', async () => {
@@ -888,7 +1017,7 @@ describe('local Team management routes', () => {
     expect(JSON.stringify(result.body)).not.toMatch(/apiKeys|key-eligible|dsh_team_member/iu)
   })
 
-  it('redacts credential material from remote contribution diagnostics before Browser projection', async () => {
+  it('replaces remote OAuth diagnostics with a closed stable code before Browser projection', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
     const remoteDiagnostic = [
@@ -907,8 +1036,510 @@ describe('local Team management routes', () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200)
     const serialized = JSON.stringify(result.body)
-    expect(serialized).toContain('[redacted')
-    expect(serialized).not.toMatch(/opaque-provider-token|provider-api-secret|provider-client-secret|provider-id-secret|dsh_invite_/u)
+    expect((result.body.contributions as Array<Record<string, unknown>>)[0]?.lastError)
+      .toBe(TEAM_AUTHORIZATION_FAILED_CODE)
+    expect(serialized).not.toMatch(/Authorization: Bearer|opaque-provider-token|provider-api-secret|provider-client-secret|provider-id-secret|dsh_invite_/u)
+  })
+
+  it('projects an OAuth mutation failure before returning it to the Browser', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const mutationFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: 'provider refused Authorization: Bearer opaque-provider-token',
+    }), { status: 400, headers: { 'content-type': 'application/json' } }))
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(
+      route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler,
+      request('POST', withExpectedContext({ label: 'Owner Codex' })),
+    )
+
+    expect(result).toMatchObject({ status: 400, body: { error: TEAM_AUTHORIZATION_FAILED_CODE } })
+    expect(JSON.stringify(result.body)).not.toMatch(/provider refused|opaque-provider-token|Authorization: Bearer/iu)
+  })
+
+  it.each([
+    {
+      name: 'cancellation',
+      path: TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+    {
+      name: 'reauthorization',
+      path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+  ])('projects a remote OAuth $name failure before returning it to the Browser', async ({ path, body }) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const rawDiagnostic = 'provider refused Authorization: Bearer opaque-provider-token'
+    const mutationFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: rawDiagnostic,
+    }), { status: 400, headers: { 'content-type': 'application/json' } }))
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, path).handler, request('POST', body))
+
+    expect(result).toMatchObject({ status: 400, body: { error: TEAM_AUTHORIZATION_FAILED_CODE } })
+    expect(JSON.stringify(result.body)).not.toMatch(/provider refused|opaque-provider-token|Authorization: Bearer/iu)
+  })
+
+  it.each([
+    {
+      name: 'start',
+      path: TEAM_MANAGEMENT_OAUTH_START_PATH,
+      body: withExpectedContext({ label: 'Owner Codex' }),
+    },
+    {
+      name: 'cancellation',
+      path: TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+    {
+      name: 'reauthorization',
+      path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+  ])('projects an OAuth $name overview preflight fetch rejection to a stable Browser error', async ({ path, body }) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const rawDiagnostic = 'preflight fetch failed: ECONNRESET Authorization: Bearer opaque-preflight-token'
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new Error(rawDiagnostic))
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, path).handler, request('POST', body))
+
+    expect(result).toMatchObject({
+      status: 502,
+      body: { error: TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE },
+    })
+    expect(JSON.stringify(result.body)).not.toMatch(/preflight|ECONNRESET|opaque-preflight-token|Authorization: Bearer/iu)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    {
+      name: 'start',
+      path: TEAM_MANAGEMENT_OAUTH_START_PATH,
+      body: withExpectedContext({ label: 'Owner Codex' }),
+    },
+    {
+      name: 'cancellation',
+      path: TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+    {
+      name: 'reauthorization',
+      path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+  ])('projects an OAuth $name overview preflight rejection to a stable Browser error', async ({ path, body }) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const rawDiagnostic = 'preflight refused Authorization: Bearer opaque-preflight-token'
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: rawDiagnostic,
+    }), { status: 400, headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, path).handler, request('POST', body))
+
+    expect(result).toMatchObject({ status: 400, body: { error: TEAM_AUTHORIZATION_FAILED_CODE } })
+    expect(JSON.stringify(result.body)).not.toMatch(/preflight refused|opaque-preflight-token|Authorization: Bearer/iu)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    {
+      name: 'start',
+      path: TEAM_MANAGEMENT_OAUTH_START_PATH,
+      body: withExpectedContext({ label: 'Owner Codex' }),
+    },
+    {
+      name: 'reauthorization',
+      path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      body: withExpectedContext({ accountId: 'account-1' }),
+    },
+  ])('projects a malformed 2xx OAuth $name payload to a stable Browser error', async ({ path, body }) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const rawProviderValue = 'unexpected-provider-method-opaque-provider-token'
+    const mutationFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      account: { ...contribution(), status: 'authorizing', lastError: undefined },
+      method: rawProviderValue,
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      userCode: 'ABCD-EFGH',
+      expiresAt: Date.now() + 900_000,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, path).handler, request('POST', body))
+
+    expect(result).toMatchObject({ status: 400, body: { error: TEAM_AUTHORIZATION_FAILED_CODE } })
+    expect(JSON.stringify(result.body)).not.toContain(rawProviderValue)
+  })
+
+  it('completes browser OAuth locally and transfers only an encrypted one-time credential envelope', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const handoffs = new TeamCredentialHandoffRegistry()
+    const offer = handoffs.create({ teamId: 'team-1', accountId: 'account-1' })
+    let transferred: ReturnType<typeof handoffs.complete> | undefined
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        const body = JSON.parse(String(init?.body)) as {
+          accountId: string
+          envelope: Parameters<typeof handoffs.complete>[1]
+        }
+        transferred = handoffs.complete({ teamId: 'team-1', accountId: body.accountId }, body.envelope)
+        return new Response(JSON.stringify({
+          account: { ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=local-only' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth',
+        access: 'provider-access-secret',
+        refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000,
+        accountId: 'provider-account-1',
+      })
+    }
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        loginProfile,
+        temporaryRootDir,
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
+          readProfileCredential: async (profileId: string) => profileId === 'local-profile-1'
+            ? {
+                type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
+                accountId: 'provider-account-1',
+              }
+            : undefined,
+        },
+      },
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    })))
+
+    expect(result).toMatchObject({
+      status: 201,
+      body: {
+        account: { id: 'account-1', status: 'authorizing' },
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?state=local-only',
+      },
+    })
+    expect(JSON.stringify(result.body)).not.toMatch(/provider-access|provider-refresh|serverPublicKey|sessionId/u)
+    releaseLogin()
+    await vi.waitFor(() => { expect(transferred?.credential.accountId).toBe('provider-account-1') })
+    expect(transferred).toMatchObject({
+      label: 'Captured OAuth',
+      credential: { access: 'provider-access-secret', refresh: 'provider-refresh-secret' },
+    })
+    expect(JSON.stringify(mutationFetch.mock.calls[1]?.[1]?.body)).not.toMatch(/provider-access-secret|provider-refresh-secret/u)
+    expect(mutationFetch.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ label: 'Personal Pro', method: 'browser' }))
+    await vi.waitFor(() => { expect(mutationFetch).toHaveBeenCalledTimes(2) })
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('rejects a browser OAuth account mismatch and discards the initial remote contribution', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-mismatch-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    const backgroundErrors: unknown[] = []
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=mismatch' })
+      await loginGate
+      return store.addProfile('Different OAuth', {
+        type: 'oauth',
+        access: 'different-provider-access-secret',
+        refresh: 'different-provider-refresh-secret',
+        expires: Date.now() + 3_600_000,
+        accountId: 'provider-account-2',
+      })
+    }
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        loginProfile,
+        temporaryRootDir,
+        onBackgroundError: error => { backgroundErrors.push(error) },
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
+          readProfileCredential: async () => ({
+            type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
+            accountId: 'provider-account-1',
+          }),
+        },
+      },
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    })))
+
+    expect(result).toMatchObject({
+      status: 201,
+      body: { method: 'browser', authorizationUrl: 'https://auth.openai.com/oauth/authorize?state=mismatch' },
+    })
+    releaseLogin()
+    await vi.waitFor(() => { expect(backgroundErrors).toHaveLength(1) })
+    expect(backgroundErrors[0]).toMatchObject({ message: TEAM_AUTHORIZATION_FAILED_CODE })
+    expect(mutationFetch).toHaveBeenCalledTimes(2)
+    expect(mutationFetch.mock.calls[1]?.[0]).toBe(
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
+    )
+    expect(mutationFetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({
+      accountId: 'account-1', discardInitial: true,
+    }))
+    expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)))
+      .toBe(false)
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('discards the initial contribution when the provider emits an unsafe browser authorization URL', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-unsafe-url-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'file:///tmp/provider-login.html' })
+      throw new Error('provider login stopped after unsafe URL')
+    }
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir },
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))
+
+    expect(result).toMatchObject({ status: 400, body: { error: TEAM_AUTHORIZATION_FAILED_CODE } })
+    await vi.waitFor(() => { expect(mutationFetch).toHaveBeenCalledTimes(2) })
+    expect(mutationFetch.mock.calls[1]?.[0]).toBe(
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
+    )
+    expect(mutationFetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({
+      accountId: 'account-1', discardInitial: true,
+    }))
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('does not abort an in-flight browser OAuth operation before validating cancellation context', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-stale-cancel-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let overviewReads = 0
+    let loginAborted = false
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        overviewReads += 1
+        const current = overviewReads === 1
+          ? overview()
+          : overview({ team: { ...team(), id: 'replacement-team' } })
+        return new Response(JSON.stringify(current), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=stale-cancel' })
+      return await new Promise<never>((_resolve, reject) => {
+        interaction.signal.addEventListener('abort', () => {
+          loginAborted = true
+          reject(interaction.signal.reason)
+        }, { once: true })
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir },
+    )
+
+    const started = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))
+    expect(started).toMatchObject({ status: 201, body: { method: 'browser' } })
+
+    const cancelled = await response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: true,
+    })))
+
+    expect(cancelled).toMatchObject({ status: 409 })
+    expect(loginAborted).toBe(false)
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(false)
+  })
+
+  it('discards the initial browser OAuth contribution when the local routes are disposed', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-dispose-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let loginAborted = false
+    let cancellationAttempts = 0
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellationAttempts += 1
+        if (cancellationAttempts === 1) throw new TypeError('temporary cleanup connection reset')
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=dispose' })
+      return await new Promise<never>((_resolve, reject) => {
+        interaction.signal.addEventListener('abort', () => {
+          loginAborted = true
+          reject(interaction.signal.reason)
+        }, { once: true })
+      })
+    }
+    const fetch = withOverviewPreflight(mutationFetch)
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir },
+    )
+
+    const started = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))
+    expect(started).toMatchObject({ status: 201, body: { method: 'browser' } })
+    const disposeRoutes = cleanups.pop()
+    if (disposeRoutes === undefined) throw new Error('route cleanup should be registered')
+
+    await disposeRoutes()
+
+    expect(loginAborted).toBe(true)
+    expect(mutationFetch).toHaveBeenCalledTimes(3)
+    expect(mutationFetch.mock.calls[1]?.[0]).toBe(
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
+    )
+    expect(mutationFetch.mock.calls[2]?.[0]).toBe(
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
+    )
+    expect(mutationFetch.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({
+      accountId: 'account-1', discardInitial: true,
+    }))
+    expect(await readdir(temporaryRootDir)).toEqual([])
   })
 
   it('forwards owner reauthorization through the same-origin management route', async () => {
@@ -926,13 +1557,13 @@ describe('local Team management routes', () => {
 
     const result = await response(
       route(routes, TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH).handler,
-      request('POST', withExpectedContext({ accountId: 'account-1' })),
+      request('POST', withExpectedContext({ accountId: 'account-1', method: 'device_code' })),
     )
 
     expect(result).toMatchObject({ status: 200, body: { account: { id: 'account-1', status: 'authorizing' }, method: 'device_code' } })
     expect(fetch).toHaveBeenCalledWith(
       'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/reauthorize',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ accountId: 'account-1' }) }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ accountId: 'account-1', method: 'device_code' }) }),
     )
   })
 
@@ -1404,6 +2035,21 @@ describe('local Team management routes', () => {
       path: TEAM_MANAGEMENT_LEAVE_PATH,
       body: {},
     },
+    {
+      operation: 'OAuth start',
+      path: TEAM_MANAGEMENT_OAUTH_START_PATH,
+      body: { label: 'Owner Codex' },
+    },
+    {
+      operation: 'OAuth cancellation',
+      path: TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
+      body: { accountId: 'account-1' },
+    },
+    {
+      operation: 'OAuth reauthorization',
+      path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
+      body: { accountId: 'account-1' },
+    },
   ])(
     'rejects $operation when the local credential now belongs to another Team',
     async ({ path, body }) => {
@@ -1440,7 +2086,10 @@ describe('local Team management routes', () => {
         },
       }))
 
-      expect(result).toMatchObject({ status: 409 })
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE },
+      })
       expect(fetch).toHaveBeenCalledTimes(1)
       expect(fetch).toHaveBeenCalledWith(
         'https://pool.example/plugins/dsh-codex-shared-pool/team/overview',

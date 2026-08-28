@@ -87,6 +87,9 @@ function overview() {
     }],
     invites: [],
     contributions: [contribution()],
+    activeSharedAccounts: [{
+      id: 'account-2', label: 'Friend Codex', ownerMemberId: 'member-2', status: 'active',
+    }],
     apiKeys: [{ tokenHash: 'must-not-survive' }],
   }
 }
@@ -113,8 +116,28 @@ describe('Team management browser API', () => {
     })
     expect(parsed.contributions[0]).not.toHaveProperty('refreshToken')
     expect(parsed.contributions[0]).not.toHaveProperty('dailySharedCreditLimit')
+    expect(parsed.activeSharedAccounts).toEqual([{
+      id: 'account-2', label: 'Friend Codex', ownerMemberId: 'member-2', status: 'active',
+    }])
     expect(parsed).not.toHaveProperty('apiKeys')
     expect(JSON.stringify(parsed)).not.toContain('must-not-survive')
+  })
+
+  it('treats the pre-directory overview shape as an empty shared-account directory', () => {
+    const legacy = { ...overview() }
+    delete (legacy as Partial<ReturnType<typeof overview>>).activeSharedAccounts
+
+    expect(parseTeamManagementOverview(legacy).activeSharedAccounts).toEqual([])
+  })
+
+  it('rejects private fields in the active shared-account directory', () => {
+    expect(() => parseTeamManagementOverview({
+      ...overview(),
+      activeSharedAccounts: [{
+        id: 'account-2', label: 'Friend Codex', ownerMemberId: 'member-2', status: 'active',
+        personalReservePercent: 20,
+      }],
+    })).toThrow(/shared.account|unexpected/iu)
   })
 
   it('accepts only a positive safe migration version in the current member notice', () => {
@@ -254,7 +277,26 @@ describe('Team management browser API', () => {
       verificationUrl: 'http://evil.example.test',
       userCode: 'x',
       expiresAt: 2,
-    })).toThrow(/OAuth method/u)
+    })).toThrow(/authorizationUrl/u)
+  })
+
+  it('accepts the browser OAuth projection without exposing handoff material', () => {
+    const parsed = parseTeamManagementOAuthResult({
+      account: { ...contribution(), status: 'authorizing' },
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: 60_000,
+      serverPublicKey: 'must-not-survive',
+      ciphertext: 'must-not-survive',
+    })
+
+    expect(parsed).toEqual({
+      account: expect.objectContaining({ id: 'account-1', status: 'authorizing' }),
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: 60_000,
+    })
+    expect(JSON.stringify(parsed)).not.toContain('must-not-survive')
   })
 
   it.each([
@@ -396,6 +438,33 @@ describe('Team management browser API', () => {
         totalTokens: '8750',
         estimatedCostUsdMicros: null,
       },
+      ownedAccounts: [{
+        accountId: 'account-1',
+        window: { startedAt: 0, endedAt: 200_000_000 },
+        aggregate: {
+          requestCount: 3, tokenMeasuredRequestCount: 2, pricedRequestCount: 2,
+          totalTokens: '12000', estimatedCostUsdMicros: '157500',
+        },
+        currentUtcWeek: {
+          window: { startedAt: 100_000_000, endedAt: 200_000_000 },
+          resetAt: 300_000_000,
+          aggregate: {
+            requestCount: 2, tokenMeasuredRequestCount: 2, pricedRequestCount: 2,
+            totalTokens: '9000', estimatedCostUsdMicros: '125000',
+          },
+          credential: 'must-not-survive',
+        },
+        last24Hours: {
+          window: { startedAt: 113_600_000, endedAt: 200_000_000 },
+          aggregate: {
+            requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+            totalTokens: '3000', estimatedCostUsdMicros: '32500',
+          },
+          prompt: 'must-not-survive',
+        },
+        recentRequests: [],
+        refreshToken: 'must-not-survive',
+      }],
       team: { requestCount: 999, accessToken: 'must-not-survive' },
       events: [{ consumerMemberId: 'member-2', prompt: 'must-not-survive' }],
       refreshToken: 'must-not-survive',
@@ -412,7 +481,30 @@ describe('Team management browser API', () => {
         requestCount: 2, tokenMeasuredRequestCount: 1, pricedRequestCount: 0,
         totalTokens: '8750', estimatedCostUsdMicros: null,
       },
-      ownedAccounts: [],
+      ownedAccounts: [{
+        accountId: 'account-1',
+        window: { startedAt: 0, endedAt: 200_000_000 },
+        aggregate: {
+          requestCount: 3, tokenMeasuredRequestCount: 2, pricedRequestCount: 2,
+          totalTokens: '12000', estimatedCostUsdMicros: '157500',
+        },
+        currentUtcWeek: {
+          window: { startedAt: 100_000_000, endedAt: 200_000_000 },
+          resetAt: 300_000_000,
+          aggregate: {
+            requestCount: 2, tokenMeasuredRequestCount: 2, pricedRequestCount: 2,
+            totalTokens: '9000', estimatedCostUsdMicros: '125000',
+          },
+        },
+        last24Hours: {
+          window: { startedAt: 113_600_000, endedAt: 200_000_000 },
+          aggregate: {
+            requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+            totalTokens: '3000', estimatedCostUsdMicros: '32500',
+          },
+        },
+        recentRequests: [],
+      }],
     })
     expect(JSON.stringify(result)).not.toContain('must-not-survive')
     expect(result).not.toHaveProperty('team')
@@ -747,22 +839,37 @@ describe('Team management browser API', () => {
     )
   })
 
-  it('posts an existing account id to the local reauthorization route', async () => {
+  it('uses browser OAuth by default and preserves an explicit local-account source', async () => {
     const fetchMock = withManagementSession(async () => new Response(JSON.stringify({
       account: { ...contribution(), status: 'authorizing' },
-      method: 'device_code', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-EFGH', expiresAt: 2,
+      method: 'browser', authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli', expiresAt: 2,
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const api = createTeamManagementApi(fetchMock)
 
     await expect(api.reauthorizeOAuth('account-1', EXPECTED_CONTEXT)).resolves.toMatchObject({
-      account: { id: 'account-1' }, method: 'device_code',
+      account: { id: 'account-1' }, method: 'browser',
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/plugins/dsh-codex-shared-pool/team-client/contributions/oauth/reauthorize',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({ [TEAM_MANAGEMENT_CAPABILITY_HEADER]: MANAGEMENT_CAPABILITY }),
-        body: JSON.stringify({ accountId: 'account-1', expectedContext: EXPECTED_CONTEXT }),
+        body: JSON.stringify({ accountId: 'account-1', expectedContext: EXPECTED_CONTEXT, method: 'browser' }),
+      }),
+    )
+
+    await api.startOAuth('Local Codex', EXPECTED_CONTEXT, 'browser', 'local-profile-1')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/plugins/dsh-codex-shared-pool/team-client/contributions/oauth/start',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ [TEAM_MANAGEMENT_CAPABILITY_HEADER]: MANAGEMENT_CAPABILITY }),
+        body: JSON.stringify({
+          label: 'Local Codex',
+          expectedContext: EXPECTED_CONTEXT,
+          method: 'browser',
+          sourceLocalProfileId: 'local-profile-1',
+        }),
       }),
     )
   })

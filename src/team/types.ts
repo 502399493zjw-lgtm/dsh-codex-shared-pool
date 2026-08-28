@@ -28,6 +28,7 @@ export const TEAM_CONTRIBUTIONS_PATH = `${TEAM_PATH_PREFIX}/contributions`
 export const TEAM_CONTRIBUTION_OAUTH_START_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/start`
 export const TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/cancel`
 export const TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/reauthorize`
+export const TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/handoff/complete`
 export const TEAM_CONTRIBUTION_UPDATE_PATH = `${TEAM_CONTRIBUTIONS_PATH}/update`
 export const TEAM_CONTRIBUTION_REVOKE_PATH = `${TEAM_CONTRIBUTIONS_PATH}/revoke`
 export const TEAM_USAGE_PATH = `${TEAM_PATH_PREFIX}/usage`
@@ -215,12 +216,22 @@ export interface TeamOverviewMemberSummary extends TeamMemberSummary {
   readonly canReceiveOwnership: boolean
 }
 
+/** Minimum Team-wide directory row for one account that is currently shared. */
+export interface TeamSharedAccountDirectoryEntry {
+  readonly id: string
+  readonly label: string
+  readonly ownerMemberId: string
+  readonly status: 'active'
+}
+
 interface TeamOverviewProjectionBase {
   readonly team: TeamSummary
   readonly currentMember: TeamMemberSummary
   readonly members: readonly TeamOverviewMemberSummary[]
   /** A caller can manage and inspect only contribution accounts they own. */
   readonly contributions: readonly TeamContributionAccountSummary[]
+  /** Team-wide active accounts, projected without private policy, capacity, usage, or credentials. */
+  readonly activeSharedAccounts: readonly TeamSharedAccountDirectoryEntry[]
   readonly displayNameMigrationNotice?: TeamDisplayNameMigrationNotice
   /** Visible only to the current Owner/requester and the requested target while pending. */
   readonly ownershipTransfer?: TeamOwnershipTransferSummary
@@ -324,7 +335,18 @@ export interface TeamOAuthDeviceChallenge {
   readonly expiresAt: number
 }
 
-export interface TeamOAuthStartResult extends TeamOAuthDeviceChallenge {
+/** The local Browser flow is preferred; device code remains an explicit headless fallback. */
+export type TeamOAuthMethod = 'browser' | 'device_code'
+
+/** One-use public offer issued by the credential-owning Team Host. */
+export interface TeamOAuthHandoffChallenge {
+  readonly method: 'browser_handoff'
+  readonly handoff: import('./oauth-handoff.ts').TeamCredentialHandoffOffer
+}
+
+export type TeamOAuthBrokerChallenge = TeamOAuthDeviceChallenge | TeamOAuthHandoffChallenge
+
+export type TeamOAuthStartResult = TeamOAuthBrokerChallenge & {
   readonly account: TeamContributionAccountSummary
 }
 
@@ -405,11 +427,25 @@ export interface TeamOwnedAccountRecentRequest {
   readonly estimatedCostUsdMicros?: string
 }
 
+/** One explicit account-usage window; avoids relabelling a rolling aggregate in the Browser. */
+export interface TeamOwnedAccountWindowedUsageSummary {
+  readonly window: TeamUsageWindow
+  readonly aggregate: TeamUsageAggregateSummary
+}
+
+/** Current ISO week in UTC, including the next reset boundary. */
+export interface TeamOwnedAccountCurrentUtcWeekUsageSummary extends TeamOwnedAccountWindowedUsageSummary {
+  readonly resetAt: number
+}
+
 /** Seven-day projection for one contribution account owned by the current member. */
 export interface TeamOwnedAccountUsageSummary {
   readonly accountId: string
+  /** Legacy rolling seven-day aggregate retained for compatible Hosts and recent-request detail. */
   readonly window: TeamUsageWindow
   readonly aggregate: TeamUsageAggregateSummary
+  readonly currentUtcWeek?: TeamOwnedAccountCurrentUtcWeekUsageSummary
+  readonly last24Hours?: TeamOwnedAccountWindowedUsageSummary
   readonly recentRequests: readonly TeamOwnedAccountRecentRequest[]
 }
 

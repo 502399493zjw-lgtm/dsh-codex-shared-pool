@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { safeTeamErrorMessage } from '../src/team/safe-message.ts'
+import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from '../src/team/safe-message.ts'
+import {
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+} from '../src/shared/team-management.ts'
 
 describe('Team error-message redaction', () => {
   it.each([
@@ -24,5 +28,16 @@ describe('Team error-message redaction', () => {
   it('preserves benign diagnostics and enforces the requested length limit', () => {
     expect(safeTeamErrorMessage(new Error('API key required'))).toBe('API key required')
     expect(safeTeamErrorMessage('x'.repeat(80), 32)).toBe('x'.repeat(32))
+  })
+
+  it('uses a closed OAuth error vocabulary while preserving Host lifecycle outcomes', () => {
+    expect(safeTeamOAuthErrorMessage(new Error('provider refused this device request')))
+      .toBe(TEAM_AUTHORIZATION_FAILED_CODE)
+    expect(safeTeamOAuthErrorMessage(new Error('fetch failed: ECONNRESET')))
+      .toBe(TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE)
+    expect(safeTeamOAuthErrorMessage(new Error('OpenAI Codex contribution authorization cancelled')))
+      .toBe('authorization cancelled')
+    expect(safeTeamOAuthErrorMessage('authorization was interrupted; authorize this account again'))
+      .toBe('authorization was interrupted; authorize this account again')
   })
 })

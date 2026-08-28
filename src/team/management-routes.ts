@@ -2,9 +2,15 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialInfo, CredentialProvider, CredentialRef } from '@deepseek-ai/dsh-credentials'
+import type { AuthInteraction, AuthPrompt } from '@earendil-works/pi-ai'
+import { loginOpenAICodexProfile } from '../auth.ts'
+import { OpenAICodexCredentialStore } from '../store.ts'
 import {
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
@@ -24,6 +30,7 @@ import {
   TEAM_MANAGEMENT_JOIN_DISCARD_PATH,
   TEAM_MANAGEMENT_JOIN_RECOVER_PATH,
   TEAM_MANAGEMENT_LEAVE_PATH,
+  TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE,
   TEAM_MANAGEMENT_MEMBERS_REMOVE_PATH,
   TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
   TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
@@ -63,6 +70,7 @@ import type {
   TeamManagementOwnershipTransferSummary,
   TeamManagementStatus,
   TeamManagementSession,
+  TeamManagementSharedAccountDirectoryEntry,
   TeamManagementUsageResult,
 } from '../shared/team-management.ts'
 import {
@@ -74,6 +82,7 @@ import {
   TEAM_CONTRIBUTIONS_PATH,
   TEAM_CONNECTION_TERMINAL_PATH,
   TEAM_CURRENT_KEY_REVOKE_PATH,
+  TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_DISPLAY_NAME_MIGRATION_ACK_PATH,
   TEAM_DISSOLVE_ACK_PATH,
   TEAM_DISSOLVE_PATH,
@@ -94,6 +103,8 @@ import {
   TEAM_STATUS_PATH,
   TEAM_USAGE_PATH,
 } from './types.ts'
+import type { TeamCredentialHandoffOffer } from './oauth-handoff.ts'
+import { sealTeamCredentialHandoff } from './oauth-handoff.ts'
 import type {
   TeamContributionCapacityBucketSummary,
   TeamContributionCapacitySummary,
@@ -113,7 +124,7 @@ import {
   resolveTeamClientBaseUrl,
 } from './client.ts'
 import type { TeamClientConfig } from './client.ts'
-import { safeTeamErrorMessage } from './safe-message.ts'
+import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from './safe-message.ts'
 
 const MAX_LOCAL_BODY_BYTES = 16 * 1024
 const MAX_REMOTE_BODY_BYTES = 1024 * 1024
@@ -191,18 +202,47 @@ class RemoteTeamError extends Error {
 
 class TeamManagementContextMismatchError extends Error {
   constructor() {
-    super('Team connection changed; refresh before trying again')
+    super(TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE)
     this.name = 'TeamManagementContextMismatchError'
   }
 }
 
+function projectedOAuthRemoteError(error: unknown): Error {
+  if (error instanceof TeamManagementContextMismatchError) return error
+  const message = safeTeamOAuthErrorMessage(error)
+  return error instanceof RemoteTeamError
+    ? new RemoteTeamError(error.status, message)
+    : new Error(message)
+}
+
 type Credentials = Pick<CredentialProvider, 'resolve' | 'describe' | 'set' | 'unset'>
+type LocalProfiles = Pick<OpenAICodexCredentialStore, 'listProfiles' | 'readProfileCredential'>
+
+type LocalOAuthMethod = 'browser' | 'device_code'
+
+interface LocalBrowserOAuthOperation {
+  /** Abort locally; callers that perform their own remote mutation suppress duplicate cleanup. */
+  readonly abort: (reason: Error, suppressAutomaticCleanup?: boolean) => void
+  readonly completion: Promise<void>
+}
+
+interface LocalAccountValidationIntent {
+  readonly expectedProviderAccountId: string
+}
 
 export interface TeamManagementRouteOptions {
   fetch?: typeof globalThis.fetch
   timeoutMs?: number
   security?: TeamManagementRouteSecurity
   now?: () => number
+  /** Test seam for provider OAuth; production always uses the local Host implementation. */
+  loginProfile?: typeof loginOpenAICodexProfile
+  /** Parent for owner-only, short-lived OAuth capture directories. */
+  temporaryRootDir?: string
+  /** Receives failures that happen after the authorization URL was returned to the Browser. */
+  onBackgroundError?: (error: unknown) => void
+  /** Host-only local profile lookup used solely for exact provider-account verification. */
+  localProfiles?: LocalProfiles
 }
 
 export interface TeamManagementRouteSecurity {
@@ -398,6 +438,38 @@ function requiredString(value: Record<string, unknown>, key: string): string {
   return candidate.trim()
 }
 
+function optionalString(value: Record<string, unknown>, key: string): string | undefined {
+  return value[key] === undefined ? undefined : requiredString(value, key)
+}
+
+function optionalBoolean(value: Record<string, unknown>, key: string, fallback = false): boolean {
+  const candidate = value[key]
+  if (candidate === undefined) return fallback
+  if (typeof candidate !== 'boolean') throw new Error(`${key} must be a boolean`)
+  return candidate
+}
+
+function optionalOAuthMethod(value: Record<string, unknown>, fallback: LocalOAuthMethod = 'browser'): LocalOAuthMethod {
+  const method = value.method
+  if (method === undefined) return fallback
+  if (method !== 'browser' && method !== 'device_code') throw new Error('method must be browser or device_code')
+  return method
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error('OpenAI Codex sign-in aborted')
+}
+
+function waitForPromptAbort(prompt: AuthPrompt, operationSignal: AbortSignal): Promise<string> {
+  const signal = prompt.signal === undefined
+    ? operationSignal
+    : AbortSignal.any([prompt.signal, operationSignal])
+  if (signal.aborted) return Promise.reject(abortReason(signal))
+  return new Promise<string>((_resolve, reject) => {
+    signal.addEventListener('abort', () => { reject(abortReason(signal)) }, { once: true })
+  })
+}
+
 function optionalInteger(value: Record<string, unknown>, key: string): number | undefined {
   const candidate = value[key]
   if (candidate === undefined) return undefined
@@ -552,7 +624,7 @@ function projectContribution(value: unknown, capacityOwnerMemberId?: string): Te
   )) throw new Error('remote Team returned an invalid weekly contribution limit')
   const lastError = item.lastError === undefined
     ? undefined
-    : safeTeamErrorMessage(stringField(item, 'lastError'))
+    : safeTeamOAuthErrorMessage(stringField(item, 'lastError'))
   const ownerMemberId = stringField(item, 'ownerMemberId')
   const capacity = item.capacity === undefined
     || ownerMemberId !== capacityOwnerMemberId
@@ -574,6 +646,18 @@ function projectContribution(value: unknown, capacityOwnerMemberId?: string): Te
     updatedAt: numberField(item, 'updatedAt'),
     ...lastError === undefined ? {} : { lastError },
     ...capacity === undefined ? {} : { capacity },
+  }
+}
+
+function projectActiveSharedAccount(value: unknown): TeamManagementSharedAccountDirectoryEntry {
+  const item = record(value, 'active shared account')
+  exactRemoteKeys(item, ['id', 'label', 'ownerMemberId', 'status'], 'active shared account')
+  if (item.status !== 'active') throw new Error('remote Team returned an invalid active shared account')
+  return {
+    id: stringField(item, 'id'),
+    label: stringField(item, 'label'),
+    ownerMemberId: stringField(item, 'ownerMemberId'),
+    status: 'active',
   }
 }
 
@@ -746,13 +830,37 @@ function projectOwnedAccountUsage(value: unknown): TeamUsageProjection['ownedAcc
   if (!Array.isArray(value)) throw new Error('remote Team returned invalid owned account usage')
   return value.map(raw => {
     const account = record(raw, 'owned account usage')
-    const window = record(account.window, 'owned account usage window')
+    const window = projectUsageWindow(account.window, 'owned account usage window')
+    const currentUtcWeek = account.currentUtcWeek === undefined
+      ? undefined
+      : (() => {
+          const week = record(account.currentUtcWeek, 'owned account current UTC week')
+          const weekWindow = projectUsageWindow(week.window, 'owned account current UTC week window')
+          const resetAt = safeNonNegativeInteger(week, 'resetAt')
+          if (resetAt < weekWindow.endedAt) throw new Error('remote Team returned invalid current UTC week reset')
+          return {
+            window: weekWindow,
+            resetAt,
+            aggregate: projectUsageAggregate(week.aggregate, 'owned account current UTC week aggregate'),
+          }
+        })()
+    const last24Hours = account.last24Hours === undefined
+      ? undefined
+      : (() => {
+          const day = record(account.last24Hours, 'owned account last 24 hours')
+          return {
+            window: projectUsageWindow(day.window, 'owned account last 24 hours window'),
+            aggregate: projectUsageAggregate(day.aggregate, 'owned account last 24 hours aggregate'),
+          }
+        })()
     const requests = account.recentRequests
     if (!Array.isArray(requests)) throw new Error('remote Team returned invalid recent requests')
     return {
       accountId: stringField(account, 'accountId'),
-      window: { startedAt: safeNonNegativeInteger(window, 'startedAt'), endedAt: safeNonNegativeInteger(window, 'endedAt') },
+      window,
       aggregate: projectUsageAggregate(account.aggregate, 'owned account usage aggregate'),
+      ...(currentUtcWeek === undefined ? {} : { currentUtcWeek }),
+      ...(last24Hours === undefined ? {} : { last24Hours }),
       recentRequests: requests.map(rawRequest => {
         const request = record(rawRequest, 'recent request')
         const status = stringField(request, 'status')
@@ -769,6 +877,14 @@ function projectOwnedAccountUsage(value: unknown): TeamUsageProjection['ownedAcc
       }),
     }
   })
+}
+
+function projectUsageWindow(value: unknown, label: string) {
+  const window = record(value, label)
+  const startedAt = safeNonNegativeInteger(window, 'startedAt')
+  const endedAt = safeNonNegativeInteger(window, 'endedAt')
+  if (startedAt > endedAt) throw new Error(`remote Team returned invalid ${label}`)
+  return { startedAt, endedAt }
 }
 
 function nullableDecimalString(value: unknown, label: string): string | null {
@@ -846,6 +962,16 @@ function projectOverview(value: unknown): TeamManagementOverview {
     'contributions',
     value => projectContribution(value, currentMember.id),
   ).filter(account => account.ownerMemberId === currentMember.id)
+  // The directory was added as a browser-safe projection after the initial
+  // Team overview contract. An omitted field means an empty legacy directory;
+  // present entries still pass the strict allowlist below.
+  const activeSharedAccounts = item.activeSharedAccounts === undefined
+    ? []
+    : objectArray(
+        item.activeSharedAccounts,
+        'activeSharedAccounts',
+        projectActiveSharedAccount,
+      )
   const ownershipTransfer = item.ownershipTransfer === undefined
     ? undefined
     : projectOwnershipTransferSummary(item.ownershipTransfer)
@@ -868,6 +994,7 @@ function projectOverview(value: unknown): TeamManagementOverview {
     currentMember,
     members,
     contributions,
+    activeSharedAccounts,
     ...(displayNameMigrationNotice === undefined ? {} : { displayNameMigrationNotice }),
     ...(ownershipTransfer === undefined ? {} : { ownershipTransfer }),
   }
@@ -1052,6 +1179,11 @@ class TeamManagementProxy {
   private readonly fetch: typeof globalThis.fetch
   private readonly timeoutMs: number
   private readonly now: () => number
+  private readonly loginProfile: typeof loginOpenAICodexProfile
+  private readonly temporaryRootDir: string
+  private readonly onBackgroundError: (error: unknown) => void
+  private readonly localProfiles: LocalProfiles | undefined
+  private readonly browserOAuth = new Map<string, LocalBrowserOAuthOperation>()
   private readonly invitePreviewSessions = new Map<string, InvitePreviewSession>()
   private credentialTransition: Promise<void> = Promise.resolve()
 
@@ -1063,6 +1195,10 @@ class TeamManagementProxy {
     this.fetch = options.fetch ?? globalThis.fetch
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.now = options.now ?? Date.now
+    this.loginProfile = options.loginProfile ?? loginOpenAICodexProfile
+    this.temporaryRootDir = options.temporaryRootDir ?? tmpdir()
+    this.onBackgroundError = options.onBackgroundError ?? (() => {})
+    this.localProfiles = options.localProfiles
   }
 
   async status(): Promise<TeamManagementStatus> {
@@ -1556,42 +1692,45 @@ class TeamManagementProxy {
   async startOAuth(
     label: string,
     expectedContext: TeamManagementExpectedContext,
+    method: LocalOAuthMethod = 'browser',
+    sourceLocalProfileId?: string,
   ): Promise<TeamManagementOAuthResult> {
-    const key = await this.expectedMutationKey(expectedContext)
-    const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_START_PATH, {
-      method: 'POST', body: { label }, key,
-    }), 'OAuth result')
-    if (item.method !== 'device_code') throw new Error('remote Team returned an unsupported OAuth method')
-    const verificationUrl = stringField(item, 'verificationUrl')
-    const parsed = new URL(verificationUrl)
-    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback(parsed.hostname))) {
-      throw new Error('remote Team returned an unsafe authorization URL')
+    try {
+      const key = await this.expectedMutationKey(expectedContext)
+      const validationIntent = await this.resolveLocalAccountValidationIntent(method, sourceLocalProfileId)
+      const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_START_PATH, {
+        method: 'POST', body: { label, method }, key,
+      })
+      const item = record(remote, 'OAuth result')
+      return method === 'browser'
+        ? await this.beginBrowserOAuth(item, true, key, validationIntent)
+        : this.projectDeviceOAuth(item)
+    } catch (error: unknown) {
+      throw projectedOAuthRemoteError(error)
     }
-    const userCode = stringField(item, 'userCode')
-    if (!/^[A-Za-z0-9-]{4,32}$/u.test(userCode)) throw new Error('remote Team returned an invalid authorization code')
-    const expiresAt = numberField(item, 'expiresAt')
-    return { account: projectContribution(item.account), method: 'device_code', verificationUrl, userCode, expiresAt }
   }
 
-  async cancelOAuth(
-    accountId: string,
-    expectedContext: TeamManagementExpectedContext,
-  ): Promise<TeamManagementContributionResult> {
-    const key = await this.expectedMutationKey(expectedContext)
-    const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
-      method: 'POST', body: { accountId }, key,
-    }), 'OAuth cancellation')
-    return { account: projectContribution(item.account) }
+  private async resolveLocalAccountValidationIntent(
+    method: LocalOAuthMethod,
+    sourceLocalProfileId: string | undefined,
+  ): Promise<LocalAccountValidationIntent | undefined> {
+    if (sourceLocalProfileId === undefined) return undefined
+    if (method !== 'browser') throw new Error('sourceLocalProfileId requires browser OAuth')
+    if (this.localProfiles === undefined) throw new Error('local account verification is not available')
+    const profiles = await this.localProfiles.listProfiles()
+    if (!profiles.some(profile => profile.id === sourceLocalProfileId)) {
+      throw new Error('selected local Codex account was not found')
+    }
+    const credential = await this.localProfiles.readProfileCredential(sourceLocalProfileId)
+    if (credential?.type !== 'oauth') throw new Error('selected local Codex account was not found')
+    const accountId = (credential as typeof credential & { accountId?: unknown }).accountId
+    if (typeof accountId !== 'string' || accountId.trim() === '') {
+      throw new Error('selected local Codex account has no provider account identity')
+    }
+    return { expectedProviderAccountId: accountId }
   }
 
-  async reauthorizeOAuth(
-    accountId: string,
-    expectedContext: TeamManagementExpectedContext,
-  ): Promise<TeamManagementOAuthResult> {
-    const key = await this.expectedMutationKey(expectedContext)
-    const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH, {
-      method: 'POST', body: { accountId }, key,
-    }), 'OAuth result')
+  private projectDeviceOAuth(item: Record<string, unknown>): TeamManagementOAuthResult {
     if (item.method !== 'device_code') throw new Error('remote Team returned an unsupported OAuth method')
     const verificationUrl = stringField(item, 'verificationUrl')
     const parsed = new URL(verificationUrl)
@@ -1607,6 +1746,199 @@ class TeamManagementProxy {
       userCode,
       expiresAt: numberField(item, 'expiresAt'),
     }
+  }
+
+  async cancelOAuth(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+    discardInitial = false,
+  ): Promise<TeamManagementContributionResult> {
+    try {
+      const key = await this.expectedMutationKey(expectedContext)
+      const operation = this.browserOAuth.get(accountId)
+      if (operation !== undefined) {
+        operation.abort(new Error('OpenAI Codex sign-in cancelled'))
+        await operation.completion.catch(() => {})
+      }
+      const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+        method: 'POST', body: { accountId, discardInitial }, key,
+      }), 'OAuth cancellation')
+      const account = projectContribution(item.account)
+      if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+      return { account }
+    } catch (error: unknown) {
+      throw projectedOAuthRemoteError(error)
+    }
+  }
+
+  async reauthorizeOAuth(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+    method: LocalOAuthMethod = 'browser',
+  ): Promise<TeamManagementOAuthResult> {
+    try {
+      const key = await this.expectedMutationKey(expectedContext)
+      const current = this.browserOAuth.get(accountId)
+      if (current !== undefined) {
+        current.abort(new Error('OpenAI Codex sign-in restarted'))
+        await current.completion.catch(() => {})
+      }
+      const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH, {
+        method: 'POST', body: { accountId, method }, key,
+      })
+      const item = record(remote, 'OAuth result')
+      return method === 'browser'
+        ? await this.beginBrowserOAuth(item, false, key)
+        : this.projectDeviceOAuth(item)
+    } catch (error: unknown) {
+      throw projectedOAuthRemoteError(error)
+    }
+  }
+
+  private async beginBrowserOAuth(
+    item: Record<string, unknown>,
+    discardInitialOnFailure: boolean,
+    key: string,
+    validationIntent?: LocalAccountValidationIntent,
+  ): Promise<TeamManagementOAuthResult> {
+    const account = projectContribution(item.account)
+    let offer: TeamCredentialHandoffOffer
+    try {
+      if (item.method !== 'browser_handoff') throw new Error('remote Team returned an unsupported OAuth method')
+      const rawOffer = record(item.handoff, 'OAuth handoff offer')
+      exactKeys(rawOffer, ['version', 'sessionId', 'serverPublicKey', 'expiresAt'])
+      offer = {
+        version: numberField(rawOffer, 'version') as 1,
+        sessionId: stringField(rawOffer, 'sessionId'),
+        serverPublicKey: stringField(rawOffer, 'serverPublicKey'),
+        expiresAt: numberField(rawOffer, 'expiresAt'),
+      }
+      if (offer.version !== 1) throw new Error('remote Team returned an unsupported OAuth handoff version')
+    } catch (error: unknown) {
+      if (discardInitialOnFailure) {
+        await this.cancelRemoteOAuthBestEffort(account.id, true, key)
+      }
+      throw error
+    }
+
+    const cancellation = new AbortController()
+    let suppressAutomaticCleanup = false
+    const abort = (reason: Error, suppressCleanup = true): void => {
+      if (suppressCleanup) suppressAutomaticCleanup = true
+      cancellation.abort(reason)
+    }
+    let resolveAuthorization!: (url: string) => void
+    let rejectAuthorization!: (error: unknown) => void
+    let authorizationSettled = false
+    const authorization = new Promise<string>((resolve, reject) => {
+      resolveAuthorization = (url) => { authorizationSettled = true; resolve(url) }
+      rejectAuthorization = (error) => { authorizationSettled = true; reject(error) }
+    })
+    const interaction: AuthInteraction = {
+      signal: cancellation.signal,
+      prompt: prompt => prompt.type === 'select'
+        ? Promise.resolve('browser')
+        : waitForPromptAbort(prompt, cancellation.signal),
+      notify: (event) => {
+        if (event.type !== 'auth_url' || authorizationSettled) return
+        try {
+          const url = new URL(event.url)
+          if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopback(url.hostname))) {
+            throw new Error('OpenAI returned an unsafe authorization URL')
+          }
+          resolveAuthorization(event.url)
+        } catch (error: unknown) {
+          cancellation.abort(error)
+          rejectAuthorization(error)
+        }
+      },
+    }
+
+    let completion!: Promise<void>
+    completion = this.captureAndTransferOAuth(account, offer, interaction, cancellation.signal, key, validationIntent)
+      .catch(async (error: unknown) => {
+        if (!authorizationSettled) rejectAuthorization(error)
+        if (!suppressAutomaticCleanup) {
+          await this.cancelRemoteOAuthBestEffort(account.id, discardInitialOnFailure, key)
+          this.onBackgroundError(projectedOAuthRemoteError(error))
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this.browserOAuth.get(account.id)?.completion === completion) this.browserOAuth.delete(account.id)
+      })
+    this.browserOAuth.set(account.id, { abort, completion })
+    // Completion stays Host-side after the Browser receives and opens this URL.
+    completion.catch(() => {})
+    return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: offer.expiresAt }
+  }
+
+  /** Automatic cleanup is idempotent; retry one transport failure before giving up. */
+  private async cancelRemoteOAuthBestEffort(
+    accountId: string,
+    discardInitial: boolean,
+    key: string,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+          method: 'POST', body: { accountId, discardInitial }, key,
+        })
+        return
+      } catch (error: unknown) {
+        if (error instanceof RemoteTeamError) return
+      }
+    }
+  }
+
+  private async captureAndTransferOAuth(
+    account: TeamManagementContributionSummary,
+    offer: TeamCredentialHandoffOffer,
+    interaction: AuthInteraction,
+    signal: AbortSignal,
+    key: string,
+    validationIntent?: LocalAccountValidationIntent,
+  ): Promise<void> {
+    const directory = await mkdtemp(join(this.temporaryRootDir, 'dsh-team-oauth-'))
+    const store = new OpenAICodexCredentialStore(join(directory, 'credentials.json'))
+    try {
+      const profile = await this.loginProfile(interaction, store, {
+        beforeCommit: () => { if (signal.aborted) throw abortReason(signal) },
+      })
+      if (signal.aborted) throw abortReason(signal)
+      const credential = await store.readProfileCredential(profile.id)
+      if (credential?.type !== 'oauth') throw new Error('OpenAI Codex sign-in completed without an OAuth credential')
+      const providerAccountId = (credential as typeof credential & { accountId?: unknown }).accountId
+      if (typeof providerAccountId !== 'string' || providerAccountId.trim() === '') {
+        throw new Error('OpenAI Codex sign-in completed without an account credential')
+      }
+      if (validationIntent !== undefined && providerAccountId !== validationIntent.expectedProviderAccountId) {
+        throw new Error('independently authorized OpenAI account does not match the selected local account')
+      }
+      const envelope = sealTeamCredentialHandoff(
+        offer,
+        { teamId: account.teamId, accountId: account.id },
+        { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
+      )
+      const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
+        method: 'POST', body: { accountId: account.id, envelope }, key,
+      }), 'OAuth handoff completion')
+      const completedAccount = projectContribution(completed.account)
+      if (
+        completedAccount.id !== account.id
+        || completedAccount.teamId !== account.teamId
+        || completedAccount.status !== 'active'
+      ) throw new Error('remote Team returned a mismatched OAuth contribution')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  }
+
+  async dispose(): Promise<void> {
+    const operations = [...this.browserOAuth.values()]
+    for (const operation of operations) operation.abort(new Error('Team management routes disposed'), false)
+    await Promise.allSettled(operations.map(operation => operation.completion))
+    this.browserOAuth.clear()
   }
 
   async updateContribution(
@@ -2462,22 +2794,35 @@ export function registerTeamManagementRoutes(
       }),
       register(TEAM_MANAGEMENT_CONTRIBUTIONS_PATH, 'GET', async () => ({ value: await proxy.contributions() })),
       register(TEAM_MANAGEMENT_OAUTH_START_PATH, 'POST', async (body) => {
-        exactKeys(body, ['label', 'expectedContext'])
+        exactKeys(body, ['label', 'method', 'sourceLocalProfileId', 'expectedContext'])
         return {
           status: 201,
-          value: await proxy.startOAuth(requiredString(body, 'label'), requiredExpectedContext(body)),
+          value: await proxy.startOAuth(
+            requiredString(body, 'label'),
+            requiredExpectedContext(body),
+            optionalOAuthMethod(body),
+            optionalString(body, 'sourceLocalProfileId'),
+          ),
         }
       }),
       register(TEAM_MANAGEMENT_OAUTH_CANCEL_PATH, 'POST', async (body) => {
-        exactKeys(body, ['accountId', 'expectedContext'])
+        exactKeys(body, ['accountId', 'discardInitial', 'expectedContext'])
         return {
-          value: await proxy.cancelOAuth(requiredString(body, 'accountId'), requiredExpectedContext(body)),
+          value: await proxy.cancelOAuth(
+            requiredString(body, 'accountId'),
+            requiredExpectedContext(body),
+            optionalBoolean(body, 'discardInitial'),
+          ),
         }
       }),
       register(TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH, 'POST', async (body) => {
-        exactKeys(body, ['accountId', 'expectedContext'])
+        exactKeys(body, ['accountId', 'method', 'expectedContext'])
         return {
-          value: await proxy.reauthorizeOAuth(requiredString(body, 'accountId'), requiredExpectedContext(body)),
+          value: await proxy.reauthorizeOAuth(
+            requiredString(body, 'accountId'),
+            requiredExpectedContext(body),
+            optionalOAuthMethod(body),
+          ),
         }
       }),
       register(TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH, 'POST', async (body) => {
@@ -2494,6 +2839,7 @@ export function registerTeamManagementRoutes(
     ]
     return async () => {
       for (const dispose of routes) dispose()
+      await proxy.dispose()
       if (ownsSecurity) security.dispose?.()
     }
   }, 'dsh-codex-shared-pool: local Team management routes')

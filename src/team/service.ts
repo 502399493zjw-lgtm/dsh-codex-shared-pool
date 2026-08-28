@@ -13,6 +13,8 @@ import type {
   TeamDissolutionResult,
   TeamMemberDepartureResult,
   TeamMemberSummary,
+  TeamOAuthBrokerChallenge,
+  TeamOAuthMethod,
   TeamOAuthStartResult,
   TeamOwnershipTransferAcceptanceResult,
   TeamOwnershipTransferSummary,
@@ -25,6 +27,7 @@ import type {
 } from './types.ts'
 import type { TeamCredentialBroker } from './credentials.ts'
 import { LocalTeamCredentialBroker } from './credentials.ts'
+import type { TeamCredentialHandoffEnvelope } from './oauth-handoff.ts'
 import type {
   TeamQuotaSnapshot,
   TeamRequestAdmissionRouter,
@@ -34,7 +37,7 @@ import type {
 } from './routing.ts'
 import { TeamRequestRouter, TeamRouteCapacityError } from './routing.ts'
 import { TeamCapacityProvider } from './capacity.ts'
-import { safeTeamErrorMessage } from './safe-message.ts'
+import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from './safe-message.ts'
 import { openAICodexQuotaBucket } from '../account-allocation.ts'
 import { TEAM_SHARED_CREDIT_RESERVATION } from './credits.ts'
 import {
@@ -89,6 +92,11 @@ export interface TeamRequestAdmission extends TeamRouteSelection {
   readonly usage: TeamUsageEventSummary
 }
 
+export interface TeamContributionOAuthCancelOptions {
+  /** Remove a placeholder that never completed its first authorization. */
+  readonly discardInitial?: boolean
+}
+
 export class TeamService {
   readonly store: TeamStore
   readonly broker: TeamCredentialBroker
@@ -107,8 +115,22 @@ export class TeamService {
   constructor(options: TeamServiceOptions = {}) {
     this.store = options.store ?? new MemoryTeamStore()
     this.broker = options.broker ?? new LocalTeamCredentialBroker({
-      onStatusChange: async (teamId, accountId, status, lastError, expectedStatus) => {
-        await this.store.setContributionAccountStatus(teamId, accountId, status, lastError, expectedStatus)
+      onStatusChange: async (
+        teamId,
+        accountId,
+        status,
+        lastError,
+        expectedStatus,
+        providerAuthenticatedLabel,
+      ) => {
+        await this.store.setContributionAccountStatus(
+          teamId,
+          accountId,
+          status,
+          lastError,
+          expectedStatus,
+          providerAuthenticatedLabel,
+        )
       },
     })
     this.router = options.router ?? new TeamRequestRouter()
@@ -152,6 +174,14 @@ export class TeamService {
             && liveKeyMemberIds.has(member.id),
         })),
       contributions: overview.contributions.filter(account => account.ownerMemberId === auth.memberId),
+      activeSharedAccounts: overview.contributions
+        .filter(account => account.status === 'active')
+        .map(account => ({
+          id: account.id,
+          label: account.label,
+          ownerMemberId: account.ownerMemberId,
+          status: 'active' as const,
+        })),
       ...(overview.displayNameMigrationNotice === undefined
         ? {}
         : {
@@ -168,20 +198,26 @@ export class TeamService {
       : { viewerRole: 'member', ...base }
   }
 
-  async startContributionOAuth(auth: TeamAuthContext, label: string): Promise<TeamOAuthStartResult> {
+  async startContributionOAuth(
+    auth: TeamAuthContext,
+    label: string,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthStartResult> {
     const account = await this.store.createContributionAccount(auth, label)
-    let challenge: Omit<TeamOAuthStartResult, 'account'>
+    let challenge: TeamOAuthBrokerChallenge
     try {
-      challenge = await this.broker.startOAuth({ teamId: account.teamId, accountId: account.id })
+      challenge = await this.broker.startOAuth({ teamId: account.teamId, accountId: account.id }, method)
     } catch (error: unknown) {
-      await this.store.setContributionAccountStatus(
+      const projectedError = safeTeamOAuthErrorMessage(error)
+      const rolledBack = await this.store.setContributionAccountStatus(
         account.teamId,
         account.id,
-        'reauth_required',
-        safeTeamErrorMessage(error),
+        'revoked',
+        projectedError,
         'authorizing',
       )
-      throw error
+      if (rolledBack.status === 'revoked') await this.cleanupCommittedRevokedContributions([rolledBack])
+      throw new Error(projectedError)
     }
 
     let current: TeamContributionAccountSummary | undefined
@@ -198,33 +234,49 @@ export class TeamService {
     return { account: current, ...challenge }
   }
 
-  async cancelContributionOAuth(auth: TeamAuthContext, accountId: string): Promise<TeamContributionAccountSummary> {
+  async cancelContributionOAuth(
+    auth: TeamAuthContext,
+    accountId: string,
+    options: TeamContributionOAuthCancelOptions = {},
+  ): Promise<TeamContributionAccountSummary> {
     const account = await this.store.updateContributionAccount(auth, accountId, {})
+    if (account.status === 'reauth_required' && options.discardInitial === true) {
+      const discarded = await this.store.revokeContributionAccount(auth, account.id)
+      await this.cleanupCommittedRevokedContributions([discarded])
+      return discarded
+    }
     if (account.status !== 'authorizing') return account
     await this.broker.cancelOAuth({ teamId: account.teamId, accountId: account.id })
-    return this.store.setContributionAccountStatus(
+    const cancelled = await this.store.setContributionAccountStatus(
       account.teamId,
       account.id,
-      'reauth_required',
+      options.discardInitial === true ? 'revoked' : 'reauth_required',
       'authorization cancelled',
       'authorizing',
     )
+    if (cancelled.status === 'revoked') await this.cleanupCommittedRevokedContributions([cancelled])
+    return cancelled
   }
 
-  async reauthorizeContributionOAuth(auth: TeamAuthContext, accountId: string): Promise<TeamOAuthStartResult> {
+  async reauthorizeContributionOAuth(
+    auth: TeamAuthContext,
+    accountId: string,
+    method: TeamOAuthMethod = 'device_code',
+  ): Promise<TeamOAuthStartResult> {
     const account = await this.store.beginContributionReauthorization(auth, accountId)
-    let challenge: Omit<TeamOAuthStartResult, 'account'>
+    let challenge: TeamOAuthBrokerChallenge
     try {
-      challenge = await this.broker.restartOAuth({ teamId: account.teamId, accountId: account.id })
+      challenge = await this.broker.restartOAuth({ teamId: account.teamId, accountId: account.id }, method)
     } catch (error: unknown) {
+      const projectedError = safeTeamOAuthErrorMessage(error)
       await this.store.setContributionAccountStatus(
         account.teamId,
         account.id,
         'reauth_required',
-        safeTeamErrorMessage(error),
+        projectedError,
         'authorizing',
       )
-      throw error
+      throw new Error(projectedError)
     }
 
     const current = (await this.store.listContributionAccounts(auth)).find(item => item.id === account.id)
@@ -237,6 +289,43 @@ export class TeamService {
       throw new Error('contribution account was revoked during authorization')
     }
     return { account: current, ...challenge }
+  }
+
+  async completeContributionOAuthHandoff(
+    auth: TeamAuthContext,
+    accountId: string,
+    envelope: TeamCredentialHandoffEnvelope,
+  ): Promise<TeamContributionAccountSummary> {
+    const account = await this.store.updateContributionAccount(auth, accountId, {})
+    if (account.status !== 'authorizing') throw new Error('contribution account is not awaiting authorization')
+    const ref = { teamId: account.teamId, accountId: account.id }
+    try {
+      const activation = await this.broker.completeOAuthHandoff(ref, envelope)
+      const current = await this.store.setContributionAccountStatus(
+        account.teamId,
+        account.id,
+        'active',
+        undefined,
+        'authorizing',
+        activation.accountLabel,
+      )
+      if (current.status !== 'active') {
+        await this.broker.revoke(ref)
+        if (current.status === 'revoked') throw new Error('contribution account was revoked during authorization')
+        throw new Error('contribution account state changed during authorization')
+      }
+      return current
+    } catch (error: unknown) {
+      const projectedError = safeTeamOAuthErrorMessage(error)
+      await this.store.setContributionAccountStatus(
+        account.teamId,
+        account.id,
+        'reauth_required',
+        projectedError,
+        'authorizing',
+      ).catch(() => undefined)
+      throw new Error(projectedError)
+    }
   }
 
   async reconcileContributionAuthorizations(): Promise<void> {
@@ -256,12 +345,14 @@ export class TeamService {
       // An out-of-process broker may still be completing the OAuth operation.
       // Its client-side monitor will publish the terminal state asynchronously.
       if (state.status === 'authorizing') continue
+      const lastError = state.status === 'reauth_required' ? state.lastError : undefined
       await this.store.setContributionAccountStatus(
         account.teamId,
         account.id,
         state.status,
-        state.lastError,
+        lastError === undefined ? undefined : safeTeamOAuthErrorMessage(lastError),
         'authorizing',
+        state.status === 'active' ? state.accountLabel : undefined,
       )
     }
   }

@@ -13,6 +13,7 @@ import {
 import {
   TEAM_BOOTSTRAP_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
+  TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
   TEAM_CONTRIBUTIONS_PATH,
@@ -35,6 +36,7 @@ import {
   TEAM_STATUS_PATH,
   TEAM_USAGE_PATH,
   type TeamDissolutionResult,
+  type TeamOAuthMethod,
 } from '../src/team/types.ts'
 import {
   MemoryTeamStore,
@@ -45,12 +47,25 @@ import {
 } from '../src/team/store.ts'
 import { TeamService } from '../src/team/service.ts'
 import type { TeamCredentialBroker, TeamCredentialRef } from '../src/team/credentials.ts'
+import type { TeamCredentialHandoffEnvelope } from '../src/team/oauth-handoff.ts'
 
 class FakeCredentialBroker implements TeamCredentialBroker {
-  readonly started: TeamCredentialRef[] = []
-  readonly restarted: TeamCredentialRef[] = []
-  startOAuth(ref: TeamCredentialRef): Promise<{ method: 'device_code'; verificationUrl: string; userCode: string; expiresAt: number }> {
-    this.started.push(ref)
+  readonly started: Array<{ ref: TeamCredentialRef; method: TeamOAuthMethod }> = []
+  readonly restarted: Array<{ ref: TeamCredentialRef; method: TeamOAuthMethod }> = []
+  readonly completed: Array<{ ref: TeamCredentialRef; envelope: TeamCredentialHandoffEnvelope }> = []
+  startOAuth(ref: TeamCredentialRef, method: TeamOAuthMethod = 'device_code'): ReturnType<TeamCredentialBroker['startOAuth']> {
+    this.started.push({ ref, method })
+    if (method === 'browser') {
+      return Promise.resolve({
+        method: 'browser_handoff',
+        handoff: {
+          version: 1,
+          sessionId: 'handoff-session',
+          serverPublicKey: 'server-public-key',
+          expiresAt: 1_800_000,
+        },
+      })
+    }
     return Promise.resolve({
       method: 'device_code',
       verificationUrl: 'https://auth.example.test/codex/device',
@@ -58,9 +73,13 @@ class FakeCredentialBroker implements TeamCredentialBroker {
       expiresAt: 1_800_000,
     })
   }
-  restartOAuth(ref: TeamCredentialRef): ReturnType<TeamCredentialBroker['startOAuth']> {
-    this.restarted.push(ref)
-    return this.startOAuth(ref)
+  restartOAuth(ref: TeamCredentialRef, method: TeamOAuthMethod = 'device_code'): ReturnType<TeamCredentialBroker['startOAuth']> {
+    this.restarted.push({ ref, method })
+    return this.startOAuth(ref, method)
+  }
+  completeOAuthHandoff(ref: TeamCredentialRef, envelope: TeamCredentialHandoffEnvelope): Promise<{ status: 'active'; accountLabel: string }> {
+    this.completed.push({ ref, envelope })
+    return Promise.resolve({ status: 'active', accountLabel: 'Owner Codex' })
   }
   cancelOAuth(): Promise<void> { return Promise.resolve() }
   inspectAuthorization(): Promise<{ status: 'active' }> { return Promise.resolve({ status: 'active' }) }
@@ -270,7 +289,8 @@ describe('Team control-plane routes', () => {
   })
 
   it('returns a role-shaped overview without sibling invites, keys, or contributions', async () => {
-    const routes = setup()
+    const store = new MemoryTeamStore()
+    const routes = setup(new FakeCredentialBroker(), async () => 'bootstrap-secret-1234', store)
     const bootstrap = routes.find(route => route.path === TEAM_BOOTSTRAP_PATH)
     const overview = routes.find(route => route.path === TEAM_OVERVIEW_PATH)
     const invites = routes.find(route => route.path === TEAM_INVITES_PATH)
@@ -284,7 +304,10 @@ describe('Team control-plane routes', () => {
       'x-dsh-bootstrap-token': 'bootstrap-secret-1234',
     }))
     const ownerKey = String(result.body.apiKey)
-    await response(start.handler, request('POST', { label: 'Owner Codex' }, {
+    const ownerStarted = await response(start.handler, request('POST', { label: 'Owner Codex' }, {
+      'content-type': 'application/json', authorization: `Bearer ${ownerKey}`,
+    }))
+    await response(start.handler, request('POST', { label: 'Owner setup in progress' }, {
       'content-type': 'application/json', authorization: `Bearer ${ownerKey}`,
     }))
     const invited = await response(invites.handler, request('POST', { label: 'Product designer' }, {
@@ -295,9 +318,13 @@ describe('Team control-plane routes', () => {
     }, { 'content-type': 'application/json' }))
     const memberKey = String(joined.body.apiKey)
     const memberId = String((joined.body.member as Record<string, unknown>).id)
-    await response(start.handler, request('POST', { label: 'Friend Codex' }, {
+    const memberStarted = await response(start.handler, request('POST', { label: 'Friend Codex' }, {
       'content-type': 'application/json', authorization: `Bearer ${memberKey}`,
     }))
+    const ownerAccount = ownerStarted.body.account as Record<string, unknown>
+    const memberAccount = memberStarted.body.account as Record<string, unknown>
+    await store.setContributionAccountStatus(String(ownerAccount.teamId), String(ownerAccount.id), 'active')
+    await store.setContributionAccountStatus(String(memberAccount.teamId), String(memberAccount.id), 'active')
 
     await expect(response(overview.handler, request('GET', undefined, {}))).resolves.toMatchObject({ status: 401 })
     const ownerView = await response(overview.handler, request('GET', undefined, {
@@ -309,11 +336,16 @@ describe('Team control-plane routes', () => {
         viewerRole: 'owner',
         team: { name: 'Friends', status: 'active' },
         invites: [],
-        contributions: [{ label: 'Owner Codex' }],
+        contributions: [{ label: 'Owner Codex' }, { label: 'Owner setup in progress', status: 'authorizing' }],
+        activeSharedAccounts: [
+          { id: ownerAccount.id, label: 'Owner Codex', status: 'active' },
+          { id: memberAccount.id, label: 'Friend Codex', ownerMemberId: memberId, status: 'active' },
+        ],
       },
     })
     expect(ownerView.body).not.toHaveProperty('apiKeys')
-    expect(ownerView.body.contributions).toHaveLength(1)
+    expect(ownerView.body.contributions).toHaveLength(2)
+    expect(JSON.stringify(ownerView.body.contributions)).not.toContain('Friend Codex')
 
     const memberView = await response(overview.handler, request('GET', undefined, {
       authorization: `Bearer ${memberKey}`,
@@ -324,11 +356,19 @@ describe('Team control-plane routes', () => {
         viewerRole: 'member',
         currentMember: { id: memberId, role: 'member' },
         contributions: [{ label: 'Friend Codex', ownerMemberId: memberId }],
+        activeSharedAccounts: [
+          { id: ownerAccount.id, label: 'Owner Codex', status: 'active' },
+          { id: memberAccount.id, label: 'Friend Codex', ownerMemberId: memberId, status: 'active' },
+        ],
       },
     })
     expect(memberView.body).not.toHaveProperty('invites')
     expect(memberView.body).not.toHaveProperty('apiKeys')
     expect(memberView.body.contributions).toHaveLength(1)
+    for (const item of ownerView.body.activeSharedAccounts as Array<Record<string, unknown>>) {
+      expect(Object.keys(item).sort()).toEqual(['id', 'label', 'ownerMemberId', 'status'])
+    }
+    expect(memberView.body.activeSharedAccounts).toEqual(ownerView.body.activeSharedAccounts)
     expect(JSON.stringify([ownerView.body, memberView.body])).not.toContain(ownerKey)
   })
 
@@ -609,9 +649,53 @@ describe('Team control-plane routes', () => {
     const restarted = await response(reauthorize.handler, request('POST', { accountId: account.id }, authorization))
 
     expect(restarted).toMatchObject({ status: 200, body: { account: { id: account.id, status: 'authorizing' }, method: 'device_code' } })
-    expect(broker.restarted).toEqual([{ teamId: account.teamId, accountId: account.id }])
+    expect(broker.restarted).toEqual([{ ref: { teamId: account.teamId, accountId: account.id }, method: 'device_code' }])
     const accounts = await response(list.handler, request('GET', undefined, { authorization: authorization.authorization }))
     expect(accounts.body.accounts).toHaveLength(1)
+  })
+
+  it('supports browser handoff start, completion, and initial-account discard without exposing credentials', async () => {
+    const broker = new FakeCredentialBroker()
+    const routes = setup(broker)
+    const bootstrap = routes.find(route => route.path === TEAM_BOOTSTRAP_PATH)
+    const start = routes.find(route => route.path === TEAM_CONTRIBUTION_OAUTH_START_PATH)
+    const complete = routes.find(route => route.path === TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)
+    const cancel = routes.find(route => route.path === TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH)
+    if (bootstrap === undefined || start === undefined || complete === undefined || cancel === undefined) {
+      throw new Error('browser OAuth routes missing')
+    }
+    const boot = await response(bootstrap.handler, request('POST', { teamName: 'Friends', ownerName: 'Owner' }, {
+      'content-type': 'application/json', 'x-dsh-bootstrap-token': 'bootstrap-secret-1234',
+    }))
+    const authorization = { 'content-type': 'application/json', authorization: `Bearer ${String(boot.body.apiKey)}` }
+    const started = await response(start.handler, request('POST', { label: 'Owner Codex', method: 'browser' }, authorization))
+    const account = started.body.account as Record<string, unknown>
+    expect(started).toMatchObject({
+      status: 201,
+      body: { method: 'browser_handoff', handoff: { version: 1, sessionId: 'handoff-session' } },
+    })
+    expect(broker.started).toEqual([{ ref: { teamId: account.teamId, accountId: account.id }, method: 'browser' }])
+
+    const envelope = {
+      version: 1,
+      sessionId: 'handoff-session',
+      clientPublicKey: 'client-public-key',
+      iv: 'initialization-vector',
+      ciphertext: 'ciphertext',
+      tag: 'authentication-tag',
+    }
+    const completed = await response(complete.handler, request('POST', { accountId: account.id, envelope }, authorization))
+    expect(completed).toMatchObject({ status: 200, body: { account: { id: account.id, status: 'active' } } })
+    expect(broker.completed).toEqual([{ ref: { teamId: account.teamId, accountId: account.id }, envelope }])
+    expect(JSON.stringify(completed.body)).not.toMatch(/access|refresh|credential/iu)
+
+    const second = await response(start.handler, request('POST', { label: 'Discard me', method: 'browser' }, authorization))
+    const secondAccount = second.body.account as Record<string, unknown>
+    const discarded = await response(cancel.handler, request('POST', {
+      accountId: secondAccount.id,
+      discardInitial: true,
+    }, authorization))
+    expect(discarded).toMatchObject({ status: 200, body: { account: { id: secondAccount.id, status: 'revoked' } } })
   })
 
   it('exposes only role-shaped aggregate usage to an authenticated owner or member', async () => {

@@ -12,6 +12,7 @@ import {
   resolveTeamCredentialBrokerBaseUrl,
   TEAM_CREDENTIAL_BROKER_PATH_PREFIX,
 } from '../src/team/remote-credentials.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
 const INTERNAL_KEY = 'broker-secret-that-is-long-enough'
 const ref: TeamCredentialRef = { teamId: 'team_123', accountId: 'account_456' }
@@ -36,6 +37,177 @@ describe('remote Team credential broker boundary', () => {
       .toThrow(/credentials/iu)
     expect(() => resolveTeamCredentialBrokerBaseUrl('https://broker.example.test/proxy?target=openai'))
       .toThrow(/query|fixed.*path/iu)
+  })
+
+  it('projects remote OAuth diagnostics before status persistence', async () => {
+    const challenge = {
+      method: 'device_code' as const,
+      verificationUrl: 'https://auth.openai.com/device',
+      userCode: 'ABCD-EFGH',
+      expiresAt: Date.now() + 60_000,
+    }
+    const authorizationStates: TeamCredentialAuthorizationState[] = [
+      { status: 'authorizing' },
+      {
+        status: 'reauth_required',
+        lastError: 'provider refused Authorization: Bearer opaque-provider-token',
+      },
+    ]
+    const baseUrl = await listen(fakeBroker({
+      startOAuth: vi.fn(async () => challenge),
+      inspectAuthorization: vi.fn(async () => authorizationStates.shift() ?? { status: 'reauth_required' }),
+    }))
+    const onStatusChange = vi.fn(async () => undefined)
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+      pollIntervalMs: 10,
+      onStatusChange,
+    })
+
+    await expect(remote.startOAuth(ref)).resolves.toEqual(challenge)
+    await waitFor(() => onStatusChange.mock.calls.length === 1)
+    expect(onStatusChange).toHaveBeenCalledWith(
+      ref.teamId,
+      ref.accountId,
+      'reauth_required',
+      TEAM_AUTHORIZATION_FAILED_CODE,
+      'authorizing',
+    )
+    expect(JSON.stringify(onStatusChange.mock.calls)).not.toMatch(/provider refused|opaque-provider-token/iu)
+    await remote.dispose()
+  })
+
+  it('transports browser OAuth as a one-time handoff without starting a device monitor', async () => {
+    const offer = {
+      version: 1 as const,
+      sessionId: '7ec266a8-a724-48b5-85cb-624a65ce4b27',
+      serverPublicKey: 'MCowBQYDK2VuAyEAHhU5O7Sm0EKZQdY0JqtMXMbWrkttKowVvJMWoivkO0s',
+      expiresAt: Date.now() + 60_000,
+    }
+    const envelope = {
+      version: 1 as const,
+      sessionId: offer.sessionId,
+      clientPublicKey: 'MCowBQYDK2VuAyEAHhU5O7Sm0EKZQdY0JqtMXMbWrkttKowVvJMWoivkO0s',
+      iv: 'AAAAAAAAAAAAAAAA',
+      ciphertext: 'AQ',
+      tag: 'AAAAAAAAAAAAAAAAAAAAAA',
+    }
+    const startOAuth = vi.fn(async () => ({ method: 'browser_handoff' as const, handoff: offer }))
+    const restartOAuth = vi.fn(async () => ({ method: 'browser_handoff' as const, handoff: offer }))
+    const completeOAuthHandoff = vi.fn(async () => ({
+      status: 'active' as const,
+      accountLabel: 'Authenticated Account',
+    }))
+    const inspectAuthorization = vi.fn(async () => ({ status: 'authorizing' as const }))
+    const baseUrl = await listen(fakeBroker({ startOAuth, restartOAuth, completeOAuthHandoff, inspectAuthorization }))
+    const onStatusChange = vi.fn(async () => undefined)
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+      pollIntervalMs: 10,
+      onStatusChange,
+    })
+
+    await expect(remote.startOAuth(ref, 'browser')).resolves.toEqual({
+      method: 'browser_handoff',
+      handoff: offer,
+    })
+    expect(startOAuth).toHaveBeenCalledWith(ref, 'browser')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(inspectAuthorization).not.toHaveBeenCalled()
+    expect(onStatusChange).not.toHaveBeenCalled()
+
+    await expect(remote.restartOAuth(ref, 'browser')).resolves.toEqual({
+      method: 'browser_handoff',
+      handoff: offer,
+    })
+    expect(restartOAuth).toHaveBeenCalledWith(ref, 'browser')
+
+    await expect(remote.completeOAuthHandoff(ref, envelope)).resolves.toEqual({
+      status: 'active',
+      accountLabel: 'Authenticated Account',
+    })
+    expect(completeOAuthHandoff).toHaveBeenCalledWith(ref, envelope)
+    await remote.dispose()
+  })
+
+  it('rejects an OAuth challenge that does not match the requested method', async () => {
+    const baseUrl = await listen(fakeBroker({
+      startOAuth: vi.fn(async () => ({
+        method: 'device_code' as const,
+        verificationUrl: 'https://auth.openai.com/device',
+        userCode: 'ABCD-EFGH',
+        expiresAt: Date.now() + 60_000,
+      })),
+    }))
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+    })
+
+    try {
+      await expect(remote.startOAuth(ref, 'browser')).rejects.toThrow(/method|browser.*handoff/iu)
+    } finally {
+      await remote.dispose()
+    }
+  })
+
+  it('requires an authenticated account label from handoff completion', async () => {
+    const completeOAuthHandoff = vi.fn(async () => ({ status: 'active' as const }))
+    const baseUrl = await listen(fakeBroker({
+      completeOAuthHandoff: completeOAuthHandoff as unknown as TeamCredentialBroker['completeOAuthHandoff'],
+    }))
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+    })
+
+    await expect(remote.completeOAuthHandoff(ref, {
+      version: 1,
+      sessionId: '7ec266a8-a724-48b5-85cb-624a65ce4b27',
+      clientPublicKey: 'MCowBQYDK2VuAyEAHhU5O7Sm0EKZQdY0JqtMXMbWrkttKowVvJMWoivkO0s',
+      iv: 'AAAAAAAAAAAAAAAA',
+      ciphertext: 'AQ',
+      tag: 'AAAAAAAAAAAAAAAAAAAAAA',
+    })).rejects.toThrow(/non-active handoff result/iu)
+    await remote.dispose()
+  })
+
+  it('rejects malformed browser handoff protocol bodies at the HTTP boundary', async () => {
+    const startOAuth = vi.fn(async () => { throw new Error('must not be invoked') })
+    const completeOAuthHandoff = vi.fn(async () => ({
+      status: 'active' as const,
+      accountLabel: 'Authenticated Account',
+    }))
+    const baseUrl = await listen(fakeBroker({ startOAuth, completeOAuthHandoff }))
+    const origin = baseUrl.slice(0, -TEAM_CREDENTIAL_BROKER_PATH_PREFIX.length)
+
+    const malformedStart = await fetch(`${origin}${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/start`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...ref, method: 'browser', unexpected: true }),
+    })
+    expect(malformedStart.status).toBe(400)
+    expect(startOAuth).not.toHaveBeenCalled()
+
+    const malformedComplete = await fetch(`${origin}${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/handoff/complete`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...ref,
+        envelope: {
+          version: 1,
+          sessionId: '7ec266a8-a724-48b5-85cb-624a65ce4b27',
+          clientPublicKey: 'not-base64url!',
+          iv: 'AAAAAAAAAAAAAAAA',
+          ciphertext: 'AQ',
+          tag: 'AAAAAAAAAAAAAAAAAAAAAA',
+        },
+      }),
+    })
+    expect(malformedComplete.status).toBe(400)
+    expect(completeOAuthHandoff).not.toHaveBeenCalled()
   })
 
   it('authenticates fixed operations, synchronizes OAuth completion, and streams Responses without forwarding its key', async () => {
@@ -75,6 +247,7 @@ describe('remote Team credential broker boundary', () => {
     })
 
     await expect(remote.startOAuth(ref)).resolves.toEqual(challenge)
+    expect(fake.startOAuth).toHaveBeenCalledWith(ref, 'device_code')
     await waitFor(() => onStatusChange.mock.calls.length === 1)
     expect(onStatusChange).toHaveBeenCalledWith(ref.teamId, ref.accountId, 'active', undefined, 'authorizing')
     await expect(remote.readUsage(ref)).resolves.toEqual({

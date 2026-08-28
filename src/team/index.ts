@@ -14,6 +14,7 @@ export {
   resolveTeamCredentialBrokerBaseUrl,
   TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH,
+  TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_START_PATH,
   TEAM_CREDENTIAL_BROKER_PATH_PREFIX,
@@ -83,6 +84,7 @@ export {
   TEAM_CONTRIBUTIONS_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
+  TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_UPDATE_PATH,
   TEAM_CONTRIBUTION_REVOKE_PATH,
@@ -113,6 +115,7 @@ export {
 } from './types.ts'
 export type {
   LocalTeamCredentialBrokerOptions,
+  TeamCredentialActiveState,
   TeamCredentialAuthorizationState,
   TeamCredentialBroker,
   TeamCredentialRef,
@@ -180,6 +183,9 @@ export type {
   TeamDisplayNameMigrationNotice,
   TeamLifecycleTransitionInput,
   TeamOAuthDeviceChallenge,
+  TeamOAuthBrokerChallenge,
+  TeamOAuthHandoffChallenge,
+  TeamOAuthMethod,
   TeamOAuthStartResult,
   TeamOverview,
   TeamRole,

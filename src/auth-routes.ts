@@ -29,6 +29,8 @@ export const OPENAI_CODEX_AUTH_LOGIN_PATH = '/plugins/dsh-openai-codex/auth/logi
 export const OPENAI_CODEX_AUTH_LOGOUT_PATH = '/plugins/dsh-openai-codex/auth/logout'
 /** Secret-free list of named profiles and their current usage. */
 export const OPENAI_CODEX_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
+/** Fast secret-free profile directory without live quota reads. */
+export const OPENAI_CODEX_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
 /** Begin OAuth for a new named profile. */
 export const OPENAI_CODEX_PROFILE_LOGIN_PATH = '/plugins/dsh-openai-codex/profiles/login'
 /** Cancel the current browser-login operation without removing stored profiles. */
@@ -67,6 +69,15 @@ export interface OpenAICodexWebProfile extends CodexProfileSummary {
 
 /** Browser-safe state for the complete named-profile collection. */
 export type OpenAICodexWebProfilesStatus = OpenAICodexProfilesStatus<OpenAICodexWebProfile>
+
+/** Browser-safe local profile metadata that never includes credentials or live quota. */
+export interface OpenAICodexWebProfileDirectoryEntry extends CodexProfileSummary {
+  /** Whether the newest local provider attempt selected this profile. */
+  readonly inUse: boolean
+}
+
+/** Browser-safe lifecycle state for the fast local profile directory. */
+export type OpenAICodexWebProfileDirectoryStatus = OpenAICodexProfilesStatus<OpenAICodexWebProfileDirectoryEntry>
 
 const DEFAULT_LOGIN_TIMEOUT_MS = 10 * 60_000
 
@@ -159,6 +170,27 @@ export class OpenAICodexWebAuth {
         } catch (error: unknown) {
           return { ...profile, usage: { rateLimits: [] }, inUse, quotaError: safeExternalErrorMessage(error) }
         }
+      })),
+    }
+  }
+
+  /**
+   * List every profile without opening its credential store or reading live quota.
+   * @returns Browser-safe profile metadata with the current local selection.
+   */
+  async profileDirectoryStatus(): Promise<OpenAICodexWebProfileDirectoryStatus> {
+    if (this.attempt !== undefined) return { status: 'signing-in' }
+    if (this.state.status === 'error') return this.state
+    const profiles = await this.store.listProfiles()
+    const currentProfileId = this.routingEvents?.currentProfileId()
+    return {
+      status: 'ready',
+      profiles: profiles.map(profile => ({
+        id: profile.id,
+        label: profile.label,
+        createdAt: profile.createdAt,
+        updatedAt: profile.updatedAt,
+        inUse: currentProfileId === profile.id,
       })),
     }
   }
@@ -559,6 +591,15 @@ export function registerOpenAICodexAuthRoutes(
           if (!trustedRequest(req)) {  json(res, 403, { error: 'forbidden' }); return }
           await auth.signOut()
           json(res, 200, { ok: true })
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_PROFILE_DIRECTORY_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'GET') {  json(res, 405, { error: 'method not allowed' }); return }
+          if (!trustedRequest(req)) {  json(res, 403, { error: 'forbidden' }); return }
+          json(res, 200, await auth.profileDirectoryStatus())
         },
       }),
       ctx.webServer.register({

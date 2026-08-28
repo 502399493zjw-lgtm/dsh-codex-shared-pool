@@ -1614,6 +1614,27 @@ describe('PostgreSQL Team store', () => {
     expect(ownerOwnedUsage).toHaveLength(1)
     expect(ownerOwnedUsage[0]).toMatchObject({
       accountId: ownerAccount.id,
+      currentUtcWeek: {
+        window: { startedAt: Date.UTC(2026, 7, 17), endedAt: now },
+        resetAt: Date.UTC(2026, 7, 24),
+        aggregate: {
+          requestCount: 3,
+          tokenMeasuredRequestCount: 2,
+          pricedRequestCount: 2,
+          totalTokens: '130',
+          estimatedCostUsdMicros: '1284',
+        },
+      },
+      last24Hours: {
+        window: { startedAt: now - 86_400_000, endedAt: now },
+        aggregate: {
+          requestCount: 3,
+          tokenMeasuredRequestCount: 2,
+          pricedRequestCount: 2,
+          totalTokens: '130',
+          estimatedCostUsdMicros: '1284',
+        },
+      },
       aggregate: {
         requestCount: 3,
         tokenMeasuredRequestCount: 2,
