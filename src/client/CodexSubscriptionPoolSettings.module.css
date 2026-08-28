@@ -1,11 +1,120 @@
 .page {
+  --subscription-pool-text: var(--dsw-alias-label-primary, #1f2329);
+  --subscription-pool-muted: var(--dsw-alias-label-secondary, #646a73);
+  --subscription-pool-line: var(--dsw-alias-border-l2, rgba(31, 35, 41, 0.2));
+  --subscription-pool-blue: var(--dsw-alias-state-business-primary, #3964fe);
   box-sizing: border-box;
   display: flex;
   width: 100%;
   max-width: 1040px;
   min-width: 0;
+  margin-inline: auto;
   flex-direction: column;
-  color: var(--dsw-alias-label-primary);
+  color: var(--subscription-pool-text, var(--dsw-alias-label-primary));
+}
+
+/*
+ * DSH rc.8 fixes the settings dialog at 800px and does not expose a wide
+ * presentation option through settings.section. Keep this override tied to
+ * the subscription-pool marker so every other settings section retains the
+ * stock shell dimensions.
+ */
+@media (min-width: 981px) {
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
+    width: min(1500px, calc(100vw - 36px));
+    max-width: calc(100vw - 36px);
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
+    width: 244px;
+    flex: 0 0 244px;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) > :last-child {
+    padding-right: 54px;
+    padding-left: 54px;
+  }
+
+  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
+    border: 1px solid #35383d;
+    background: #242629;
+  }
+
+  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
+    border-right: 1px solid #383c42;
+    background: #242629;
+  }
+
+  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
+    background: #242629;
+  }
+}
+
+@media (max-width: 640px) {
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
+    width: 100%;
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(31, 35, 41, 0.2));
+    padding: 8px 10px;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :first-child {
+    display: none;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child > button {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    justify-content: flex-start;
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child > button > span {
+    overflow: visible;
+    white-space: normal;
+    word-break: keep-all;
+    text-overflow: clip;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) > :last-child {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+}
+
+:global(body[data-ds-dark-theme]) .page {
+  --subscription-pool-text: #f3f5f7;
+  --subscription-pool-muted: #afb5bd;
+  --subscription-pool-line: #383c42;
+  --subscription-pool-blue: #8bb8ff;
 }
 
 .page *,
@@ -15,37 +124,37 @@
 }
 
 .header {
-  padding-bottom: 18px;
+  padding-bottom: 26px;
 }
 
 .title {
   margin: 0;
-  font-size: 24px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  line-height: 32px;
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 36px;
 }
 
 .intro {
   max-width: 760px;
-  margin: 6px 0 0;
-  color: var(--dsw-alias-label-secondary);
+  margin: 10px 0 0;
+  color: var(--subscription-pool-muted, var(--dsw-alias-label-secondary));
   font-size: 14px;
   line-height: 22px;
 }
 
 .tabs {
   display: flex;
-  gap: 28px;
-  border-bottom: 1px solid var(--dsw-alias-border-subtle, rgba(31, 35, 41, 0.12));
+  gap: 24px;
+  border-bottom: 1px solid var(--subscription-pool-line, rgba(31, 35, 41, 0.2));
 }
 
 .tab {
   position: relative;
   min-width: 56px;
-  padding: 10px 2px 12px;
+  padding: 0 2px 12px;
   border: 0;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--subscription-pool-muted, var(--dsw-alias-label-secondary));
   font: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -65,19 +174,30 @@
 }
 
 .tab[data-active='true'] {
-  color: var(--dsw-alias-label-primary);
+  color: var(--subscription-pool-text, var(--dsw-alias-label-primary));
 }
 
 .tab[data-active='true']::after {
-  background: var(--dsw-alias-state-business-primary, #3964fe);
+  background: var(--subscription-pool-blue, #3964fe);
 }
 
 .tab:focus-visible {
-  outline: 2px solid var(--dsw-alias-state-business-primary, #3964fe);
+  outline: 2px solid var(--subscription-pool-blue, #3964fe);
   outline-offset: 2px;
 }
 
 .content {
   min-width: 0;
-  padding-top: 22px;
+  padding-top: 18px;
+}
+
+@media (max-width: 640px) {
+  .header {
+    padding-bottom: 20px;
+  }
+
+  .title {
+    font-size: 26px;
+    line-height: 32px;
+  }
 }

@@ -57,6 +57,7 @@ import type {
   TeamManagementOwnershipTransferSummary,
   TeamManagementStatus,
   TeamManagementSession,
+  TeamManagementSharedAccountDirectoryEntry,
   TeamManagementTeamStatusResult,
   TeamManagementUsageResult,
 } from '../../shared/team-management.ts'
@@ -213,6 +214,12 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
     'contributions',
     value => parseContribution(value, currentMember.id),
   ).filter(account => account.ownerMemberId === currentMember.id)
+  // Hosts released before the shared-account directory projection omitted this
+  // additive field. Keep rolling upgrades usable while still validating every
+  // entry once the field is present.
+  const activeSharedAccounts = item.activeSharedAccounts === undefined
+    ? []
+    : arrayField(item, 'activeSharedAccounts', parseActiveSharedAccount)
   const ownershipTransfer = item.ownershipTransfer === undefined
     ? undefined
     : parseOwnershipTransferSummary(item.ownershipTransfer)
@@ -235,6 +242,7 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
     currentMember,
     members: arrayField(item, 'members', parseManagementMember),
     contributions,
+    activeSharedAccounts,
     ...(displayNameMigrationNotice === undefined ? {} : { displayNameMigrationNotice }),
     ...(ownershipTransfer === undefined ? {} : { ownershipTransfer }),
   }
@@ -243,8 +251,30 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
     : { viewerRole, ...base }
 }
 
+function parseActiveSharedAccount(value: unknown): TeamManagementSharedAccountDirectoryEntry {
+  const item = object(value, 'active shared account')
+  exactKeys(item, ['id', 'label', 'ownerMemberId', 'status'], 'active shared account')
+  if (item.status !== 'active') throw new Error('active shared account status is invalid')
+  return {
+    id: stringField(item, 'id'),
+    label: stringField(item, 'label'),
+    ownerMemberId: stringField(item, 'ownerMemberId'),
+    status: 'active',
+  }
+}
+
 export function parseTeamManagementOAuthResult(value: unknown): TeamManagementOAuthResult {
   const item = object(value, 'OAuth challenge')
+  if (item.method === 'browser') {
+    const authorizationUrl = stringField(item, 'authorizationUrl')
+    safeUrl(authorizationUrl, 'authorizationUrl')
+    return {
+      account: parseContribution(item.account),
+      method: 'browser',
+      authorizationUrl,
+      expiresAt: numberField(item, 'expiresAt'),
+    }
+  }
   if (item.method !== 'device_code') throw new Error('OAuth method is unsupported')
   const verificationUrl = stringField(item, 'verificationUrl')
   safeUrl(verificationUrl, 'verificationUrl')
@@ -397,14 +427,35 @@ function parseUsageResult(value: unknown): TeamManagementUsageResult {
 
 function parseOwnedAccountUsage(value: unknown) {
   const item = object(value, 'owned account usage')
-  const window = object(item.window, 'owned account usage window')
+  const window = parseUsageWindow(item.window, 'owned account usage window')
+  const currentUtcWeek = item.currentUtcWeek === undefined
+    ? undefined
+    : (() => {
+        const week = object(item.currentUtcWeek, 'owned account current UTC week')
+        const weekWindow = parseUsageWindow(week.window, 'owned account current UTC week window')
+        const resetAt = boundedIntegerField(week, 'resetAt', 0, Number.MAX_SAFE_INTEGER)
+        if (resetAt < weekWindow.endedAt) throw new Error('owned account current UTC week reset is invalid')
+        return {
+          window: weekWindow,
+          resetAt,
+          aggregate: parseUsageAggregate(week.aggregate, 'owned account current UTC week aggregate'),
+        }
+      })()
+  const last24Hours = item.last24Hours === undefined
+    ? undefined
+    : (() => {
+        const day = object(item.last24Hours, 'owned account last 24 hours')
+        return {
+          window: parseUsageWindow(day.window, 'owned account last 24 hours window'),
+          aggregate: parseUsageAggregate(day.aggregate, 'owned account last 24 hours aggregate'),
+        }
+      })()
   return {
     accountId: stringField(item, 'accountId'),
-    window: {
-      startedAt: boundedIntegerField(window, 'startedAt', 0, Number.MAX_SAFE_INTEGER),
-      endedAt: boundedIntegerField(window, 'endedAt', 0, Number.MAX_SAFE_INTEGER),
-    },
+    window,
     aggregate: parseUsageAggregate(item.aggregate, 'owned account usage aggregate'),
+    ...(currentUtcWeek === undefined ? {} : { currentUtcWeek }),
+    ...(last24Hours === undefined ? {} : { last24Hours }),
     recentRequests: arrayField(item, 'recentRequests', value => {
       const request = object(value, 'recent request')
       const finishedAt = request.finishedAt === undefined ? undefined : numberField(request, 'finishedAt')
@@ -421,6 +472,14 @@ function parseOwnedAccountUsage(value: unknown) {
       }
     }),
   }
+}
+
+function parseUsageWindow(value: unknown, label: string) {
+  const window = object(value, label)
+  const startedAt = boundedIntegerField(window, 'startedAt', 0, Number.MAX_SAFE_INTEGER)
+  const endedAt = boundedIntegerField(window, 'endedAt', 0, Number.MAX_SAFE_INTEGER)
+  if (startedAt > endedAt) throw new Error(`${label} is invalid`)
+  return { startedAt, endedAt }
 }
 
 function parseTeam(value: unknown): TeamSummary {
@@ -789,26 +848,47 @@ export class TeamManagementApi {
     )
   }
 
-  startOAuth(label: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementOAuthResult> {
+  startOAuth(
+    label: string,
+    expectedContext: TeamManagementExpectedContext,
+    method: 'browser' | 'device_code' = 'browser',
+    sourceLocalProfileId?: string,
+  ): Promise<TeamManagementOAuthResult> {
     return this.request(
       TEAM_MANAGEMENT_OAUTH_START_PATH,
-      { method: 'POST', body: { label, expectedContext } },
+      {
+        method: 'POST',
+        body: {
+          label,
+          expectedContext,
+          method,
+          ...(sourceLocalProfileId === undefined ? {} : { sourceLocalProfileId }),
+        },
+      },
       parseTeamManagementOAuthResult,
     )
   }
 
-  cancelOAuth(accountId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementContributionResult> {
+  cancelOAuth(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+    discardInitial = false,
+  ): Promise<TeamManagementContributionResult> {
     return this.request(
       TEAM_MANAGEMENT_OAUTH_CANCEL_PATH,
-      { method: 'POST', body: { accountId, expectedContext } },
+      { method: 'POST', body: { accountId, expectedContext, discardInitial } },
       parseContributionResult,
     )
   }
 
-  reauthorizeOAuth(accountId: string, expectedContext: TeamManagementExpectedContext): Promise<TeamManagementOAuthResult> {
+  reauthorizeOAuth(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+    method: 'browser' | 'device_code' = 'browser',
+  ): Promise<TeamManagementOAuthResult> {
     return this.request(
       TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH,
-      { method: 'POST', body: { accountId, expectedContext } },
+      { method: 'POST', body: { accountId, expectedContext, method } },
       parseTeamManagementOAuthResult,
     )
   }

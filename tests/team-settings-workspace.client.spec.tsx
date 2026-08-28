@@ -77,6 +77,8 @@ import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
 
 const NOW = Date.UTC(2026, 7, 21, 12)
+let oauthPopupReplace: ReturnType<typeof vi.fn>
+let oauthPopupClose: ReturnType<typeof vi.fn>
 
 const completeOwnerUsage = {
   role: 'owner',
@@ -111,9 +113,15 @@ const mine = {
   id: 'mine-active', teamId: 'team-1', ownerMemberId: 'member-me', label: '个人 Pro', status: 'active',
   personalReservePercent: 20, maxSharedRequestsPerWindow: null,
   maxSharedConcurrency: 1, allowedModels: [], createdAt: 1, updatedAt: 1,
+  capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74 }] },
 } as const
 const paused = { ...mine, id: 'mine-paused', label: '备用账号', status: 'paused' as const }
-const friend = { ...mine, id: 'friend-active', ownerMemberId: 'member-mia', label: 'Mia 的账号' }
+const friend = {
+  id: 'friend-active',
+  ownerMemberId: 'member-mia',
+  label: 'Mia 的账号',
+  status: 'active' as const,
+}
 const CREATED_INVITE_TOKEN = 'dsh_invite_share-once-1234567890'
 const REVEALED_INVITE_TOKEN = 'dsh_invite_revealed-secret-1234567890'
 
@@ -174,6 +182,7 @@ function switchToSecondOwnerTeam(): void {
     ],
     invites: [],
     contributions: [],
+    activeSharedAccounts: [],
   }
 }
 
@@ -200,6 +209,7 @@ function switchToSecondMemberTeam(): void {
       },
     ],
     contributions: [],
+    activeSharedAccounts: [],
   }
 }
 
@@ -215,12 +225,19 @@ function uiTime(value: number): string {
 let overviewState: any
 
 beforeEach(() => {
+  oauthPopupReplace = vi.fn()
+  oauthPopupClose = vi.fn()
+  vi.spyOn(window, 'open').mockReturnValue({
+    location: { replace: oauthPopupReplace },
+    close: oauthPopupClose,
+    opener: null,
+  } as unknown as Window)
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({
       status: 'ready',
       profiles: [
-        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: {}, inUse: true },
+        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] }, inUse: true },
         { id: 'local-b', label: '本机账号 B', createdAt: 2, updatedAt: 2, usage: {}, inUse: false },
         { id: 'local-c', label: '本机账号 C', createdAt: 3, updatedAt: 3, usage: {}, inUse: false },
       ],
@@ -244,7 +261,11 @@ beforeEach(() => {
       },
     ],
     invites: [],
-    contributions: [mine, paused, friend],
+    contributions: [mine, paused],
+    activeSharedAccounts: [
+      { id: mine.id, ownerMemberId: mine.ownerMemberId, label: mine.label, status: 'active' },
+      friend,
+    ],
   }
   managementApi.status.mockResolvedValue({
     enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false, serverOrigin: 'https://team.example.test',
@@ -261,17 +282,15 @@ beforeEach(() => {
   managementApi.usage.mockResolvedValue(completeOwnerUsage)
   managementApi.startOAuth.mockResolvedValue({
     account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
-    method: 'device_code',
-    verificationUrl: 'https://auth.openai.com/device',
-    userCode: 'ABCD-EFGH',
+    method: 'browser',
+    authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
     expiresAt: NOW + 600_000,
   })
   managementApi.cancelOAuth.mockResolvedValue({ account: { ...mine, status: 'revoked' } })
   managementApi.reauthorizeOAuth.mockResolvedValue({
     account: { ...mine, status: 'authorizing' },
-    method: 'device_code',
-    verificationUrl: 'https://auth.openai.com/device',
-    userCode: 'ABCD-EFGH',
+    method: 'browser',
+    authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
     expiresAt: NOW + 600_000,
   })
   managementApi.updateContribution.mockImplementation(async (accountId: string, patch: { status?: string }) => {
@@ -403,7 +422,7 @@ describe('Team subscription-pool workspace', () => {
 
     const panel = await screen.findByRole('region', { name: '团队面板' })
     expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
-    expect(within(panel).getByRole('region', { name: zh.accountsNavigation })).toBeDefined()
+    expect(within(panel).getByRole('region', { name: /账号（\d+）/u })).toBeDefined()
     const trigger = within(panel).getByRole('button', { name: zh.teamSettings })
 
     fireEvent.click(trigger)
@@ -431,6 +450,7 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(trigger)
     expect(screen.getByRole('region', { name: zh.teamSettingsTitle })).toBeDefined()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: zh.backToTeam }))
 
     fireEvent.click(screen.getByRole('button', { name: zh.backToTeam }))
     expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
@@ -442,9 +462,9 @@ describe('Team subscription-pool workspace', () => {
 
     expect(screen.queryByRole('navigation', { name: 'Team 工作区' })).toBeNull()
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
-    expect(within(panel).getByText('个人 Pro')).toBeDefined()
-    expect(within(panel).getByText('备用账号')).toBeDefined()
-    expect(within(panel).queryByText('Mia 的账号')).toBeNull()
+    expect(within(panel).getByRole('button', { name: /个人 Pro/u })).toBeDefined()
+    expect(within(panel).getByRole('button', { name: /备用账号/u })).toBeDefined()
+    expect(within(panel).getByRole('button', { name: `Mia 的账号 · ${translate('contributedBy', { name: 'Mia' })}` })).toBeDefined()
     expect(within(panel).getByRole('button', { name: zh.addAccount })).toBeDefined()
 
     const settings = await openTeamSettings()
@@ -456,7 +476,10 @@ describe('Team subscription-pool workspace', () => {
     expect(usageEntry.getAttribute('aria-current')).toBe('page')
     expect(within(settings).queryByRole('button', { name: '账号' })).toBeNull()
     expect(within(settings).queryByRole('region', { name: zh.accountsNavigation })).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledWith('/plugins/dsh-openai-codex/profiles', {
+      credentials: 'same-origin',
+      headers: { accept: 'application/json' },
+    })
 
     expect(screen.getByRole('region', { name: '用量' })).toBeDefined()
 
@@ -483,10 +506,313 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
 
     await waitFor(() => {
-      expect(managementApi.startOAuth).toHaveBeenCalledWith('朋友 Pro', expectedContext())
+      expect(managementApi.startOAuth).toHaveBeenCalledWith('朋友 Pro', expectedContext(), 'browser')
+    })
+    expect(oauthPopupReplace).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(within(waiting).getByRole('status')).toBeDefined()
+    expect(waiting.textContent).toContain('请在 OpenAI 窗口完成登录；你可以在这里继续等待或取消。')
+    expect(waiting.textContent).not.toContain('一次性加密交接')
+    expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
+  })
+
+  it('closes a blank popup if the browser rejects opener isolation', async () => {
+    const close = vi.fn()
+    const popup = { location: { replace: vi.fn() }, close } as unknown as Window
+    Object.defineProperty(popup, 'opener', {
+      configurable: true,
+      set: () => { throw new Error('opener assignment blocked') },
+    })
+    vi.mocked(window.open).mockReturnValueOnce(popup)
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    await waitFor(() => { expect(close).toHaveBeenCalled() })
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+    expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined()
+  })
+
+  it('closes a reopened blank popup when navigation fails', async () => {
+    vi.mocked(window.open).mockReturnValueOnce(null)
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+
+    const close = vi.fn()
+    const popup = {
+      location: { replace: () => { throw new Error('navigation blocked') } },
+      close,
+      opener: null,
+    } as unknown as Window
+    vi.mocked(window.open).mockReturnValueOnce(popup)
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.openProvider }))
+
+    expect(close).toHaveBeenCalled()
+    expect(within(waiting).getByRole('alert').textContent).toBe(zh.browserPopupBlocked)
+  })
+
+  it('confirms before separately authorizing a signed-in local Codex account for the Team', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    expect(await within(panel).findByRole('heading', { name: '本机账号 A' })).toBeDefined()
+    expect(within(panel).getByRole('button', { name: /本机账号 B/u })).toBeDefined()
+    expect(within(panel).getByRole('button', { name: /本机账号 C/u })).toBeDefined()
+    expect(within(panel).getByText((content) => content.includes('需要再次授权后，Team 才能使用这个账号。'))).toBeDefined()
+
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    expect(within(confirmation).getByText('请再次登录这个 OpenAI 账号。')).toBeDefined()
+    expect(within(confirmation).getByText((content) => content.includes('你的本机登录保持不变。'))).toBeDefined()
+    expect(within(confirmation).getByText((content) => content.includes('不会上传本机 auth.json。'))).toBeDefined()
+    fireEvent.click(within(confirmation).getByRole('button', { name: zh.cancel }))
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })).getByRole('button', { name: '继续，再次授权' }))
+
+    await waitFor(() => {
+      expect(managementApi.startOAuth).toHaveBeenCalledWith(
+        '本机账号 A',
+        expectedContext(),
+        'browser',
+        'local-a',
+      )
+    })
+    expect(oauthPopupReplace).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+  })
+
+  it('invalidates a local-account authorization confirmation when the active Team identity changes', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    expect(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeDefined()
+
+    switchToSecondOwnerTeam()
+    fireEvent.click(within(panel).getByRole('button', { name: zh.teamSettings }))
+    const settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    })
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+  })
+
+  it('refreshes a stale Team snapshot and asks for confirmation again without replaying authorization', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      switchToSecondOwnerTeam()
+      throw Object.assign(
+        new Error('Team connection changed; refresh before trying again'),
+        { status: 409 },
+      )
+    })
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+      .getByRole('button', { name: '继续，再次授权' }))
+
+    const recoveryTitle = await screen.findByText('Team 已更新，请重新确认后继续。')
+    expect(recoveryTitle.parentElement?.getAttribute('aria-live')).toBe('polite')
+    expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
+    expect(document.body.textContent).not.toContain('Team connection changed; refresh before trying again')
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+  })
+
+  it('offers device code only as an explicit fallback from browser authorization', async () => {
+    managementApi.cancelOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
+    })
+    managementApi.reauthorizeOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
+      method: 'device_code',
+      verificationUrl: 'https://auth.openai.com/device',
+      userCode: 'ABCD-EFGH',
+      expiresAt: NOW + 600_000,
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), false)
+      expect(managementApi.reauthorizeOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), 'device_code')
     })
     expect(await screen.findByRole('dialog', { name: zh.deviceTitle })).toBeDefined()
     expect(screen.getByText('ABCD-EFGH')).toBeDefined()
+  })
+
+  it('does not restart authorization when browser sign-in completes while switching to device code', async () => {
+    managementApi.cancelOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'active' },
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), false)
+    })
+    expect(managementApi.reauthorizeOAuth).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+  })
+
+  it('discards a new placeholder if the device-code fallback fails to start', async () => {
+    managementApi.cancelOAuth
+      .mockResolvedValueOnce({
+        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
+      })
+      .mockResolvedValueOnce({
+        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'revoked' },
+      })
+    managementApi.reauthorizeOAuth.mockRejectedValueOnce(new Error('device fallback unavailable'))
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenNthCalledWith(1, 'oauth-new', expectedContext(), false)
+      expect(managementApi.cancelOAuth).toHaveBeenNthCalledWith(2, 'oauth-new', expectedContext(), true)
+    })
+    expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+  })
+
+  it('keeps the device challenge visible when a status refresh is still authorizing', async () => {
+    managementApi.cancelOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
+    })
+    managementApi.reauthorizeOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [
+          ...overviewState.contributions,
+          { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
+        ],
+      }
+      return {
+        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
+        method: 'device_code',
+        verificationUrl: 'https://auth.openai.com/device',
+        userCode: 'ABCD-EFGH',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
+
+    const deviceDialog = await screen.findByRole('dialog', { name: zh.deviceTitle })
+    const overviewCallsBeforeRefresh = managementApi.overview.mock.calls.length
+    fireEvent.click(within(deviceDialog).getByRole('button', { name: zh.checkAuthorization }))
+
+    await waitFor(() => {
+      expect(managementApi.overview.mock.calls.length).toBeGreaterThan(overviewCallsBeforeRefresh)
+    })
+    expect(screen.getByRole('dialog', { name: zh.deviceTitle })).toBeDefined()
+    expect(screen.getByText('ABCD-EFGH')).toBeDefined()
+  })
+
+  it('discards a newly-added placeholder account when browser authorization is cancelled', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true)
+    })
+    expect(oauthPopupClose).toHaveBeenCalled()
+  })
+
+  it('shows a safe action-oriented message when Team authorization cannot reach OpenAI', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockRejectedValueOnce(
+      new Error('remote Team request failed: team_authorization_network_unavailable'),
+    )
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+      .getByRole('button', { name: '继续，再次授权' }))
+
+    expect(await screen.findByText('暂时无法连接 OpenAI 授权服务，请检查 Team Host 的网络或代理配置后重试。')).toBeDefined()
+    expect(document.body.textContent).not.toMatch(/team_authorization_network_unavailable|Country, region|provider-detail/iu)
+  })
+
+  it('localizes the stable generic authorization failure without exposing its code', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockRejectedValueOnce(
+      new Error('remote Team request failed: team_authorization_failed'),
+    )
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+      .getByRole('button', { name: '继续，再次授权' }))
+
+    expect(await screen.findByText('暂时无法启动 OpenAI 授权，请重试。')).toBeDefined()
+    expect(document.body.textContent).not.toContain('team_authorization_failed')
   })
 
   it('edits sharing limits from the owned account card', async () => {
@@ -531,32 +857,90 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => { expect(screen.queryByRole('dialog', { name: zh.editProtection })).toBeNull() })
   })
 
-  it('shows which account action is pending while sharing is being stopped', async () => {
-    let resolveUpdate!: (value: { account: typeof mine }) => void
-    managementApi.updateContribution.mockImplementationOnce(() => new Promise(resolve => {
-      resolveUpdate = resolve
+  it('restores the approved active-account contribution semantics', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const teamBar = settings.querySelector<HTMLElement>(`.${styles.teamBar}`)!
+    const directory = within(settings).getByRole('complementary')
+    const contribution = within(directory).getByRole('button', { name: `${mine.label} · ${zh.contributedByMe}` })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+
+    expect(within(teamBar).getByText(translate('membersCount', { count: 2 }))).toBeDefined()
+    expect(within(teamBar).queryByText(translate('connectedAs', { name: 'Edison' }))).toBeNull()
+    expect(within(contribution).getByText(zh.contributedByMe)).toBeDefined()
+    expect(within(account).getByText('本机已登录 · Team 可用')).toBeDefined()
+    expect(within(account).getByRole('button', { name: '终止共享' })).toBeDefined()
+    expect(within(account).queryByText(zh.contributionActiveHint)).toBeNull()
+  })
+
+  it('shows teammate shared accounts in the directory and opens a safe read-only detail', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(panel).getByRole('complementary')
+    const details = within(panel).getByRole('region', { name: zh.accountDetails })
+    const contributionLabel = translate('contributedBy', { name: 'Mia' })
+    const teammateAccount = within(directory).getByRole('button', {
+      name: `${friend.label} · ${contributionLabel}`,
+    })
+
+    expect(within(teammateAccount).getByText(contributionLabel)).toBeDefined()
+    fireEvent.click(teammateAccount)
+
+    expect(within(details).getByRole('heading', { name: friend.label })).toBeDefined()
+    expect(within(details).getByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeDefined()
+    expect(within(details).getByText(zh.sharedAccountReadonlyHint)).toBeDefined()
+    expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
+    expect(within(details).queryByRole('button', { name: zh.editProtection })).toBeNull()
+    expect(within(details).queryByRole('button', { name: zh.recentRequests })).toBeNull()
+  })
+
+  it('keeps paused, authorizing, and reauthorization statuses distinct', async () => {
+    const authorizing = { ...mine, id: 'mine-authorizing', label: '授权中账号', status: 'authorizing' as const }
+    const reauthRequired = { ...mine, id: 'mine-reauth', label: '待登录账号', status: 'reauth_required' as const }
+    overviewState = { ...overviewState, contributions: [paused, authorizing, reauthRequired] }
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+
+    for (const account of [paused, authorizing, reauthRequired]) {
+      const status = zh[account.status]
+      fireEvent.click(within(directory).getByRole('button', { name: `${account.label} · ${status}` }))
+      expect(within(details).getByText(status)).toBeDefined()
+    }
+
+    expect(within(details).getByText(zh.contributionReauthHint)).toBeDefined()
+  })
+
+  it('shows which account action is pending while sharing is being terminated', async () => {
+    let resolveRevoke!: (value: { account: typeof mine }) => void
+    managementApi.revokeContribution.mockImplementationOnce(() => new Promise(resolve => {
+      resolveRevoke = resolve
     }))
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.pauseContribution }))
+    fireEvent.click(within(account).getByRole('button', { name: '终止共享' }))
 
-    const stopping = await within(account).findByRole('button', { name: zh.stoppingContribution })
+    const stopping = await within(account).findByRole('button', { name: '正在终止共享…' })
     expect(stopping).toHaveProperty('disabled', true)
     expect(stopping.getAttribute('aria-busy')).toBe('true')
 
-    resolveUpdate({ account: { ...mine, status: 'paused' } })
+    resolveRevoke({ account: { ...mine, status: 'revoked' } })
     await waitFor(() => {
-      expect(managementApi.updateContribution).toHaveBeenCalledWith(
+      expect(managementApi.revokeContribution).toHaveBeenCalledWith(
         mine.id,
-        { status: 'paused' },
         expectedContext(),
       )
     })
+    expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
-  it('shows weekly spend and recent requests in the Team panel', async () => {
+  it('matches the approved weekly-sharing and recent-day account detail', async () => {
     overviewState = {
       ...overviewState,
       contributions: overviewState.contributions.map((account: any) => account.id === mine.id
@@ -568,12 +952,34 @@ describe('Team subscription-pool workspace', () => {
       ownedAccounts: [{
         accountId: mine.id,
         label: mine.label,
+        window: { startedAt: NOW - 7 * 86_400_000, endedAt: NOW },
         aggregate: {
           requestCount: 3,
           tokenMeasuredRequestCount: 3,
           pricedRequestCount: 3,
           totalTokens: '12500',
           estimatedCostUsdMicros: '157500',
+        },
+        currentUtcWeek: {
+          window: { startedAt: NOW - 3 * 86_400_000, endedAt: NOW },
+          resetAt: NOW + 4 * 86_400_000,
+          aggregate: {
+            requestCount: 3,
+            tokenMeasuredRequestCount: 3,
+            pricedRequestCount: 3,
+            totalTokens: '12500',
+            estimatedCostUsdMicros: '157500',
+          },
+        },
+        last24Hours: {
+          window: { startedAt: NOW - 86_400_000, endedAt: NOW },
+          aggregate: {
+            requestCount: 2,
+            tokenMeasuredRequestCount: 2,
+            pricedRequestCount: 2,
+            totalTokens: '4800',
+            estimatedCostUsdMicros: '63000',
+          },
         },
         recentRequests: [{
           id: 'recent-1',
@@ -589,19 +995,396 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
-    expect(within(account).getByText(/本周约.*0\.16.*\/.*1\.00/u)).toBeDefined()
-    expect(within(account).getByText('近 7 天：3 次请求 · 12500 tokens')).toBeDefined()
-    expect(within(account).queryByText(/共享上限|（估算）/u)).toBeNull()
+    const weekly = within(account).getByRole('region', { name: zh.weeklySharingTitle })
+    const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
+    const actions = within(account).getByRole('group', { name: zh.accountActions })
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.edit }))
+    expect(weekly.querySelectorAll('dl > div')).toHaveLength(3)
+    expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
+    expect(within(weekly).getByText((_, element) => element?.tagName === 'DD'
+      && /已用.*0\.16.*\/.*共享上限.*1\.00/u.test(element.textContent ?? ''))).toBeDefined()
+    expect(within(weekly).getByRole('button', { name: zh.editProtection })).toBeDefined()
+    expect(within(weekly).getByText(zh.weeklyCapacityReference)).toBeDefined()
+    expect(within(weekly).getByLabelText(zh.amountEstimateHelpLabel)).toBeDefined()
+    expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+    expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
+    expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
+    expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
+      && /2 次请求.*Token API 等价金额.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+    expect(within(actions).getByRole('button', { name: '终止共享' })).toBeDefined()
+
+    fireEvent.click(within(weekly).getByRole('button', { name: zh.editProtection }))
     expect((within(screen.getByRole('dialog', { name: zh.editProtection }))
       .getByLabelText(zh.weeklyLimitLabel) as HTMLInputElement).value).toBe('1')
     fireEvent.click(within(screen.getByRole('dialog', { name: zh.editProtection })).getByRole('button', { name: zh.cancel }))
+
+    fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
+    expect(screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })).toBeDefined()
 
     fireEvent.click(within(account).getByRole('button', { name: zh.recentRequests }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
     expect(within(recent).getByText('2500 tokens')).toBeDefined()
+  })
+
+  it('uses the approved account directory and selected-account detail workspace', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const directoryTitle = within(directory).getByRole('heading', { name: /^账号/u })
+    const directoryHeader = directoryTitle.parentElement
+
+    expect(within(directory).getByRole('button', { name: new RegExp(mine.label, 'u') })).toBeDefined()
+    expect(within(details).getByRole('heading', { name: mine.label })).toBeDefined()
+    expect(directoryHeader?.classList.contains(styles.directoryHeader)).toBe(true)
+    expect(within(directoryHeader!).getByText(zh.accountDirectoryHint).classList.contains(styles.directoryHint)).toBe(true)
+    expect(settings.compareDocumentPosition(directory) & Node.DOCUMENT_POSITION_CONTAINED_BY).not.toBe(0)
+  })
+
+  it('uses stable account aliases and omits empty account groups like the approved prototype', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: [],
+      activeSharedAccounts: [],
+    }
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+
+    expect(within(directory).queryByRole('heading', { name: zh.sharedAccounts })).toBeNull()
+    expect(within(directory).getByRole('heading', { name: zh.unsharedAccounts })).toBeDefined()
+    expect(within(directory).getByText('账号 A')).toBeDefined()
+    expect(within(directory).getByText('本机账号 A')).toBeDefined()
+    expect(within(directory).getByText('账号 B')).toBeDefined()
+    expect(within(directory).getByText('本机账号 B')).toBeDefined()
+  })
+
+  it('renders the prototype local-account detail and credential boundary after selection', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+
+    fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
+
+    expect(within(details).getByRole('heading', { name: '本机账号 A' })).toBeDefined()
+    expect(within(details).getAllByText('本机正在使用')).toHaveLength(1)
+    expect(details.textContent).toContain('需要再次授权后，Team 才能使用这个账号。')
+    expect(details.textContent).toContain('不会上传本机 auth.json。')
+    const shareRegion = within(details).getByRole('region', { name: zh.shareToTeam })
+    expect(shareRegion.textContent).toContain('需要再次授权后，Team 才能使用这个账号。')
+    expect(shareRegion.textContent).toContain(zh.localCredentialBoundary)
+    expect(shareRegion.textContent).not.toContain(zh.localCredentialBoundaryHint)
+    expect(within(shareRegion).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
+    expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
+    expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
+    expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
+    expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
+    expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('shows which local account authorization is pending immediately after click', async () => {
+    let resolveOAuth!: (value: Awaited<ReturnType<typeof managementApi.startOAuth>>) => void
+    managementApi.startOAuth.mockImplementationOnce(() => new Promise(resolve => {
+      resolveOAuth = resolve
+    }))
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    fireEvent.click(within(details).getByRole('button', { name: zh.shareToTeam }))
+
+    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+    fireEvent.click(within(confirmation).getByRole('button', { name: '继续，再次授权' }))
+
+    const pending = await within(confirmation).findByRole('button', { name: zh.working })
+    expect(pending).toHaveProperty('disabled', true)
+    expect(pending.getAttribute('aria-busy')).toBe('true')
+
+    resolveOAuth({
+      account: { ...mine, id: 'oauth-local-a', label: '本机账号 A', status: 'authorizing' },
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: NOW + 600_000,
+    })
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+    expect(oauthPopupReplace).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+  })
+
+  it('shows a safe warning when the local quota refresh fails without exposing fake progress semantics', async () => {
+    vi.mocked(fetch).mockImplementation(async input => ({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        profiles: [{
+          id: 'local-a',
+          label: '本机账号 A',
+          createdAt: 1,
+          updatedAt: 1,
+          ...(input === '/plugins/dsh-openai-codex/profiles'
+            ? { usage: {}, quotaError: 'telemetry unavailable' }
+            : {}),
+          inUse: true,
+        }],
+      }),
+    } as Response))
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
+
+    const capacity = within(details).getByRole('region', { name: zh.capacityTitle })
+    expect(within(capacity).getByText(zh.capacityQuotaError)).toBeDefined()
+    expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
+    expect(capacity.textContent).not.toContain('telemetry unavailable')
+    expect(capacity.getAttribute('data-tone')).toBe('warning')
+    expect(within(capacity).queryByRole('progressbar')).toBeNull()
+    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+  })
+
+  it.each([
+    ['fetch rejection', () => Promise.reject(new Error('socket failed with upstream-secret'))],
+    ['non-2xx response', () => Promise.resolve({
+      ok: false,
+      status: 502,
+      json: async () => ({ detail: 'proxy-secret' }),
+    } as Response)],
+    ['invalid JSON', () => Promise.resolve({
+      ok: true,
+      json: async () => { throw new SyntaxError('unexpected token upstream-secret') },
+    } as Response)],
+    ['empty JSON object', () => Promise.resolve({
+      ok: true,
+      json: async () => ({ diagnostic: 'empty-shape-secret' }),
+    } as Response)],
+    ['non-ready status', () => Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'pending-shape-secret', profiles: [] }),
+    } as Response)],
+    ['non-array profiles', () => Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ready', profiles: { diagnostic: 'profiles-shape-secret' } }),
+    } as Response)],
+  ])('turns an initial quota %s into a safe warning', async (_scenario, failQuotaRequest) => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (input === '/plugins/dsh-openai-codex/profiles/directory') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            profiles: [{
+              id: 'local-a',
+              label: '本机账号 A',
+              createdAt: 1,
+              updatedAt: 1,
+              inUse: true,
+            }],
+          }),
+        } as Response)
+      }
+      if (input === '/plugins/dsh-openai-codex/profiles') return failQuotaRequest()
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const capacity = await within(details).findByRole('region', { name: zh.capacityTitle })
+
+    expect(await within(capacity).findByText(zh.capacityQuotaError)).toBeDefined()
+    expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
+    expect(capacity.getAttribute('data-tone')).toBe('warning')
+    expect(within(capacity).queryByRole('progressbar')).toBeNull()
+    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(settings.textContent).not.toMatch(
+      /upstream-secret|proxy-secret|unexpected token|socket failed|empty-shape-secret|pending-shape-secret|profiles-shape-secret/u,
+    )
+  })
+
+  it('keeps the compact Team bar and account workspace as full-width sibling regions', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directChildren = Array.from(settings.children)
+
+    expect(settings.classList.contains(styles.teamOverview)).toBe(true)
+    expect(settings.classList.contains(styles.teamPanel)).toBe(false)
+    expect(directChildren).toHaveLength(2)
+    expect(directChildren[0]?.classList.contains(styles.teamBar)).toBe(true)
+    expect(directChildren[1]?.classList.contains(styles.accountWorkspace)).toBe(true)
+  })
+
+  it('reveals local accounts before the slower quota refresh completes', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    let resolveDirectory!: (value: Response) => void
+    let resolveQuota!: (value: Response) => void
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (input === '/plugins/dsh-openai-codex/profiles/directory') {
+        return new Promise(resolve => { resolveDirectory = resolve })
+      }
+      if (input === '/plugins/dsh-openai-codex/profiles') {
+        return new Promise(resolve => { resolveQuota = resolve })
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const workspace = settings.querySelector<HTMLElement>(`.${styles.accountWorkspace}`)
+    expect(workspace).not.toBeNull()
+    expect(workspace?.getAttribute('aria-busy')).toBe('true')
+    expect(within(workspace!).getAllByRole('status')).toHaveLength(1)
+    expect(within(workspace!).getByText(zh.loadingLocalAccounts)).toBeDefined()
+    expect(workspace?.querySelectorAll(`.${styles.accountSkeletonRow}`)).toHaveLength(3)
+    expect(workspace?.querySelector(`.${styles.accountDetailSkeleton}`)).not.toBeNull()
+    expect(within(workspace!).queryByText(zh.working)).toBeNull()
+    expect(within(workspace!).queryByText(zh.accountsCount.replace('{count}', '0'))).toBeNull()
+    expect(within(workspace!).queryByText(zh.noUnsharedAccounts)).toBeNull()
+
+    await act(async () => {
+      resolveDirectory({
+        ok: true,
+        json: async () => ({
+          status: 'ready',
+          profiles: [{
+            id: 'local-a',
+            label: '本机账号 A',
+            createdAt: 1,
+            updatedAt: 1,
+            inUse: true,
+          }],
+        }),
+      } as Response)
+    })
+
+    const account = await within(workspace!).findByRole('button', { name: /本机账号 A/u })
+    expect(account).toBeDefined()
+    expect(workspace?.getAttribute('aria-busy')).toBe('false')
+    expect(workspace?.querySelector(`.${styles.accountDetailSkeleton}`)).toBeNull()
+    const quotaStatus = within(workspace!).getByRole('status')
+    expect(quotaStatus.textContent).toBe(zh.loadingLocalQuota)
+    expect(quotaStatus.classList.contains(styles.screenReaderOnly)).toBe(true)
+    expect(workspace?.querySelector(`.${styles.quotaValueSkeleton}`)).not.toBeNull()
+    expect(workspace?.querySelector(`.${styles.quotaTrack}[data-loading='true']`)).not.toBeNull()
+
+    await act(async () => {
+      resolveQuota({
+        ok: true,
+        json: async () => ({
+          status: 'ready',
+          profiles: [{
+            id: 'local-a',
+            label: '本机账号 A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            inUse: true,
+          }],
+        }),
+      } as Response)
+    })
+
+    expect(await within(workspace!).findByText('68%')).toBeDefined()
+    expect(within(workspace!).queryByText(zh.loadingLocalQuota)).toBeNull()
+    expect(workspace?.querySelector(`.${styles.quotaValueSkeleton}`)).toBeNull()
+    expect(workspace?.querySelector(`.${styles.quotaTrack}[data-loading='true']`)).toBeNull()
+  })
+
+  it.each([
+    ['transport fails', () => Promise.reject(new Error('quota telemetry timed out'))],
+    ['response structure is invalid', () => Promise.resolve({
+      ok: true,
+      json: async () => ({ status: 'ready', profiles: { diagnostic: 'background-shape-secret' } }),
+    } as Response)],
+  ])('preserves settled quota while the background quota %s', async (_scenario, failQuotaRequest) => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    const refreshCallbacks: Array<() => void> = []
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((handler, timeout) => {
+      if (timeout === 60_000 && typeof handler === 'function') {
+        refreshCallbacks.push(handler as () => void)
+      }
+      return 1
+    })
+    let directoryRequests = 0
+    let quotaRequests = 0
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (input === '/plugins/dsh-openai-codex/profiles/directory') {
+        directoryRequests += 1
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            profiles: [{
+              id: 'local-a',
+              label: directoryRequests === 1 ? '本机账号 A' : '已重命名账号 A',
+              createdAt: 1,
+              updatedAt: directoryRequests,
+              inUse: true,
+            }],
+          }),
+        } as Response)
+      }
+      if (input === '/plugins/dsh-openai-codex/profiles') {
+        quotaRequests += 1
+        if (quotaRequests > 1) return failQuotaRequest()
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            profiles: [{
+              id: 'local-a',
+              label: '本机账号 A',
+              createdAt: 1,
+              updatedAt: 1,
+              usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+              inUse: true,
+            }],
+          }),
+        } as Response)
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    expect(await within(settings).findByText('68%')).toBeDefined()
+    expect(refreshCallbacks.length).toBeGreaterThan(0)
+
+    await act(async () => {
+      refreshCallbacks.forEach(refresh => { refresh() })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(await within(settings).findAllByText('已重命名账号 A')).toHaveLength(2)
+    await waitFor(() => {
+      expect(directoryRequests).toBe(2)
+      expect(quotaRequests).toBe(2)
+    })
+    expect(within(settings).getByText('68%')).toBeDefined()
+    expect(settings.querySelector(`.${styles.quotaValueSkeleton}`)).toBeNull()
+    expect(settings.querySelector(`.${styles.quotaTrack}[data-loading='true']`)).toBeNull()
+    const capacity = within(settings).getByRole('region', { name: zh.capacityTitle })
+    expect(capacity.getAttribute('data-tone')).toBe('warning')
+    expect(capacity.getAttribute('data-stale')).toBe('true')
+    expect(within(capacity).getByText(zh.capacityQuotaStaleHint)).toBeDefined()
+    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(capacity.textContent).not.toMatch(/quota telemetry timed out|background-shape-secret/u)
   })
 
   it('places the workspace rail before Team context in the document reading order', async () => {

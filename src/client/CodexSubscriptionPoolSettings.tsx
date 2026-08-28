@@ -21,7 +21,7 @@ export function CodexSubscriptionPoolSettings({
   const [tab, setTab] = useState<PoolTab>('local')
 
   return (
-    <main className={styles.page}>
+    <main className={styles.page} data-dsh-codex-subscription-pool="">
       <header className={styles.header}>
         <h1 className={styles.title}>{localT('poolTitle')}</h1>
         <p className={styles.intro}>{localT('poolIntro')}</p>

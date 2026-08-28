@@ -22,9 +22,15 @@ import type {
   TeamManagementMemberSummary,
   TeamManagementOAuthResult,
   TeamManagementOverview,
+  TeamManagementSharedAccountDirectoryEntry,
   TeamManagementExpectedContext,
   TeamManagementStatus,
   TeamManagementUsageResult,
+} from '../../shared/team-management.ts'
+import {
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+  TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE,
 } from '../../shared/team-management.ts'
 import { createTeamManagementApi } from './api.ts'
 import { en } from './locales.ts'
@@ -35,14 +41,21 @@ import {
   canMemberLeaveTeam,
   canRemoveTeamMember,
   canTransferTeamOwnership,
+  groupTeamContributions,
   parseContributionProtectionDraft,
 } from './team-settings-contract.ts'
 import styles from './TeamSettings.module.css'
 
 const api = createTeamManagementApi()
 const USAGE_REFRESH_MS = 60_000
+const AUTHORIZATION_POLL_MS = 2_000
 const INVITE_SECRET_VISIBLE_MS = 60_000
 const TEAM_INVITE_TOKEN_PATTERN = /^dsh_invite_[A-Za-z0-9_-]{16,}$/u
+const LOCAL_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
+const LOCAL_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
+const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
+/** Frozen design reference from the phase-two prototype; it is not a live account balance. */
+const CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS = 5_960_000
 
 export interface TeamSettingsInjected {
   t: (key: TeamSettingsKey, params?: Record<string, unknown>) => string
@@ -78,6 +91,116 @@ interface TeamRefreshSnapshot {
 interface TeamConnectionIssue {
   readonly kind: 'invalid' | 'unavailable'
   readonly detail: string
+}
+
+interface LocalCodexProfileSummary {
+  readonly id: string
+  readonly label: string
+  readonly inUse: boolean
+  readonly remainingPercent?: number
+  readonly quotaError?: string
+}
+
+type SelectedAccount =
+  | { readonly kind: 'contribution'; readonly account: TeamManagementContributionSummary }
+  | { readonly kind: 'shared-directory'; readonly account: TeamManagementSharedAccountDirectoryEntry }
+  | { readonly kind: 'local'; readonly account: LocalCodexProfileSummary }
+
+interface RecentUsageTarget {
+  readonly id: string
+  readonly kind: 'contribution' | 'local'
+  readonly label: string
+}
+
+interface PendingLocalAuthorization {
+  readonly id: string
+  readonly label: string
+  readonly authorizationContext: string
+  readonly expectedContext: TeamManagementExpectedContext
+}
+
+type TeamOAuthMethod = 'browser' | 'device_code'
+
+function contributionSelectionKey(accountId: string): string {
+  return `contribution:${accountId}`
+}
+
+function sharedDirectorySelectionKey(accountId: string): string {
+  return `shared-directory:${accountId}`
+}
+
+function localSelectionKey(profileId: string): string {
+  return `local:${profileId}`
+}
+
+function accountAliasLetter(index: number): string {
+  let value = index + 1
+  let result = ''
+  while (value > 0) {
+    value -= 1
+    result = String.fromCharCode(65 + (value % 26)) + result
+    value = Math.floor(value / 26)
+  }
+  return result
+}
+
+function parseLocalRemainingPercent(value: Record<string, unknown>): number | undefined {
+  if (typeof value.usage !== 'object' || value.usage === null) return undefined
+  const usage = value.usage as Record<string, unknown>
+  if (!Array.isArray(usage.rateLimits)) return undefined
+  const rateLimit = usage.rateLimits.find((candidate) => (
+    typeof candidate === 'object'
+    && candidate !== null
+    && (candidate as Record<string, unknown>).id === 'codex'
+  )) ?? usage.rateLimits[0]
+  if (typeof rateLimit !== 'object' || rateLimit === null) return undefined
+  const windows = (rateLimit as Record<string, unknown>).windows
+  if (!Array.isArray(windows) || typeof windows[0] !== 'object' || windows[0] === null) return undefined
+  const remainingPercent = (windows[0] as Record<string, unknown>).remainingPercent
+  return typeof remainingPercent === 'number' && Number.isFinite(remainingPercent)
+    ? Math.min(100, Math.max(0, remainingPercent))
+    : undefined
+}
+
+function parseLocalProfiles(value: unknown): readonly LocalCodexProfileSummary[] {
+  if (typeof value !== 'object' || value === null) return []
+  const result = value as Record<string, unknown>
+  if (result.status !== 'ready' || !Array.isArray(result.profiles)) return []
+  return result.profiles.flatMap((profile): LocalCodexProfileSummary[] => {
+    if (typeof profile !== 'object' || profile === null) return []
+    const item = profile as Record<string, unknown>
+    if (typeof item.id !== 'string' || typeof item.label !== 'string') return []
+    const remainingPercent = parseLocalRemainingPercent(item)
+    return [{
+      id: item.id,
+      label: item.label,
+      inUse: item.inUse === true,
+      ...(remainingPercent === undefined ? {} : { remainingPercent }),
+      ...(typeof item.quotaError === 'string' ? { quotaError: item.quotaError } : {}),
+    }]
+  })
+}
+
+function isReadyLocalProfilesResponse(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const result = value as Record<string, unknown>
+  return result.status === 'ready' && Array.isArray(result.profiles)
+}
+
+function mergeLocalProfileDirectory(
+  current: readonly LocalCodexProfileSummary[],
+  directory: readonly LocalCodexProfileSummary[],
+): readonly LocalCodexProfileSummary[] {
+  const currentById = new Map(current.map(profile => [profile.id, profile]))
+  return directory.map((profile) => {
+    const previous = currentById.get(profile.id)
+    if (previous === undefined) return profile
+    return {
+      ...profile,
+      ...(previous.remainingPercent === undefined ? {} : { remainingPercent: previous.remainingPercent }),
+      ...(previous.quotaError === undefined ? {} : { quotaError: previous.quotaError }),
+    }
+  })
 }
 
 interface TeamStatusConfirmation {
@@ -123,13 +246,31 @@ function hideAcknowledgedDisplayNameMigration(
   return nextOverview
 }
 
-function errorMessage(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback
+function errorMessage(
+  cause: unknown,
+  fallback: string,
+  authorizationNetworkUnavailable?: string,
+  authorizationFailed?: string,
+): string {
+  const message = cause instanceof Error ? cause.message : fallback
+  if (authorizationNetworkUnavailable !== undefined
+    && message.includes(TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE)
+  ) return authorizationNetworkUnavailable
+  if (authorizationFailed !== undefined
+    && message.includes(TEAM_AUTHORIZATION_FAILED_CODE)
+  ) return authorizationFailed
+  return message
 }
 
 function errorStatus(cause: unknown): number | undefined {
   if (typeof cause !== 'object' || cause === null || !('status' in cause)) return undefined
   return typeof cause.status === 'number' ? cause.status : undefined
+}
+
+function isTeamContextMismatch(cause: unknown): boolean {
+  return errorStatus(cause) === 409
+    && cause instanceof Error
+    && cause.message === TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE
 }
 
 function fallbackTranslate(key: TeamSettingsKey, params?: Record<string, unknown>): string {
@@ -251,7 +392,12 @@ function InviteRevealModal({ inviteId, authorizationContext, getAuthorizationCon
       setSecret(result)
     }).catch((cause: unknown) => {
       if (!active) return
-      setError(errorMessage(cause, t('requestFailed')))
+      setError(errorMessage(
+        cause,
+        t('requestFailed'),
+        t('authorizationNetworkUnavailable'),
+        t('authorizationFailed'),
+      ))
       onFailure(cause)
     })
     return () => { active = false }
@@ -301,8 +447,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [usageProjection, setUsageProjection] = useState<TeamManagementUsageResult>()
   const [usageLoading, setUsageLoading] = useState(false)
   const [usageUnavailable, setUsageUnavailable] = useState(false)
+  const [localProfiles, setLocalProfiles] = useState<readonly LocalCodexProfileSummary[]>([])
+  const [localProfilesLoading, setLocalProfilesLoading] = useState(true)
+  const [localProfilesQuotaLoading, setLocalProfilesQuotaLoading] = useState(false)
+  const [localProfilesUnavailable, setLocalProfilesUnavailable] = useState(false)
+  const [selectedAccountId, setSelectedAccountId] = useState<string>()
   const overviewRequestId = useRef(0)
   const usageRequestId = useRef(0)
+  const localProfileDirectoryRequestId = useRef(0)
+  const localProfileQuotaRequestId = useRef(0)
+  const localProfileDirectoryReady = useRef(false)
   const acknowledgedDisplayNameMigrationKeys = useRef(new Set<string>())
   const pendingDisplayNameMigrationAckKeys = useRef(new Set<string>())
   const [displayNameMigrationAckStates, setDisplayNameMigrationAckStates] = useState<ReadonlyMap<string, DisplayNameMigrationAckState>>(
@@ -342,11 +496,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [workspaceView, setWorkspaceView] = useState<TeamWorkspaceView>('usage')
   const [addAccountOpen, setAddAccountOpen] = useState(false)
   const [accountLabel, setAccountLabel] = useState('')
+  const [pendingLocalAuthorization, setPendingLocalAuthorization] = useState<PendingLocalAuthorization>()
+  const [teamContextChanged, setTeamContextChanged] = useState(false)
   const [oauth, setOAuth] = useState<TeamManagementOAuthResult>()
+  const [oauthDiscardInitial, setOAuthDiscardInitial] = useState(false)
+  const [oauthNavigationBlocked, setOAuthNavigationBlocked] = useState(false)
   const [protectionEdit, setProtectionEdit] = useState<ContributionProtectionEdit>()
-  const [recentUsageAccount, setRecentUsageAccount] = useState<TeamManagementContributionSummary>()
+  const [recentUsageAccount, setRecentUsageAccount] = useState<RecentUsageTarget>()
   const [teamMenuOpen, setTeamMenuOpen] = useState(false)
   const teamSettingsTriggerRef = useRef<HTMLButtonElement>(null)
+  const workspaceBackRef = useRef<HTMLButtonElement>(null)
   const restoreTeamSettingsTriggerFocus = useRef(false)
   const inviteCreationPresentationId = useRef(0)
   const teamExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
@@ -355,8 +514,95 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const ownerAuthorizationContextRef = useRef<string | undefined>(undefined)
   const memberAuthorizationContextRef = useRef<string | undefined>(undefined)
   const teamSettingsReturnFocus = useRef<string | undefined>(undefined)
+  const oauthPopup = useRef<Window | null>(null)
+  const oauthStartLocked = useRef(false)
+  const oauthTransitionLocked = useRef(false)
+  const oauthOperationEpoch = useRef(0)
+  const mounted = useRef(true)
+
+  const isCurrentOAuthOperation = useCallback((epoch: number) => (
+    mounted.current && oauthOperationEpoch.current === epoch
+  ), [])
+
+  const clearOAuthPresentation = useCallback(() => {
+    oauthPopup.current?.close()
+    oauthPopup.current = null
+    setOAuth(undefined)
+    setOAuthDiscardInitial(false)
+    setOAuthNavigationBlocked(false)
+  }, [])
+
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      oauthOperationEpoch.current += 1
+      oauthStartLocked.current = false
+      oauthTransitionLocked.current = false
+      oauthPopup.current?.close()
+      oauthPopup.current = null
+    }
+  }, [])
+
+  const refreshLocalProfileQuota = useCallback(async () => {
+    const requestId = ++localProfileQuotaRequestId.current
+    setLocalProfilesQuotaLoading(true)
+    try {
+      const response = await fetch(LOCAL_PROFILES_PATH, {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      })
+      if (!response.ok) throw new Error(`Local Codex profiles request failed (${response.status})`)
+      const payload: unknown = await response.json()
+      if (!isReadyLocalProfilesResponse(payload)) throw new Error(LOCAL_QUOTA_REFRESH_ERROR)
+      const refreshedProfiles = parseLocalProfiles(payload)
+      if (requestId !== localProfileQuotaRequestId.current) return
+      const refreshedById = new Map(refreshedProfiles.map(profile => [profile.id, profile]))
+      setLocalProfiles(current => current.map(profile => refreshedById.get(profile.id) ?? profile))
+    } catch {
+      if (requestId !== localProfileQuotaRequestId.current) return
+      // Keep transport details out of the Browser UI while making the failed
+      // refresh visible. Any settled quota remains available as a stale value.
+      setLocalProfiles(current => current.map(profile => ({
+        ...profile,
+        quotaError: LOCAL_QUOTA_REFRESH_ERROR,
+      })))
+    } finally {
+      if (requestId === localProfileQuotaRequestId.current) setLocalProfilesQuotaLoading(false)
+    }
+  }, [])
+
+  const refreshLocalProfiles = useCallback(async () => {
+    const requestId = ++localProfileDirectoryRequestId.current
+    const showInitialLoading = !localProfileDirectoryReady.current
+    if (showInitialLoading) {
+      setLocalProfilesLoading(true)
+      setLocalProfilesUnavailable(false)
+    }
+    try {
+      const response = await fetch(LOCAL_PROFILE_DIRECTORY_PATH, {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      })
+      if (!response.ok) throw new Error(`Local Codex profile directory request failed (${response.status})`)
+      const profiles = parseLocalProfiles(await response.json())
+      if (requestId !== localProfileDirectoryRequestId.current) return
+      localProfileDirectoryReady.current = true
+      setLocalProfiles(current => mergeLocalProfileDirectory(current, profiles))
+      setLocalProfilesUnavailable(false)
+      void refreshLocalProfileQuota()
+    } catch {
+      if (requestId !== localProfileDirectoryRequestId.current) return
+      setLocalProfilesUnavailable(true)
+    } finally {
+      if (requestId === localProfileDirectoryRequestId.current) setLocalProfilesLoading(false)
+    }
+  }, [refreshLocalProfileQuota])
   const teamExpectedContext = authorizationSnapshotReady
     ? createTeamExpectedContext(status, overview)
+    : undefined
+  const teamAuthorizationContext = authorizationSnapshotReady
+    ? createTeamAuthorizationContext(status, overview)
     : undefined
   const ownerExpectedContext = overview?.viewerRole === 'owner' ? teamExpectedContext : undefined
   const memberExpectedContext = overview?.viewerRole === 'member' ? teamExpectedContext : undefined
@@ -365,6 +611,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     : undefined
   const memberAuthorizationContext = authorizationSnapshotReady
     ? createMemberAuthorizationContext(status, overview)
+    : undefined
+  const activePendingLocalAuthorization = pendingLocalAuthorization !== undefined
+    && (authorizationSnapshotPending
+      || pendingLocalAuthorization.authorizationContext === teamAuthorizationContext)
+    ? pendingLocalAuthorization
     : undefined
   const activeInviteDraft = inviteDraft !== undefined
     && (authorizationSnapshotPending || inviteDraft.authorizationContext === ownerAuthorizationContext)
@@ -472,6 +723,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   useEffect(() => {
     if (!authorizationSnapshotPending && inviteDraft !== undefined && activeInviteDraft === undefined) closeInviteDraft()
   }, [activeInviteDraft, authorizationSnapshotPending, closeInviteDraft, inviteDraft])
+
+  useEffect(() => {
+    if (
+      !authorizationSnapshotPending
+      && pendingLocalAuthorization !== undefined
+      && activePendingLocalAuthorization === undefined
+    ) setPendingLocalAuthorization(undefined)
+  }, [activePendingLocalAuthorization, authorizationSnapshotPending, pendingLocalAuthorization])
 
   useEffect(() => {
     if (!authorizationSnapshotPending && revokeInvite !== undefined && activeRevokeInvite === undefined) {
@@ -710,6 +969,26 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   useEffect(() => { void refresh(true) }, [refresh])
 
   useEffect(() => {
+    void refreshLocalProfiles()
+    const timer = globalThis.setInterval(() => { void refreshLocalProfiles() }, USAGE_REFRESH_MS)
+    return () => { globalThis.clearInterval(timer) }
+  }, [refreshLocalProfiles])
+
+  const hasAuthorizingAccount = overview?.contributions.some(account => account.status === 'authorizing') ?? false
+  useEffect(() => {
+    if (!hasAuthorizingAccount) return
+    const timer = globalThis.setInterval(() => { void refresh(false) }, AUTHORIZATION_POLL_MS)
+    return () => { globalThis.clearInterval(timer) }
+  }, [hasAuthorizingAccount, refresh])
+
+  useEffect(() => {
+    if (busy !== undefined || oauth === undefined || overview === undefined) return
+    const account = overview.contributions.find(item => item.id === oauth.account.id)
+    if (account === undefined || account.status === 'authorizing') return
+    clearOAuthPresentation()
+  }, [busy, clearOAuthPresentation, oauth, overview])
+
+  useEffect(() => {
     if (overview === undefined) return
     const timer = globalThis.setInterval(() => { void refreshUsage() }, USAGE_REFRESH_MS)
     return () => { globalThis.clearInterval(timer) }
@@ -730,10 +1009,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const run = useCallback(async (name: string, operation: () => Promise<void>) => {
     setBusy(name)
     setError(undefined)
+    setTeamContextChanged(false)
     try {
       await operation()
     } catch (cause: unknown) {
       const status = errorStatus(cause)
+      if (isTeamContextMismatch(cause)) {
+        const snapshot = await refresh(false)
+        if (snapshot !== undefined) {
+          setTeamContextChanged(true)
+          return
+        }
+        setError(t('teamContextChangedHint'))
+        return
+      }
       if (status === 410) {
         try {
           if (await refreshStatusOnly() !== 'connected') return
@@ -742,11 +1031,190 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         }
       }
       if (status === 403 || status === 409) await refresh(false)
-      setError(errorMessage(cause, t('requestFailed')))
+      setError(errorMessage(
+        cause,
+        t('requestFailed'),
+        t('authorizationNetworkUnavailable'),
+        t('authorizationFailed'),
+      ))
     } finally {
       setBusy(undefined)
     }
   }, [refresh, refreshStatusOnly, t])
+
+  const presentOAuth = useCallback((
+    method: TeamOAuthMethod,
+    busyName: string,
+    request: () => Promise<TeamManagementOAuthResult>,
+    discardInitial: boolean,
+    onPresented?: () => void,
+  ): Promise<void> => {
+    if (!mounted.current || oauthStartLocked.current || oauthTransitionLocked.current) return Promise.resolve()
+
+    oauthStartLocked.current = true
+    const epoch = ++oauthOperationEpoch.current
+    let pendingPopup: Window | null = null
+    if (method === 'browser') {
+      try {
+        pendingPopup = window.open('about:blank', '_blank')
+        if (pendingPopup !== null) {
+          pendingPopup.opener = null
+          oauthPopup.current?.close()
+          oauthPopup.current = pendingPopup
+        }
+      } catch {
+        pendingPopup?.close()
+        if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+        oauthStartLocked.current = false
+        if (isCurrentOAuthOperation(epoch)) setError(t('browserPopupOpenFailed'))
+        return Promise.resolve()
+      }
+    }
+
+    return run(busyName, async () => {
+      try {
+        const challenge = await request()
+        if (!isCurrentOAuthOperation(epoch)) return
+        setOAuth(challenge)
+        setOAuthDiscardInitial(discardInitial)
+        setOAuthNavigationBlocked(false)
+        onPresented?.()
+
+        if (challenge.method === 'browser') {
+          if (pendingPopup === null) {
+            setOAuthNavigationBlocked(true)
+          } else {
+            try {
+              pendingPopup.location.replace(challenge.authorizationUrl)
+            } catch {
+              pendingPopup.close()
+              if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+              setOAuthNavigationBlocked(true)
+            }
+          }
+        } else {
+          pendingPopup?.close()
+          if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+        }
+        await refresh(false)
+      } catch (cause: unknown) {
+        if (isCurrentOAuthOperation(epoch) && pendingPopup !== null) {
+          pendingPopup.close()
+          if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+        }
+        throw cause
+      }
+    }).finally(() => {
+      if (oauthOperationEpoch.current === epoch) oauthStartLocked.current = false
+    })
+  }, [isCurrentOAuthOperation, refresh, run, t])
+
+  const startBrowserOAuth = useCallback((
+    label: string,
+    busyName: string,
+    sourceLocalProfileId?: string,
+    onPresented?: () => void,
+    expectedContextOverride?: TeamManagementExpectedContext,
+  ): Promise<void> => {
+    const expectedContext = expectedContextOverride ?? teamExpectedContextRef.current
+    if (expectedContext === undefined) return Promise.resolve()
+    return presentOAuth(
+      'browser',
+      busyName,
+      async () => sourceLocalProfileId === undefined
+        ? await api.startOAuth(label.trim(), expectedContext, 'browser')
+        : await api.startOAuth(label.trim(), expectedContext, 'browser', sourceLocalProfileId),
+      true,
+      onPresented,
+    )
+  }, [presentOAuth])
+
+  const reauthorizeOAuth = useCallback((accountId: string, method: TeamOAuthMethod = 'browser'): Promise<void> => {
+    const expectedContext = teamExpectedContextRef.current
+    if (expectedContext === undefined) return Promise.resolve()
+    return presentOAuth(
+      method,
+      `reauthorize-${accountId}`,
+      async () => await api.reauthorizeOAuth(accountId, expectedContext, method),
+      false,
+    )
+  }, [presentOAuth])
+
+  const cancelPresentedOAuth = useCallback((accountId: string, discardInitial = oauthDiscardInitial): Promise<void> => {
+    if (!mounted.current || oauthTransitionLocked.current) return Promise.resolve()
+    const expectedContext = teamExpectedContextRef.current
+    if (expectedContext === undefined) return Promise.resolve()
+    oauthTransitionLocked.current = true
+    const epoch = ++oauthOperationEpoch.current
+    oauthStartLocked.current = false
+    return run(`oauth-cancel-${accountId}`, async () => {
+      await api.cancelOAuth(accountId, expectedContext, discardInitial)
+      if (!isCurrentOAuthOperation(epoch)) return
+      clearOAuthPresentation()
+      await refresh(false)
+    }).finally(() => {
+      if (oauthOperationEpoch.current === epoch) oauthTransitionLocked.current = false
+    })
+  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauthDiscardInitial, refresh, run])
+
+  const switchOAuthToDeviceCode = useCallback((accountId: string): Promise<void> => {
+    if (!mounted.current || oauthTransitionLocked.current) return Promise.resolve()
+    const expectedContext = teamExpectedContextRef.current
+    if (expectedContext === undefined) return Promise.resolve()
+    oauthTransitionLocked.current = true
+    const epoch = ++oauthOperationEpoch.current
+    oauthStartLocked.current = false
+    const discardInitial = oauthDiscardInitial
+    return run(`oauth-device-${accountId}`, async () => {
+      const cancelled = await api.cancelOAuth(accountId, expectedContext, false)
+      if (!isCurrentOAuthOperation(epoch)) return
+      if (cancelled.account.status !== 'reauth_required') {
+        clearOAuthPresentation()
+        await refresh(false)
+        return
+      }
+      oauthPopup.current?.close()
+      oauthPopup.current = null
+      setOAuth(undefined)
+      setOAuthNavigationBlocked(false)
+      try {
+        const challenge = await api.reauthorizeOAuth(accountId, expectedContext, 'device_code')
+        if (!isCurrentOAuthOperation(epoch)) return
+        setOAuth(challenge)
+        setOAuthDiscardInitial(discardInitial)
+        await refresh(false)
+      } catch (cause: unknown) {
+        await api.cancelOAuth(accountId, expectedContext, discardInitial).catch(() => {})
+        if (isCurrentOAuthOperation(epoch)) {
+          clearOAuthPresentation()
+          await refresh(false)
+        }
+        throw cause
+      }
+    }).finally(() => {
+      if (oauthOperationEpoch.current === epoch) oauthTransitionLocked.current = false
+    })
+  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauthDiscardInitial, refresh, run])
+
+  const reopenBrowserOAuth = useCallback((authorizationUrl: string) => {
+    let nextPopup: Window | null = null
+    try {
+      nextPopup = window.open('about:blank', '_blank')
+      if (nextPopup === null) {
+        setOAuthNavigationBlocked(true)
+        return
+      }
+      nextPopup.opener = null
+      nextPopup.location.replace(authorizationUrl)
+      oauthPopup.current?.close()
+      oauthPopup.current = nextPopup
+      setOAuthNavigationBlocked(false)
+    } catch {
+      nextPopup?.close()
+      if (oauthPopup.current === nextPopup) oauthPopup.current = null
+      setOAuthNavigationBlocked(true)
+    }
+  }, [])
 
   const members = useMemo(() => new Map(overview?.members.map(member => [member.id, member]) ?? []), [overview])
   const currentMember = overview?.currentMember
@@ -822,6 +1290,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       setInviteRevealRequest(undefined)
       setMemberMenuId(undefined)
     }
+  }, [teamSettingsOpen])
+
+  useEffect(() => {
+    if (teamSettingsOpen) workspaceBackRef.current?.focus()
   }, [teamSettingsOpen])
 
   useEffect(() => {
@@ -1159,7 +1631,41 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     ? overview.invites.filter(invite => invite.status === 'pending' && invite.expiresAt > Date.now())
     : []
   const pendingInviteCount = pendingInvites.length
-  const ownedContributions = overview.contributions.filter(account => account.ownerMemberId === overview.currentMember.id)
+  const contributionGroups = groupTeamContributions(overview.contributions, overview.currentMember.id)
+  const listedAccounts = [...contributionGroups.shared, ...contributionGroups.unshared]
+  const teammateSharedAccounts = (overview.activeSharedAccounts ?? [])
+    .filter(account => account.ownerMemberId !== overview.currentMember.id)
+  const requestedLocalAccount = selectedAccountId?.startsWith('local:') === true
+    ? localProfiles.find(account => localSelectionKey(account.id) === selectedAccountId)
+    : undefined
+  const requestedContributionAccount = selectedAccountId?.startsWith('contribution:') === true
+    ? listedAccounts.find(account => contributionSelectionKey(account.id) === selectedAccountId)
+    : undefined
+  const requestedSharedDirectoryAccount = selectedAccountId?.startsWith('shared-directory:') === true
+    ? teammateSharedAccounts.find(account => sharedDirectorySelectionKey(account.id) === selectedAccountId)
+    : undefined
+  const selectedAccount: SelectedAccount | undefined = requestedLocalAccount !== undefined
+    ? { kind: 'local', account: requestedLocalAccount }
+    : requestedContributionAccount !== undefined
+      ? { kind: 'contribution', account: requestedContributionAccount }
+      : requestedSharedDirectoryAccount !== undefined
+        ? { kind: 'shared-directory', account: requestedSharedDirectoryAccount }
+        : contributionGroups.shared[0] !== undefined
+          ? { kind: 'contribution', account: contributionGroups.shared[0] }
+          : teammateSharedAccounts[0] !== undefined
+            ? { kind: 'shared-directory', account: teammateSharedAccounts[0] }
+            : localProfiles[0] !== undefined
+              ? { kind: 'local', account: localProfiles[0] }
+              : contributionGroups.unshared[0] === undefined
+                ? undefined
+                : { kind: 'contribution', account: contributionGroups.unshared[0] }
+
+  const accountAliases = new Map([
+    ...contributionGroups.shared.map(account => contributionSelectionKey(account.id)),
+    ...teammateSharedAccounts.map(account => sharedDirectorySelectionKey(account.id)),
+    ...localProfiles.map(profile => localSelectionKey(profile.id)),
+    ...contributionGroups.unshared.map(account => contributionSelectionKey(account.id)),
+  ].map((key, index) => [key, t('accountAlias', { letter: accountAliasLetter(index) })]))
 
   const renderDisplayNameMigrationNotice = () => {
     const notice = overview.displayNameMigrationNotice
@@ -1190,98 +1696,440 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
-  const renderAccountsPanel = () => (
-    <section className={styles.teamAccounts} role="region" aria-labelledby="team-accounts-title">
-      <div className={styles.workspaceSectionHeader}>
-        <div>
-          <h3 id="team-accounts-title" className={styles.workspaceSectionTitle}>{t('accountsNavigation')}</h3>
-          <p className={styles.hint}>{t('accountDirectoryHint')}</p>
+  const renderAccountsPanel = () => {
+    const contributorNameFor = (account: TeamManagementSharedAccountDirectoryEntry) =>
+      members.get(account.ownerMemberId)?.displayName ?? t('member')
+
+    const renderAccountDirectorySkeleton = () => (
+      <section className={`${styles.directoryGroup} ${styles.accountDirectorySkeleton}`} aria-hidden="true">
+        <div className={styles.directoryGroupHeader}>
+          <span className={`${styles.skeletonBlock} ${styles.skeletonGroupLabel}`} />
+          <span className={`${styles.skeletonBlock} ${styles.skeletonGroupCount}`} />
         </div>
-        <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} onClick={() => {
-          setAccountLabel('')
-          setAddAccountOpen(true)
-        }}>{t('addAccount')}</Button>
+        <div className={styles.accountNavList}>
+          {[0, 1, 2].map(index => (
+            <div className={styles.accountSkeletonRow} key={index}>
+              <span className={`${styles.skeletonBlock} ${styles.skeletonDot}`} />
+              <span className={styles.accountSkeletonCopy}>
+                <span className={`${styles.skeletonBlock} ${styles.skeletonAccountLabel}`} />
+                <span className={`${styles.skeletonBlock} ${styles.skeletonAccountOwner}`} />
+              </span>
+              <span className={`${styles.skeletonBlock} ${styles.skeletonAccountState}`} />
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+
+    const renderAccountDetailSkeleton = () => (
+      <div className={styles.accountDetailSkeleton} aria-hidden="true">
+        <div className={styles.detailSkeletonHeading}>
+          <span className={`${styles.skeletonBlock} ${styles.skeletonDetailTitle}`} />
+          <span className={`${styles.skeletonBlock} ${styles.skeletonDot}`} />
+          <span className={`${styles.skeletonBlock} ${styles.skeletonDetailStatus}`} />
+        </div>
+        <span className={`${styles.skeletonBlock} ${styles.skeletonDetailAction}`} />
+        <span className={`${styles.skeletonBlock} ${styles.skeletonDetailCopyWide}`} />
+        <span className={`${styles.skeletonBlock} ${styles.skeletonDetailCopyShort}`} />
+        <div className={styles.detailSkeletonCapacity}>
+          <span className={`${styles.skeletonBlock} ${styles.skeletonCapacityTitle}`} />
+          <div className={styles.detailSkeletonQuota}>
+            <span className={`${styles.skeletonBlock} ${styles.skeletonQuotaLabel}`} />
+            <span className={`${styles.skeletonBlock} ${styles.skeletonQuotaValue}`} />
+          </div>
+          <span className={`${styles.skeletonBlock} ${styles.skeletonQuotaTrack}`} />
+        </div>
       </div>
-      {ownedContributions.length === 0 ? (
-        <p className={styles.empty}>{t('noUnsharedAccounts')}</p>
-      ) : (
-        <div className={styles.accountList} role="list" aria-label={t('accountsTitle', { count: ownedContributions.length })}>
-          {ownedContributions.map(account => {
-            const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
-            const accountToggleBusy = busy === `toggle-${account.id}`
-            const openProtection = () => {
-              setProtectionEdit({
-                account,
-                reserve: String(account.personalReservePercent),
-                requestCap: account.maxSharedRequestsPerWindow === null ? '' : String(account.maxSharedRequestsPerWindow),
-                weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
-                  ? ''
-                  : String(account.weeklySharedEstimatedApiCostLimitMicros / 1_000_000),
-                models: account.allowedModels.join(', '),
+    )
+
+    const renderLocalAccount = (profile: LocalCodexProfileSummary) => {
+      const authorizationBusy = busy === `share-local-${profile.id}`
+      const quotaHasError = profile.quotaError !== undefined
+      const quotaIsStale = profile.remainingPercent !== undefined && quotaHasError
+      const quotaIsLoading = profile.remainingPercent === undefined
+        && localProfilesQuotaLoading
+        && !quotaHasError
+      return <article className={`${styles.accountCard} ${styles.prototypeDetail}`} key={`local:${profile.id}`}>
+        <header className={styles.detailHeading}>
+          <h2 className={styles.detailTitle}>{profile.label}</h2>
+          <span className={styles.connectionStatus}>
+            <StateDot state="done" />
+            {t(profile.inUse ? 'localInUse' : 'localAvailable')}
+          </span>
+        </header>
+        <section className={styles.teamActionPanel} aria-label={t('shareToTeam')}>
+          <Button
+            className={styles.primaryAccountAction}
+            size="sm"
+            variant="outline"
+            disabled={busy !== undefined || teamExpectedContext === undefined}
+            aria-busy={authorizationBusy}
+            onClick={() => {
+              if (teamAuthorizationContext === undefined || teamExpectedContext === undefined) return
+              setPendingLocalAuthorization({
+                id: profile.id,
+                label: profile.label,
+                authorizationContext: teamAuthorizationContext,
+                expectedContext: teamExpectedContext,
               })
-            }
-            return (
-              <article className={styles.accountCard} data-mine="true" role="listitem" key={account.id}>
-                <div className={styles.accountHeader}>
+            }}
+          >{authorizationBusy
+              ? <><span className={styles.actionSpinner} aria-hidden="true" />{t('working')}</>
+              : t('shareToTeam')}</Button>
+          <p>
+            {t('localAuthorizationCopy')} <strong>{t('localCredentialBoundary')}</strong>
+          </p>
+        </section>
+        <section
+          className={`${styles.prototypeSection} ${styles.capacityOverview}`}
+          role="region"
+          aria-label={t('capacityTitle')}
+          aria-busy={quotaIsLoading}
+          data-tone={quotaHasError ? 'warning' : undefined}
+          data-stale={quotaIsStale ? 'true' : undefined}
+        >
+          <h3>{t('capacityTitle')}</h3>
+          <div className={styles.capacityLine}>
+            <span>{t('capacityCodex')}</span>
+            <strong>{profile.remainingPercent === undefined
+              ? quotaIsLoading
+                ? <>
+                    <span className={styles.screenReaderOnly} role="status" aria-live="polite">{t('loadingLocalQuota')}</span>
+                    <span className={`${styles.skeletonBlock} ${styles.quotaValueSkeleton}`} aria-hidden="true" />
+                  </>
+                : t(quotaHasError ? 'capacityQuotaError' : 'capacityQuotaUnavailable')
+              : `${profile.remainingPercent}%`}</strong>
+          </div>
+          <div
+            className={styles.quotaTrack}
+            data-loading={quotaIsLoading ? 'true' : undefined}
+            data-error={quotaHasError ? 'true' : undefined}
+            data-unavailable={profile.remainingPercent === undefined && !quotaIsLoading && !quotaHasError ? 'true' : undefined}
+            role={profile.remainingPercent === undefined ? undefined : 'progressbar'}
+            aria-label={profile.remainingPercent === undefined ? undefined : t('capacityCodex')}
+            aria-valuenow={profile.remainingPercent}
+            aria-valuemin={profile.remainingPercent === undefined ? undefined : 0}
+            aria-valuemax={profile.remainingPercent === undefined ? undefined : 100}
+          >
+            {profile.remainingPercent === undefined
+              ? quotaIsLoading
+                ? <span className={styles.quotaTrackSkeleton} aria-hidden="true" />
+                : null
+              : <span style={{ width: `${profile.remainingPercent}%` }} />}
+          </div>
+          {quotaHasError
+            ? <p className={styles.quotaWarning} role="status">{t(quotaIsStale ? 'capacityQuotaStaleHint' : 'capacityQuotaErrorHint')}</p>
+            : null}
+        </section>
+        <footer className={styles.detailFooter}>
+          <Button className={styles.detailFooterButton} variant="ghost" onClick={() => {
+            setRecentUsageAccount({ id: profile.id, kind: 'local', label: profile.label })
+          }}>{t('recentRequests')}</Button>
+        </footer>
+      </article>
+    }
+
+    const renderSharedDirectoryAccount = (account: TeamManagementSharedAccountDirectoryEntry) => {
+      const contributor = contributorNameFor(account)
+      const contributionLabel = t('contributedBy', { name: contributor })
+      return (
+        <article className={`${styles.accountCard} ${styles.prototypeDetail}`} data-mine="false" aria-label={account.label} key={account.id}>
+          <header className={styles.detailHeading}>
+            <h2 className={styles.detailTitle}>{account.label}</h2>
+            <span className={styles.connectionStatus}>
+              <StateDot state="done" />
+              <span className={styles.statusText}>{contributionLabel} · {t('teamAvailable')}</span>
+            </span>
+          </header>
+          <section className={styles.teamActionPanel} aria-label={t('sharedAccountReadonlyTitle')}>
+            <p>{t('sharedAccountReadonlyHint')}</p>
+          </section>
+        </article>
+      )
+    }
+
+    const renderContributionAccount = (account: TeamManagementContributionSummary) => {
+      const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
+      const currentWeekAggregate = accountUsage?.currentUtcWeek?.aggregate
+      const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
+      const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
+        ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
+      const remainingCapacity = capacityBucket?.remainingPercent === undefined
+        ? t('capacityQuotaUnavailable')
+        : `${capacityBucket.remainingPercent}%`
+      const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
+      const contributionHint = account.status === 'active'
+        ? undefined
+        : account.status === 'paused'
+          ? t('contributionPausedHint')
+          : account.status === 'authorizing'
+            ? t('contributionAuthorizingHint')
+            : t('contributionReauthHint')
+      const contributionStatus = account.status === 'active'
+        ? `${t('localSignedIn')} · ${t('teamAvailable')}`
+        : t(account.status)
+      const openProtection = () => {
+        setProtectionEdit({
+          account,
+          reserve: String(account.personalReservePercent),
+          requestCap: account.maxSharedRequestsPerWindow === null ? '' : String(account.maxSharedRequestsPerWindow),
+          weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
+            ? ''
+            : String(account.weeklySharedEstimatedApiCostLimitMicros / 1_000_000),
+          models: account.allowedModels.join(', '),
+        })
+      }
+      return (
+        <article className={`${styles.accountCard} ${styles.prototypeDetail}`} data-mine="true" aria-label={account.label} key={account.id}>
+          <header className={styles.detailHeading}>
+            <div>
+              <h2 className={styles.detailTitle}>{account.label}</h2>
+            </div>
+            <div className={styles.connectionStatus}>
+              <StateDot state={account.status === 'active' ? 'done' : account.status === 'authorizing' ? 'ongoing' : account.status === 'paused' ? 'warning' : 'error'} />
+              <span className={styles.statusText}>{contributionStatus}</span>
+            </div>
+          </header>
+          <section className={`${styles.teamActionPanel} ${styles.accountActionBar}`} role="group" aria-label={t('accountActions')}>
+            {account.status === 'reauth_required' ? (
+              <Button className={styles.accountActionButton} size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void reauthorizeOAuth(account.id) }}>{t('reauthorize')}</Button>
+            ) : account.status === 'authorizing' ? null : account.status === 'active' ? (
+              <Button className={`${styles.accountActionButton} ${styles.stopSharingButton}`} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`revoke-${account.id}`, async () => {
+                const expectedContext = teamExpectedContextRef.current
+                if (expectedContext === undefined) return
+                await api.revokeContribution(account.id, expectedContext)
+                await refresh(false)
+              }) }}>{accountActionBusy ? (
+                <><span className={styles.actionSpinner} aria-hidden="true" />{t('stoppingContribution')}</>
+              ) : t('revokeContribution')}</Button>
+            ) : (
+              <Button className={styles.accountActionButton} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`toggle-${account.id}`, async () => {
+                const expectedContext = teamExpectedContextRef.current
+                if (expectedContext === undefined) return
+                await api.updateContribution(account.id, { status: 'active' }, expectedContext)
+                await refresh(false)
+              }) }}>{accountActionBusy ? (
+                <><span className={styles.actionSpinner} aria-hidden="true" />{t('resumingContribution')}</>
+              ) : t('resumeContribution')}</Button>
+            )}
+            {contributionHint === undefined ? null : <p>{contributionHint}</p>}
+          </section>
+          <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
+            <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
+            <dl className={styles.compactSummaryList}>
+              <div>
+                <dt>{t('weeklySharedAmount')}</dt>
+                <dd className={styles.weeklyAmount}>
+                  <strong>{t('usedAmount', { amount: formatUsdMicros(currentWeekAggregate?.estimatedCostUsdMicros) })}</strong>
+                  <span aria-hidden="true">/</span>
+                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>{account.weeklySharedEstimatedApiCostLimitMicros == null
+                    ? t('sharedLimitNoLimit')
+                    : t('sharedLimitAmount', { amount: formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros) })}</button>
+                </dd>
+              </div>
+              <div>
+                <dt className={styles.estimateLabel}>
+                  <span>{t('weeklyCapacityReference')}</span>
+                  <button type="button" className={styles.estimateHelp} aria-label={t('amountEstimateHelpLabel')} title={t('amountEstimateHelp')}>?</button>
+                </dt>
+                <dd>{t('aboutAmount', { amount: formatUsdMicros(CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS) })}</dd>
+              </div>
+              <div>
+                <dt>{t('accountRemainingCapacity')}</dt>
+                <dd>{remainingCapacity}</dd>
+              </div>
+            </dl>
+          </section>
+          <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
+            <header className={styles.compactRecentHeader}>
+              <h4 className={styles.compactSummaryTitle}>{t('recentUsageTitle')}</h4>
+              <Button className={styles.viewSevenDaysButton} size="sm" variant="outline" onClick={() => {
+                setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
+              }}>{t('viewSevenDays')}</Button>
+            </header>
+            <p className={styles.compactRecentLine}>
+              <strong>{t('requestCount', { count: last24HoursAggregate?.requestCount ?? '—' })}</strong>
+              <span aria-hidden="true"> · </span>
+              <span>{t('tokenApiEquivalent')}</span>{' '}
+              <strong>{formatUsdMicros(last24HoursAggregate?.estimatedCostUsdMicros)}</strong>
+            </p>
+          </section>
+          <footer className={styles.detailFooter}>
+            <Button className={styles.detailFooterButton} variant="ghost" onClick={() => {
+              setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
+            }}>{t('recentRequests')}</Button>
+          </footer>
+        </article>
+      )
+    }
+
+    const renderContributionNavigation = (account: TeamManagementContributionSummary) => {
+      const navigationStatus = account.status === 'active' ? t('contributedByMe') : t(account.status)
+      return (
+        <button
+          type="button"
+          className={styles.accountNavItem}
+          data-selected={selectedAccount?.kind === 'contribution' && selectedAccount.account.id === account.id}
+          aria-pressed={selectedAccount?.kind === 'contribution' && selectedAccount.account.id === account.id}
+          aria-label={`${account.label} · ${navigationStatus}`}
+          onClick={() => { setSelectedAccountId(contributionSelectionKey(account.id)) }}
+          key={account.id}
+        >
+          <StateDot state={account.status === 'active' ? 'done' : account.status === 'authorizing' ? 'ongoing' : account.status === 'paused' ? 'warning' : 'error'} />
+          <span className={styles.accountNavCopy}>
+            <span className={styles.accountNavLabel}>{accountAliases.get(contributionSelectionKey(account.id))}</span>
+            <span className={styles.accountNavOwner}>{account.label}</span>
+          </span>
+          {account.status === 'active' ? (
+            <Pill className={`${styles.accountNavStatus} ${styles.pill}`}>{navigationStatus}</Pill>
+          ) : (
+            <span className={styles.accountNavStatus}>{navigationStatus}</span>
+          )}
+        </button>
+      )
+    }
+
+    const renderSharedDirectoryNavigation = (account: TeamManagementSharedAccountDirectoryEntry) => {
+      const contributionLabel = t('contributedBy', { name: contributorNameFor(account) })
+      const selected = selectedAccount?.kind === 'shared-directory' && selectedAccount.account.id === account.id
+      return (
+        <button
+          type="button"
+          className={styles.accountNavItem}
+          data-selected={selected}
+          aria-pressed={selected}
+          aria-label={`${account.label} · ${contributionLabel}`}
+          onClick={() => { setSelectedAccountId(sharedDirectorySelectionKey(account.id)) }}
+          key={account.id}
+        >
+          <StateDot state="done" />
+          <span className={styles.accountNavCopy}>
+            <span className={styles.accountNavLabel}>{accountAliases.get(sharedDirectorySelectionKey(account.id))}</span>
+            <span className={styles.accountNavOwner}>{account.label}</span>
+          </span>
+          <Pill className={`${styles.accountNavStatus} ${styles.pill}`}>{contributionLabel}</Pill>
+        </button>
+      )
+    }
+
+    const renderLocalNavigation = (profile: LocalCodexProfileSummary) => (
+      <button
+        type="button"
+        className={styles.accountNavItem}
+        data-selected={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
+        aria-pressed={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
+        aria-label={`${profile.label} · ${t('localSignedIn')} · ${t('localNotShared')}`}
+        onClick={() => { setSelectedAccountId(localSelectionKey(profile.id)) }}
+        key={profile.id}
+      >
+        <StateDot state="done" />
+        <span className={styles.accountNavCopy}>
+          <span className={styles.accountNavLabel}>{accountAliases.get(localSelectionKey(profile.id))}</span>
+          <span className={styles.accountNavOwner}>{profile.label}</span>
+        </span>
+        <span className={styles.accountNavStatus}>{t('localNotShared')}</span>
+      </button>
+    )
+
+    const sharedAccountCount = contributionGroups.shared.length + teammateSharedAccounts.length
+    const accountCount = listedAccounts.length + teammateSharedAccounts.length + localProfiles.length
+
+    return (
+      <section className={styles.accountWorkspace} role="region" aria-labelledby="team-accounts-title" aria-busy={localProfilesLoading}>
+        <aside className={styles.accountDirectory}>
+          <div className={styles.directoryHeader}>
+            <h3 id="team-accounts-title" className={styles.directoryTitle}>
+              {t('accountsLabel')}{localProfilesLoading
+                ? <span className={`${styles.skeletonBlock} ${styles.directoryCountSkeleton}`} aria-hidden="true" />
+                : <span className={styles.directoryTitleCount}>{t('accountsCount', { count: accountCount })}</span>}
+            </h3>
+            <Button className={styles.addAccountButton} size="sm" variant="outline" icon={<IconPlusOutline16 />} onClick={() => {
+              setAccountLabel('')
+              setAddAccountOpen(true)
+            }}>{t('addAccount')}</Button>
+            <p className={`${styles.hint} ${styles.directoryHint}`}>{t('accountDirectoryHint')}</p>
+          </div>
+          {sharedAccountCount === 0 ? null : <section className={styles.directoryGroup} role="region" aria-labelledby="team-shared-accounts-title">
+            <div className={styles.directoryGroupHeader}>
+              <h4 id="team-shared-accounts-title" className={styles.directoryGroupTitle}>{t('sharedAccounts')}</h4>
+              <span>{sharedAccountCount}</span>
+            </div>
+            <div className={styles.accountNavList}>
+              {contributionGroups.shared.map(renderContributionNavigation)}
+              {teammateSharedAccounts.map(renderSharedDirectoryNavigation)}
+            </div>
+          </section>}
+          {contributionGroups.unshared.length + localProfiles.length === 0 ? null : <section className={styles.directoryGroup} role="region" aria-labelledby="team-unshared-accounts-title">
+            <div className={styles.directoryGroupHeader}>
+              <h4 id="team-unshared-accounts-title" className={styles.directoryGroupTitle}>{t('unsharedAccounts')}</h4>
+              <span>{contributionGroups.unshared.length + localProfiles.length}</span>
+            </div>
+            <div className={styles.accountNavList}>
+              {localProfiles.map(renderLocalNavigation)}
+              {contributionGroups.unshared.map(renderContributionNavigation)}
+            </div>
+          </section>}
+          {localProfilesLoading ? (
+            <>
+              <p className={styles.screenReaderOnly} role="status" aria-live="polite">{t('loadingLocalAccounts')}</p>
+              {renderAccountDirectorySkeleton()}
+            </>
+          ) : null}
+          {accountCount === 0 && !localProfilesLoading
+            ? localProfilesUnavailable
+              ? <div className={styles.directoryState} role="alert">
+                  <strong>{t('localAccountsUnavailableTitle')}</strong>
+                  <span>{t('localAccountsUnavailableHint')}</span>
+                  <Button size="sm" variant="outline" onClick={() => { void refreshLocalProfiles() }}>{t('retry')}</Button>
+                </div>
+              : <div className={styles.directoryState}>
+                  <strong>{t('noLocalAccountsTitle')}</strong>
+                  <span>{t('noLocalAccountsHint')}</span>
+                </div>
+            : null}
+        </aside>
+        <div className={styles.accountDetail} role="region" aria-label={t('accountDetails')}>
+          {oauth?.method === 'browser'
+            ? <section className={styles.oauthInlinePanel} role="region" aria-labelledby="team-browser-authorization-title">
+                <div className={styles.oauthInlineStatus} role="status" aria-live="polite">
+                  <span className={styles.actionSpinner} aria-hidden="true" />
                   <div>
-                    <h4 className={styles.accountLabel}>{account.label}</h4>
-                    <span className={styles.statusText}>{t(account.status)}</span>
+                    <h2 id="team-browser-authorization-title">{t('browserAuthorizationTitle')}</h2>
+                    <p>{t('browserAuthorizationHint')}</p>
                   </div>
-                  <Pill>{t('myAccount')}</Pill>
                 </div>
-                <div className={styles.accountFacts}>
-                  <span className={styles.weeklyAmount}>
-                    {t('weeklyAmount', { used: formatUsdMicros(accountUsage?.aggregate.estimatedCostUsdMicros) })}
-                    {account.weeklySharedEstimatedApiCostLimitMicros == null ? null : <> / {formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)}</>}
-                    <button type="button" className={styles.inlineEdit} disabled={busy !== undefined} onClick={openProtection}>{t('edit')}</button>
-                  </span>
-                  <span>{t('recentSevenDays', {
-                    requests: accountUsage?.aggregate.requestCount ?? 0,
-                    tokens: accountUsage?.aggregate.totalTokens ?? '0',
-                  })}</span>
-                  <span>{t('reserve', { percent: account.personalReservePercent })}</span>
-                  <span>{account.maxSharedRequestsPerWindow === null
-                    ? t('noRequestCap')
-                    : t('requestCap', { count: account.maxSharedRequestsPerWindow })}</span>
-                  <span>{account.maxSharedConcurrency === 1
-                    ? t('concurrency', { count: account.maxSharedConcurrency })
-                    : t('concurrencyPlural', { count: account.maxSharedConcurrency })}</span>
+                {oauthNavigationBlocked ? <p className={styles.oauthInlineWarning} role="alert">{t('browserPopupBlocked')}</p> : null}
+                <p className={styles.oauthInlineExpiry}>{t('expiresAt', { time: formatTime(oauth.expiresAt) })}</p>
+                <div className={styles.oauthInlineActions}>
+                  <Button size="sm" variant="outline" disabled={busy !== undefined} onClick={() => { reopenBrowserOAuth(oauth.authorizationUrl) }}>{t('openProvider')}</Button>
+                  <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void switchOAuthToDeviceCode(oauth.account.id) }}>{t('useDeviceCode')}</Button>
+                  <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void cancelPresentedOAuth(oauth.account.id) }}>{t('cancelAuthorization')}</Button>
                 </div>
-                {account.status === 'revoked' ? null : (
-                  <div className={styles.compactActions}>
-                    <Button size="sm" variant="outline" disabled={busy !== undefined} onClick={openProtection}>{t('editProtection')}</Button>
-                    <Button size="sm" variant="ghost" onClick={() => { setRecentUsageAccount(account) }}>{t('recentRequests')}</Button>
-                    {account.status === 'reauth_required' ? (
-                      <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void run(`reauthorize-${account.id}`, async () => {
-                        const expectedContext = teamExpectedContextRef.current
-                        if (expectedContext === undefined) return
-                        setOAuth(await api.reauthorizeOAuth(account.id, expectedContext))
-                        await refresh(false)
-                      }) }}>{t('reauthorize')}</Button>
-                    ) : account.status === 'authorizing' ? null : (
-                      <Button size="sm" variant="ghost" disabled={busy !== undefined} aria-busy={accountToggleBusy} onClick={() => { void run(`toggle-${account.id}`, async () => {
-                        const expectedContext = teamExpectedContextRef.current
-                        if (expectedContext === undefined) return
-                        await api.updateContribution(account.id, { status: account.status === 'paused' ? 'active' : 'paused' }, expectedContext)
-                        await refresh(false)
-                      }) }}>{accountToggleBusy ? (
-                        <><span className={styles.actionSpinner} aria-hidden="true" />{t(account.status === 'paused' ? 'resumingContribution' : 'stoppingContribution')}</>
-                      ) : t(account.status === 'paused' ? 'resumeContribution' : 'pauseContribution')}</Button>
-                    )}
-                  </div>
-                )}
-              </article>
-            )
-          })}
+              </section>
+            : selectedAccount === undefined
+            ? localProfilesLoading
+              ? renderAccountDetailSkeleton()
+              : <div className={styles.accountDetailEmpty}>
+                  <strong>{t(localProfilesUnavailable ? 'localAccountsUnavailableTitle' : 'noLocalAccountsTitle')}</strong>
+                  <p className={styles.empty}>{t(localProfilesUnavailable ? 'localAccountsUnavailableHint' : 'noLocalAccountsHint')}</p>
+                </div>
+            : selectedAccount.kind === 'local'
+              ? renderLocalAccount(selectedAccount.account)
+              : selectedAccount.kind === 'shared-directory'
+                ? renderSharedDirectoryAccount(selectedAccount.account)
+                : renderContributionAccount(selectedAccount.account)}
         </div>
-      )}
-    </section>
-  )
+      </section>
+    )
+  }
 
   return (
     <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
       {error === undefined || teamSettingsOpen ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
+      {!teamContextChanged || teamSettingsOpen ? null : (
+        <Notice tone="warning" title={t('teamContextChangedTitle')} detail={t('teamContextChangedHint')} live="polite" />
+      )}
 
       {teamSettingsOpen ? (
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
@@ -1319,6 +2167,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 <button
                   type="button"
                   className={styles.workspaceBack}
+                  ref={workspaceBackRef}
                   onClick={() => {
                     setTeamMenuOpen(false)
                     setMemberMenuId(undefined)
@@ -1410,6 +2259,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <div className={styles.workspaceBody}>
 
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
+            {!teamContextChanged ? null : (
+              <Notice tone="warning" title={t('teamContextChangedTitle')} detail={t('teamContextChangedHint')} live="polite" />
+            )}
             {renderDisplayNameMigrationNotice()}
 
           {currentMemberIsTransferRequester && ownershipTransfer !== undefined ? (
@@ -1606,15 +2458,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           </div>
         </section>
       ) : (
-        <section className={styles.teamPanel} role="region" aria-label={t('teamPanelTitle')}>
-          <header className={styles.teamContext}>
-            <div className={styles.teamContextCopy}>
-              <p className={styles.workspaceBreadcrumb}>{t('workspaceBreadcrumb')}</p>
-              <h2 className={styles.teamContextTitle}>{team.name}</h2>
-              <div className={styles.workspaceMeta}>
-                <span className={styles.workspaceStatus}><StateDot state={team.status === 'active' ? 'done' : 'warning'} />{team.status === 'active' ? t('teamActive') : t('teamPaused')}</span>
-                <span>{overview.viewerRole === 'owner' ? t('teamOwnerRole') : t('teamMemberRole')}</span>
-                <span>{t('membersCount', { count: activeMembers.length })}</span>
+        <section className={styles.teamOverview} role="region" aria-label={t('teamPanelTitle')}>
+          <header className={styles.teamBar}>
+            <div className={styles.teamIdentity}>
+              <StateDot state={team.status === 'active' ? 'done' : 'warning'} />
+              <div>
+                <h2 className={styles.teamName}>{team.name}</h2>
+                <p className={styles.hint}>{t('membersCount', { count: activeMembers.length })}</p>
               </div>
             </div>
             <button
@@ -1632,6 +2482,54 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       )}
 
       <Modal
+        open={activePendingLocalAuthorization !== undefined}
+        onClose={() => { if (busy === undefined) setPendingLocalAuthorization(undefined) }}
+        title={t('localAuthorizationConfirmTitle', { label: activePendingLocalAuthorization?.label ?? '' })}
+        closeLabel={t('close')}
+        description={t('localAuthorizationConfirmHint')}
+        footer={(
+          <div className={styles.modalActions}>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy !== undefined}
+              onClick={() => { setPendingLocalAuthorization(undefined) }}
+            >{t('cancel')}</Button>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy !== undefined || authorizationSnapshotPending || activePendingLocalAuthorization === undefined}
+              aria-busy={activePendingLocalAuthorization === undefined ? false : busy === `share-local-${activePendingLocalAuthorization.id}`}
+              onClick={() => {
+                const pending = activePendingLocalAuthorization
+                if (
+                  pending === undefined
+                  || authorizationSnapshotPending
+                  || pending.authorizationContext !== teamAuthorizationContext
+                ) return
+                void startBrowserOAuth(
+                  pending.label,
+                  `share-local-${pending.id}`,
+                  pending.id,
+                  () => { setPendingLocalAuthorization(undefined) },
+                  pending.expectedContext,
+                )
+              }}
+            >{activePendingLocalAuthorization !== undefined && busy === `share-local-${activePendingLocalAuthorization.id}`
+                ? <><span className={styles.actionSpinner} aria-hidden="true" />{t('working')}</>
+                : t('localAuthorizationConfirmAction')}</Button>
+          </div>
+        )}
+      >
+        <div className={styles.localAuthorizationConfirmation}>
+          <p>{t('localAuthorizationConfirmBody', { team: team.name })}</p>
+          <p className={styles.localAuthorizationSafety}>
+            <strong>{t('localCredentialBoundary')}</strong> {t('localAuthorizationConfirmSafety')}
+          </p>
+        </div>
+      </Modal>
+
+      <Modal
         open={addAccountOpen}
         onClose={() => { if (busy === undefined) setAddAccountOpen(false) }}
         title={t('addAccountTitle')}
@@ -1640,14 +2538,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         footer={(
           <div className={styles.modalActions}>
             <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setAddAccountOpen(false) }}>{t('cancel')}</Button>
-            <Button size="sm" variant="primary" disabled={busy !== undefined || accountLabel.trim() === ''} onClick={() => { void run('oauth-start', async () => {
-              const expectedContext = teamExpectedContextRef.current
-              if (expectedContext === undefined) return
-              const result = await api.startOAuth(accountLabel.trim(), expectedContext)
-              setAddAccountOpen(false)
-              setOAuth(result)
-              await refresh(false)
-            }) }}>{busy === 'oauth-start' ? t('working') : t('startAuthorization')}</Button>
+            <Button size="sm" variant="primary" disabled={busy !== undefined || accountLabel.trim() === ''} onClick={() => {
+              void startBrowserOAuth(accountLabel, 'oauth-start', undefined, () => { setAddAccountOpen(false) })
+            }}>{busy === 'oauth-start' ? t('working') : t('startAuthorization')}</Button>
           </div>
         )}
       >
@@ -1658,27 +2551,26 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       </Modal>
 
       <Modal
-        open={oauth !== undefined}
-        onClose={() => { if (busy === undefined) setOAuth(undefined) }}
+        open={oauth?.method === 'device_code'}
+        onClose={() => { if (busy === undefined && oauth?.method === 'device_code') void cancelPresentedOAuth(oauth.account.id) }}
         title={t('deviceTitle')}
         closeLabel={t('close')}
         description={t('deviceHint')}
         footer={(
           <div className={styles.modalActions}>
-            <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void run('oauth-cancel', async () => {
-              if (oauth === undefined) return
-              const expectedContext = teamExpectedContextRef.current
-              if (expectedContext === undefined) return
-              await api.cancelOAuth(oauth.account.id, expectedContext)
-              setOAuth(undefined)
-              await refresh(false)
-            }) }}>{t('cancelAuthorization')}</Button>
-            {oauth === undefined ? null : <a href={oauth.verificationUrl} target="_blank" rel="noreferrer">{t('openProvider')}</a>}
-            <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { setOAuth(undefined); void refresh(false) }}>{t('checkAuthorization')}</Button>
+            <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => {
+              if (oauth?.method === 'device_code') void cancelPresentedOAuth(oauth.account.id)
+            }}>{t('cancelAuthorization')}</Button>
+            {oauth?.method === 'device_code' ? <a href={oauth.verificationUrl} target="_blank" rel="noreferrer">{t('openProvider')}</a> : null}
+            <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => {
+              if (oauth?.method === 'device_code') {
+                void run(`oauth-check-${oauth.account.id}`, async () => { await refresh(false) })
+              }
+            }}>{t('checkAuthorization')}</Button>
           </div>
         )}
       >
-        {oauth === undefined ? null : (
+        {oauth?.method !== 'device_code' ? null : (
           <div className={styles.panel}>
             <span className={styles.label}>{t('deviceCode')}</span>
             <strong>{oauth.userCode}</strong>
@@ -1752,7 +2644,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         closeLabel={t('close')}
       >
         {recentUsageAccount === undefined ? null : (() => {
-          const requests = usageProjection?.ownedAccounts?.find(item => item.accountId === recentUsageAccount.id)?.recentRequests ?? []
+          const requests = recentUsageAccount.kind === 'contribution'
+            ? usageProjection?.ownedAccounts?.find(item => item.accountId === recentUsageAccount.id)?.recentRequests ?? []
+            : []
           return requests.length === 0
             ? <p className={styles.empty}>{t('noRecentRequests')}</p>
             : <div className={styles.recentRequestList}>{requests.map(request => (
