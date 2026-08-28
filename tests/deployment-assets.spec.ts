@@ -26,10 +26,13 @@ describe('self-hosted deployment assets', () => {
       'deploy/host/bootstrap.mjs',
       'deploy/host/Dockerfile',
       'deploy/host/Dockerfile.dockerignore',
+      'deploy/host/ensure-installed-team-plugin.mjs',
       'deploy/host/smoke-live-sharing.mjs',
       'deploy/host/smoke-live-team-routing.mjs',
       'deploy/host/smoke-multi-team.mjs',
+      'deploy/host/start-team-host.sh',
       'deploy/host/team-host.patch.yml',
+      'deploy/host/wait-for-credential-broker.mjs',
       'deploy/postgres/init-runtime-logins.sh',
       'deploy/postgres/runtime-roles.sql',
       'deploy/self-hosted/compose.yml',
@@ -114,8 +117,14 @@ describe('self-hosted deployment assets', () => {
     expect(dockerfile).toMatch(/--before=2026-08-20T00:00:00\.000Z/u)
     expect(dockerfile).toMatch(/corepack disable/u)
     expect(dockerfile).not.toMatch(/pnpm add --global @deepseek-ai\/dsh/u)
+    expect(dockerfile).toMatch(/COPY[^\n]*THIRD_PARTY_NOTICES\.md/u)
     expect(dockerfile).toMatch(/pnpm pack/u)
-    expect(dockerfile).toMatch(/dsh plugin --profile web add \/tmp\/plugin\.tgz/u)
+    const installer = await readFile(
+      new URL('../deploy/host/ensure-installed-team-plugin.mjs', import.meta.url),
+      'utf8',
+    )
+    expect(installer).toContain("spawn('dsh', ['plugin', '--profile', 'web', 'add', packagePath]")
+    expect(installer).toContain("'/opt/dsh/plugin-package/dsh-codex-shared-pool.tgz'")
     expect(dockerfile).toMatch(
       /ln -s \/opt\/dsh-home\/profiles\/web\/node_modules\/dsh-codex-shared-pool[\s\\]+\/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh\/node_modules\/dsh-codex-shared-pool/u,
     )
@@ -124,10 +133,12 @@ describe('self-hosted deployment assets', () => {
     expect(dockerfile).toContain('deploy/host/smoke-multi-team.mjs')
     expect(dockerfile).toContain('deploy/host/smoke-live-sharing.mjs')
     expect(dockerfile).toContain('deploy/host/smoke-live-team-routing.mjs')
+    expect(dockerfile).toContain('deploy/host/ensure-installed-team-plugin.mjs')
+    expect(dockerfile).toContain('deploy/host/wait-for-credential-broker.mjs')
+    expect(dockerfile).toContain('deploy/host/start-team-host.sh')
     expect(dockerfile).toContain('lib/team-migrate-bin.js')
-    expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]*127\.0\.0\.1/u)
-    expect(dockerfile).toMatch(/ENTRYPOINT \["dsh", "--profile", "web"/u)
-    expect(dockerfile).toMatch(/"--host", "127\.0\.0\.1", "--port", "3081"/u)
+    expect(dockerfile).toMatch(/HEALTHCHECK[\s\S]*team\/overview[\s\S]*r\.status !== 401/u)
+    expect(dockerfile).toMatch(/ENTRYPOINT \["sh", "\/opt\/dsh\/deploy\/host\/start-team-host\.sh"\]/u)
     expect(dockerfile).not.toMatch(/"--host", "0\.0\.0\.0"/u)
   })
 
@@ -194,18 +205,25 @@ describe('self-hosted deployment assets', () => {
 
     const postgresService = compose.slice(compose.indexOf('  postgres:'), compose.indexOf('  team-migrations:'))
     const migrationService = compose.slice(compose.indexOf('  team-migrations:'), compose.indexOf('  team-host:'))
+    const hostService = compose.slice(compose.indexOf('  team-host:'), compose.indexOf('  credential-broker:'))
     const brokerService = compose.slice(compose.indexOf('  credential-broker:'), compose.indexOf('  team-edge:'))
     const edgeService = compose.slice(compose.indexOf('  team-edge:'), compose.indexOf('\nvolumes:'))
     expect(postgresService).not.toMatch(/^\s+ports:/mu)
     expect(migrationService).not.toMatch(/^\s+ports:/mu)
     expect(migrationService).toMatch(/restart:\s*["']no["']/u)
     expect(migrationService).toMatch(/cap_drop:\s*\n\s*- ALL/u)
+    expect(hostService).toMatch(/team\/overview[\s\S]*r\.status !== 401/u)
     expect(brokerService).not.toMatch(/^\s+ports:/mu)
     expect(edgeService).not.toMatch(/^\s+ports:/mu)
     expect(brokerService).toMatch(/depends_on:[\s\S]*postgres:[\s\S]*condition:\s*service_healthy/u)
     expect(edgeService).toMatch(/depends_on:[\s\S]*team-host:[\s\S]*condition:\s*service_healthy/u)
     expect(brokerService).toMatch(/cap_drop:\s*\n\s*- ALL/u)
     expect(brokerService).toMatch(/no-new-privileges:true/u)
+    expect(hostService).toContain('DSH_OUTBOUND_PROXY_ENV_FILE:-./.secrets/outbound-network.env')
+    expect(brokerService).toContain('DSH_OUTBOUND_PROXY_ENV_FILE:-./.secrets/outbound-network.env')
+    expect(hostService).toMatch(/outbound-network\.env\}\s*\n\s*required:\s*false/u)
+    expect(brokerService).toMatch(/outbound-network\.env\}\s*\n\s*required:\s*false/u)
+    expect(compose).not.toMatch(/(?:HTTP|HTTPS|NO)_PROXY\s*:/u)
     expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_BOOTSTRAP_TOKEN\s*:/u)
     expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_CREDENTIAL_MASTER_KEY\s*:/u)
     expect(compose).not.toMatch(/DSH_CODEX_SHARED_POOL_INVITE_MASTER_KEY\s*:/u)
@@ -769,6 +787,9 @@ describe('self-hosted deployment assets', () => {
     expect(readme).toContain('dsh_team_broker_login')
     expect(readme).toMatch(/Team\s+Host cannot read `team_contribution_credentials`/u)
     expect(readme).toMatch(/Credential\s+Broker cannot read the Team control-plane tables/u)
+    expect(readme).toMatch(/outbound-network\.env[\s\S]*HTTP_PROXY[\s\S]*HTTPS_PROXY[\s\S]*NO_PROXY/iu)
+    expect(readme).toMatch(/NO_PROXY[\s\S]*127\.0\.0\.1[\s\S]*localhost/iu)
+    expect(readme).toMatch(/outbound-network\.env[\s\S]*(?:restart|recreate|重启)[\s\S]*Team Host[\s\S]*Credential Broker/iu)
     expect(readme).not.toMatch(/deliberately uses one PostgreSQL login/iu)
     expect(controlPlanePlan).not.toMatch(/separate database roles[\s\S]*remain explicit deployment-hardening work/iu)
     expect(selfHostedPlan).toMatch(/four mode-`0600` secret files/iu)

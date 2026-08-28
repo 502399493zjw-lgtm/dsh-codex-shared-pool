@@ -5,6 +5,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Pool } from 'pg'
+import { OutboundNetwork } from './network.ts'
 import { safeExternalErrorMessage } from './safe-message.ts'
 import {
   loadTeamCredentialBrokerEnvironment,
@@ -71,8 +72,12 @@ export async function runTeamCredentialBroker(
   }
 
   let daemon: RunningTeamCredentialBrokerDaemon | undefined
+  let disposeNetwork: (() => Promise<void>) | undefined
+  let exitCode = 1
   try {
-    const config = await loadTeamCredentialBrokerEnvironment(options.environment ?? process.env)
+    const environment = options.environment ?? process.env
+    disposeNetwork = new OutboundNetwork(environment).install()
+    const config = await loadTeamCredentialBrokerEnvironment(environment)
     let providers: TeamKeyEncryptionProvider
     try {
       providers = createKeyEncryptionProvider(config.masterKey, config.previousMasterKey)
@@ -114,12 +119,20 @@ export async function runTeamCredentialBroker(
     stdout.write(`dsh-codex-team-broker: listening on ${daemon.address.host}:${daemon.address.port}\n`)
     await terminationSignal()
     await daemon.dispose()
-    return 0
+    daemon = undefined
+    exitCode = 0
   } catch (error: unknown) {
     await daemon?.dispose().catch(() => undefined)
     stderr.write(`dsh-codex-team-broker: startup or shutdown failed: ${safeExternalErrorMessage(error, 500)}\n`)
-    return 1
+  } finally {
+    try {
+      await disposeNetwork?.()
+    } catch (error: unknown) {
+      exitCode = 1
+      stderr.write(`dsh-codex-team-broker: outbound network cleanup failed: ${safeExternalErrorMessage(error, 500)}\n`)
+    }
   }
+  return exitCode
 }
 
 function createKeyEncryptionProvider(

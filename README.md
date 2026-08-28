@@ -131,6 +131,15 @@ docker compose -f deploy/self-hosted/compose.yml up --build -d
 - `team-host.env`：向 Team Host 提供控制面所需配置，但不提供凭据解密密钥；
 - `credential-broker.env`：只向 Broker 提供 envelope master key、数据库 URL 和内部 API key。
 
+需要让上游请求经过代理时，另行创建被 Git 忽略的
+`deploy/self-hosted/.secrets/outbound-network.env`，并将权限设为 `0600`。这个文件不由初始化器生成；按需只填写标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`，不要把代理地址或凭据写入 Compose、镜像或仓库。`NO_PROXY` 必须包含 `127.0.0.1` 和 `localhost`，以免回环上的 Host/Broker 请求绕远。
+
+Compose 会把同一份可选代理文件交给 Team Host 和 Credential Broker。修改 `outbound-network.env` 后，必须重建或重启 Team Host 与 Credential Broker 才会生效：
+
+```sh
+docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-host credential-broker
+```
+
 数据库按权限拆分为 `dsh_team_host_login` 和 `dsh_team_broker_login`。Team Host cannot read `team_contribution_credentials`；Credential Broker cannot read the Team control-plane tables。DSH Web/Remote API 不对公网暴露，Team API Edge 只转发 `/plugins/dsh-codex-shared-pool/team/...`。
 
 完整验收与部署说明见 [第二期验收文档](docs/acceptance/team-mvp-phase-two.md)。

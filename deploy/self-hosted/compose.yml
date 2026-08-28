@@ -46,6 +46,8 @@ services:
     restart: unless-stopped
     init: true
     env_file:
+      - path: ${DSH_OUTBOUND_PROXY_ENV_FILE:-./.secrets/outbound-network.env}
+        required: false
       - ${DSH_TEAM_HOST_ENV_FILE:-./.secrets/team-host.env}
     depends_on:
       team-migrations:
@@ -53,7 +55,7 @@ services:
     ports:
       - ${DSH_TEAM_BIND_ADDRESS:-127.0.0.1}:${DSH_TEAM_PORT:-3080}:3080
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3081/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3081/plugins/dsh-codex-shared-pool/team/overview').then(r=>{if(r.status !== 401)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -71,6 +73,8 @@ services:
     init: true
     network_mode: service:team-host
     env_file:
+      - path: ${DSH_OUTBOUND_PROXY_ENV_FILE:-./.secrets/outbound-network.env}
+        required: false
       - ${DSH_TEAM_BROKER_ENV_FILE:-./.secrets/credential-broker.env}
     depends_on:
       postgres:
