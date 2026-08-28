@@ -93,6 +93,14 @@ interface TeamConnectionIssue {
   readonly detail: string
 }
 
+interface ActiveBrowserAuthorization {
+  readonly accountId: string
+  readonly expiresAt: number
+  readonly discardInitial: boolean
+  readonly expectedContext: TeamManagementExpectedContext
+  readonly returnSelection?: string
+}
+
 interface LocalCodexProfileSummary {
   readonly id: string
   readonly label: string
@@ -327,6 +335,47 @@ function createTeamExpectedContext(
   }
 }
 
+function isSameTeamExpectedContext(
+  left: TeamManagementExpectedContext | undefined,
+  right: TeamManagementExpectedContext | undefined,
+): boolean {
+  return left !== undefined
+    && right !== undefined
+    && left.serverOrigin === right.serverOrigin
+    && left.teamId === right.teamId
+    && left.currentMemberId === right.currentMemberId
+}
+
+function reconcileCancelledBrowserAuthorization(
+  overview: TeamManagementOverview,
+  account: TeamManagementContributionSummary,
+): TeamManagementOverview {
+  const existingIndex = overview.contributions.findIndex(item => item.id === account.id)
+  const contributions = account.status === 'revoked'
+    ? overview.contributions.filter(item => item.id !== account.id)
+    : existingIndex < 0
+      ? [...overview.contributions, account]
+      : overview.contributions.map(item => item.id === account.id ? account : item)
+  const activeSharedAccounts = account.status === 'active'
+    ? overview.activeSharedAccounts.some(item => item.id === account.id)
+      ? overview.activeSharedAccounts.map(item => item.id === account.id
+          ? { id: account.id, ownerMemberId: account.ownerMemberId, label: account.label, status: 'active' as const }
+          : item)
+      : [
+          ...overview.activeSharedAccounts,
+          { id: account.id, ownerMemberId: account.ownerMemberId, label: account.label, status: 'active' as const },
+        ]
+    : overview.activeSharedAccounts.filter(item => item.id !== account.id)
+  const nextOverview = {
+    ...overview,
+    contributions,
+    activeSharedAccounts,
+  }
+  if (overview.pendingBrowserAuthorization?.accountId !== account.id) return nextOverview
+  const { pendingBrowserAuthorization: _pendingBrowserAuthorization, ...withoutPendingAuthorization } = nextOverview
+  return withoutPendingAuthorization
+}
+
 function createOwnerAuthorizationContext(
   status: TeamManagementStatus | undefined,
   overview: TeamManagementOverview | undefined,
@@ -501,6 +550,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [oauth, setOAuth] = useState<TeamManagementOAuthResult>()
   const [oauthDiscardInitial, setOAuthDiscardInitial] = useState(false)
   const [oauthNavigationBlocked, setOAuthNavigationBlocked] = useState(false)
+  const [oauthRefreshUnavailable, setOAuthRefreshUnavailable] = useState(false)
+  const [overviewSnapshotRequestId, setOverviewSnapshotRequestId] = useState(0)
   const [protectionEdit, setProtectionEdit] = useState<ContributionProtectionEdit>()
   const [recentUsageAccount, setRecentUsageAccount] = useState<RecentUsageTarget>()
   const [teamMenuOpen, setTeamMenuOpen] = useState(false)
@@ -517,6 +568,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const oauthPopup = useRef<Window | null>(null)
   const oauthStartLocked = useRef(false)
   const oauthTransitionLocked = useRef(false)
+  const oauthPresentationActive = useRef(false)
+  const oauthReturnSelection = useRef<string | undefined>(undefined)
+  const oauthExpectedContext = useRef<TeamManagementExpectedContext | undefined>(undefined)
+  const oauthPresentedAfterRequestId = useRef(0)
+  const pendingBrowserAuthorizationActive = useRef(false)
   const oauthOperationEpoch = useRef(0)
   const mounted = useRef(true)
 
@@ -527,9 +583,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const clearOAuthPresentation = useCallback(() => {
     oauthPopup.current?.close()
     oauthPopup.current = null
+    oauthPresentationActive.current = false
+    oauthReturnSelection.current = undefined
+    oauthExpectedContext.current = undefined
+    oauthPresentedAfterRequestId.current = 0
     setOAuth(undefined)
     setOAuthDiscardInitial(false)
     setOAuthNavigationBlocked(false)
+    setOAuthRefreshUnavailable(false)
   }, [])
 
   useEffect(() => {
@@ -539,6 +600,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       oauthOperationEpoch.current += 1
       oauthStartLocked.current = false
       oauthTransitionLocked.current = false
+      oauthPresentationActive.current = false
+      oauthReturnSelection.current = undefined
+      oauthExpectedContext.current = undefined
+      oauthPresentedAfterRequestId.current = 0
+      pendingBrowserAuthorizationActive.current = false
       oauthPopup.current?.close()
       oauthPopup.current = null
     }
@@ -612,6 +678,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const memberAuthorizationContext = authorizationSnapshotReady
     ? createMemberAuthorizationContext(status, overview)
     : undefined
+  const projectedBrowserAuthorization = overview?.pendingBrowserAuthorization
+  const activeBrowserAuthorization: ActiveBrowserAuthorization | undefined = oauth?.method === 'browser'
+    && oauthExpectedContext.current !== undefined
+    ? {
+        accountId: oauth.account.id,
+        expiresAt: oauth.expiresAt,
+        discardInitial: oauthDiscardInitial,
+        expectedContext: oauthExpectedContext.current,
+        ...(oauthReturnSelection.current === undefined ? {} : { returnSelection: oauthReturnSelection.current }),
+      }
+    : projectedBrowserAuthorization !== undefined
+      && (teamExpectedContext ?? teamExpectedContextRef.current) !== undefined
+      ? {
+          ...projectedBrowserAuthorization,
+          expectedContext: (teamExpectedContext ?? teamExpectedContextRef.current) as TeamManagementExpectedContext,
+        }
+      : undefined
   const activePendingLocalAuthorization = pendingLocalAuthorization !== undefined
     && (authorizationSnapshotPending
       || pendingLocalAuthorization.authorizationContext === teamAuthorizationContext)
@@ -701,24 +784,34 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [childDialogFocusTarget])
 
   useEffect(() => {
-    teamExpectedContextRef.current = teamExpectedContext
-  }, [teamExpectedContext])
+    if (teamExpectedContext !== undefined || !authorizationSnapshotPending) {
+      teamExpectedContextRef.current = teamExpectedContext
+    }
+  }, [authorizationSnapshotPending, teamExpectedContext])
 
   useEffect(() => {
-    ownerExpectedContextRef.current = ownerExpectedContext
-  }, [ownerExpectedContext])
+    if (ownerExpectedContext !== undefined || !authorizationSnapshotPending) {
+      ownerExpectedContextRef.current = ownerExpectedContext
+    }
+  }, [authorizationSnapshotPending, ownerExpectedContext])
 
   useEffect(() => {
-    memberExpectedContextRef.current = memberExpectedContext
-  }, [memberExpectedContext])
+    if (memberExpectedContext !== undefined || !authorizationSnapshotPending) {
+      memberExpectedContextRef.current = memberExpectedContext
+    }
+  }, [authorizationSnapshotPending, memberExpectedContext])
 
   useEffect(() => {
-    ownerAuthorizationContextRef.current = ownerAuthorizationContext
-  }, [ownerAuthorizationContext])
+    if (ownerAuthorizationContext !== undefined || !authorizationSnapshotPending) {
+      ownerAuthorizationContextRef.current = ownerAuthorizationContext
+    }
+  }, [authorizationSnapshotPending, ownerAuthorizationContext])
 
   useEffect(() => {
-    memberAuthorizationContextRef.current = memberAuthorizationContext
-  }, [memberAuthorizationContext])
+    if (memberAuthorizationContext !== undefined || !authorizationSnapshotPending) {
+      memberAuthorizationContextRef.current = memberAuthorizationContext
+    }
+  }, [authorizationSnapshotPending, memberAuthorizationContext])
 
   useEffect(() => {
     if (!authorizationSnapshotPending && inviteDraft !== undefined && activeInviteDraft === undefined) closeInviteDraft()
@@ -805,6 +898,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [])
 
   const clearTeamProjection = useCallback(() => {
+    oauthOperationEpoch.current += 1
+    oauthStartLocked.current = false
+    oauthTransitionLocked.current = false
+    pendingBrowserAuthorizationActive.current = false
+    clearOAuthPresentation()
     teamExpectedContextRef.current = undefined
     ownerExpectedContextRef.current = undefined
     memberExpectedContextRef.current = undefined
@@ -812,6 +910,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     memberAuthorizationContextRef.current = undefined
     setAuthorizationSnapshotReady(false)
     setAuthorizationSnapshotPending(false)
+    setOverviewSnapshotRequestId(0)
     inviteCreationPresentationId.current += 1
     setOverview(undefined)
     clearUsage()
@@ -838,7 +937,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     setTeamMenuOpen(false)
     previewRequestId.current += 1
     setInvitePreview(undefined)
-  }, [clearUsage])
+  }, [clearOAuthPresentation, clearUsage])
 
   const applyManagementStatus = useCallback((nextStatus: TeamManagementStatus): TeamStatusDisposition => {
     setStatus(nextStatus)
@@ -858,13 +957,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [clearTeamProjection])
 
   const refreshStatusOnly = useCallback(async (): Promise<TeamStatusDisposition> => {
-    teamExpectedContextRef.current = undefined
-    ownerExpectedContextRef.current = undefined
-    memberExpectedContextRef.current = undefined
-    ownerAuthorizationContextRef.current = undefined
-    memberAuthorizationContextRef.current = undefined
-    setAuthorizationSnapshotReady(false)
     setAuthorizationSnapshotPending(true)
+    setAuthorizationSnapshotReady(false)
     try {
       return applyManagementStatus(await api.status())
     } finally {
@@ -899,13 +993,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
   const refresh = useCallback(async (showLoading = false): Promise<TeamRefreshSnapshot | undefined> => {
     const requestId = ++overviewRequestId.current
-    teamExpectedContextRef.current = undefined
-    ownerExpectedContextRef.current = undefined
-    memberExpectedContextRef.current = undefined
-    ownerAuthorizationContextRef.current = undefined
-    memberAuthorizationContextRef.current = undefined
-    setAuthorizationSnapshotReady(false)
     setAuthorizationSnapshotPending(true)
+    setAuthorizationSnapshotReady(false)
     if (showLoading) setLoading(true)
     try {
       const nextStatus = await api.status()
@@ -925,9 +1014,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         memberExpectedContextRef.current = projectedOverview.viewerRole === 'member' ? nextExpectedContext : undefined
         ownerAuthorizationContextRef.current = createOwnerAuthorizationContext(nextStatus, projectedOverview)
         memberAuthorizationContextRef.current = createMemberAuthorizationContext(nextStatus, projectedOverview)
+        pendingBrowserAuthorizationActive.current = projectedOverview.pendingBrowserAuthorization !== undefined
         setOverview(projectedOverview)
+        setOverviewSnapshotRequestId(requestId)
         setAuthorizationSnapshotReady(true)
         setAuthorizationSnapshotPending(false)
+        setOAuthRefreshUnavailable(false)
         setConnectionIssue(undefined)
       } catch (cause: unknown) {
         if (requestId !== overviewRequestId.current) return
@@ -942,6 +1034,21 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           }
         }
         if (requestId !== overviewRequestId.current) return
+        if (oauthPresentationActive.current || pendingBrowserAuthorizationActive.current) {
+          setAuthorizationSnapshotReady(true)
+          setAuthorizationSnapshotPending(false)
+          setOAuthRefreshUnavailable(true)
+          setConnectionIssue(undefined)
+          setError(undefined)
+          return
+        }
+        teamExpectedContextRef.current = undefined
+        ownerExpectedContextRef.current = undefined
+        memberExpectedContextRef.current = undefined
+        ownerAuthorizationContextRef.current = undefined
+        memberAuthorizationContextRef.current = undefined
+        pendingBrowserAuthorizationActive.current = false
+        setAuthorizationSnapshotReady(false)
         setOverview(undefined)
         setAuthorizationSnapshotPending(false)
         clearUsage()
@@ -960,6 +1067,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     } catch (cause: unknown) {
       if (requestId !== overviewRequestId.current) return
       setAuthorizationSnapshotPending(false)
+      if (oauthPresentationActive.current || pendingBrowserAuthorizationActive.current) {
+        setAuthorizationSnapshotReady(true)
+        setOAuthRefreshUnavailable(true)
+        setConnectionIssue(undefined)
+        setError(undefined)
+        return
+      }
+      teamExpectedContextRef.current = undefined
+      ownerExpectedContextRef.current = undefined
+      memberExpectedContextRef.current = undefined
+      ownerAuthorizationContextRef.current = undefined
+      memberAuthorizationContextRef.current = undefined
+      setAuthorizationSnapshotReady(false)
       setError(errorMessage(cause, t('requestFailed')))
     } finally {
       if (requestId === overviewRequestId.current) setLoading(false)
@@ -975,18 +1095,48 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [refreshLocalProfiles])
 
   const hasAuthorizingAccount = overview?.contributions.some(account => account.status === 'authorizing') ?? false
+  const shouldPollBrowserAuthorization = hasAuthorizingAccount || activeBrowserAuthorization !== undefined
   useEffect(() => {
-    if (!hasAuthorizingAccount) return
-    const timer = globalThis.setInterval(() => { void refresh(false) }, AUTHORIZATION_POLL_MS)
-    return () => { globalThis.clearInterval(timer) }
-  }, [hasAuthorizingAccount, refresh])
+    if (!shouldPollBrowserAuthorization) return
+    let disposed = false
+    let timer: ReturnType<typeof globalThis.setTimeout> | undefined
+    const poll = async () => {
+      await refresh(false)
+      if (!disposed) timer = globalThis.setTimeout(() => { void poll() }, AUTHORIZATION_POLL_MS)
+    }
+    timer = globalThis.setTimeout(() => { void poll() }, AUTHORIZATION_POLL_MS)
+    return () => {
+      disposed = true
+      if (timer !== undefined) globalThis.clearTimeout(timer)
+    }
+  }, [refresh, shouldPollBrowserAuthorization])
 
   useEffect(() => {
-    if (busy !== undefined || oauth === undefined || overview === undefined) return
+    if (
+      oauth === undefined
+      || overview === undefined
+      || overviewSnapshotRequestId <= oauthPresentedAfterRequestId.current
+      || oauthTransitionLocked.current
+    ) return
+    const expectedContext = oauthExpectedContext.current
+    const actualContext = createTeamExpectedContext(status, overview)
+    const returnSelection = oauthReturnSelection.current
+    if (!isSameTeamExpectedContext(expectedContext, actualContext)) {
+      if (returnSelection !== undefined) setSelectedAccountId(returnSelection)
+      clearOAuthPresentation()
+      setTeamContextChanged(true)
+      return
+    }
     const account = overview.contributions.find(item => item.id === oauth.account.id)
-    if (account === undefined || account.status === 'authorizing') return
+    if (account?.status === 'authorizing') return
+    if (account?.status === 'active') {
+      setSelectedAccountId(contributionSelectionKey(account.id))
+    } else if (returnSelection !== undefined) {
+      setSelectedAccountId(returnSelection)
+    }
     clearOAuthPresentation()
-  }, [busy, clearOAuthPresentation, oauth, overview])
+    if (account === undefined) setError(t('browserAuthorizationEnded'))
+  }, [clearOAuthPresentation, oauth, overview, overviewSnapshotRequestId, status, t])
 
   useEffect(() => {
     if (overview === undefined) return
@@ -1046,13 +1196,24 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     method: TeamOAuthMethod,
     busyName: string,
     request: () => Promise<TeamManagementOAuthResult>,
+    expectedContext: TeamManagementExpectedContext,
     discardInitial: boolean,
     onPresented?: () => void,
   ): Promise<void> => {
-    if (!mounted.current || oauthStartLocked.current || oauthTransitionLocked.current) return Promise.resolve()
+    const remoteAuthorizationActive = overview?.contributions.some(account => account.status === 'authorizing') ?? false
+    if (
+      !mounted.current
+      || oauth !== undefined
+      || remoteAuthorizationActive
+      || oauthPresentationActive.current
+      || oauthStartLocked.current
+      || oauthTransitionLocked.current
+    ) return Promise.resolve()
 
     oauthStartLocked.current = true
     const epoch = ++oauthOperationEpoch.current
+    oauthReturnSelection.current = selectedAccountId
+    oauthExpectedContext.current = expectedContext
     let pendingPopup: Window | null = null
     if (method === 'browser') {
       try {
@@ -1066,6 +1227,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         pendingPopup?.close()
         if (oauthPopup.current === pendingPopup) oauthPopup.current = null
         oauthStartLocked.current = false
+        clearOAuthPresentation()
         if (isCurrentOAuthOperation(epoch)) setError(t('browserPopupOpenFailed'))
         return Promise.resolve()
       }
@@ -1075,6 +1237,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       try {
         const challenge = await request()
         if (!isCurrentOAuthOperation(epoch)) return
+        oauthPresentationActive.current = true
+        oauthPresentedAfterRequestId.current = overviewRequestId.current
         setOAuth(challenge)
         setOAuthDiscardInitial(discardInitial)
         setOAuthNavigationBlocked(false)
@@ -1096,18 +1260,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           pendingPopup?.close()
           if (oauthPopup.current === pendingPopup) oauthPopup.current = null
         }
-        await refresh(false)
+        void refresh(false)
       } catch (cause: unknown) {
         if (isCurrentOAuthOperation(epoch) && pendingPopup !== null) {
           pendingPopup.close()
           if (oauthPopup.current === pendingPopup) oauthPopup.current = null
         }
+        if (isCurrentOAuthOperation(epoch)) clearOAuthPresentation()
         throw cause
       }
     }).finally(() => {
       if (oauthOperationEpoch.current === epoch) oauthStartLocked.current = false
     })
-  }, [isCurrentOAuthOperation, refresh, run, t])
+  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauth, overview, refresh, run, selectedAccountId, t])
 
   const startBrowserOAuth = useCallback((
     label: string,
@@ -1124,6 +1289,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       async () => sourceLocalProfileId === undefined
         ? await api.startOAuth(label.trim(), expectedContext, 'browser')
         : await api.startOAuth(label.trim(), expectedContext, 'browser', sourceLocalProfileId),
+      expectedContext,
       true,
       onPresented,
     )
@@ -1136,85 +1302,61 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       method,
       `reauthorize-${accountId}`,
       async () => await api.reauthorizeOAuth(accountId, expectedContext, method),
+      expectedContext,
       false,
     )
   }, [presentOAuth])
 
-  const cancelPresentedOAuth = useCallback((accountId: string, discardInitial = oauthDiscardInitial): Promise<void> => {
+  const cancelPresentedOAuth = useCallback((
+    accountId: string,
+    expectedContext = oauthExpectedContext.current,
+    discardInitial = oauthDiscardInitial,
+    returnSelection = oauthReturnSelection.current,
+  ): Promise<void> => {
     if (!mounted.current || oauthTransitionLocked.current) return Promise.resolve()
-    const expectedContext = teamExpectedContextRef.current
     if (expectedContext === undefined) return Promise.resolve()
     oauthTransitionLocked.current = true
     const epoch = ++oauthOperationEpoch.current
     oauthStartLocked.current = false
     return run(`oauth-cancel-${accountId}`, async () => {
-      await api.cancelOAuth(accountId, expectedContext, discardInitial)
-      if (!isCurrentOAuthOperation(epoch)) return
-      clearOAuthPresentation()
-      await refresh(false)
-    }).finally(() => {
-      if (oauthOperationEpoch.current === epoch) oauthTransitionLocked.current = false
-    })
-  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauthDiscardInitial, refresh, run])
-
-  const switchOAuthToDeviceCode = useCallback((accountId: string): Promise<void> => {
-    if (!mounted.current || oauthTransitionLocked.current) return Promise.resolve()
-    const expectedContext = teamExpectedContextRef.current
-    if (expectedContext === undefined) return Promise.resolve()
-    oauthTransitionLocked.current = true
-    const epoch = ++oauthOperationEpoch.current
-    oauthStartLocked.current = false
-    const discardInitial = oauthDiscardInitial
-    return run(`oauth-device-${accountId}`, async () => {
-      const cancelled = await api.cancelOAuth(accountId, expectedContext, false)
-      if (!isCurrentOAuthOperation(epoch)) return
-      if (cancelled.account.status !== 'reauth_required') {
-        clearOAuthPresentation()
-        await refresh(false)
-        return
-      }
-      oauthPopup.current?.close()
-      oauthPopup.current = null
-      setOAuth(undefined)
-      setOAuthNavigationBlocked(false)
+      let cancelled: Awaited<ReturnType<typeof api.cancelOAuth>>
       try {
-        const challenge = await api.reauthorizeOAuth(accountId, expectedContext, 'device_code')
-        if (!isCurrentOAuthOperation(epoch)) return
-        setOAuth(challenge)
-        setOAuthDiscardInitial(discardInitial)
-        await refresh(false)
+        cancelled = await api.cancelOAuth(accountId, expectedContext, discardInitial)
       } catch (cause: unknown) {
-        await api.cancelOAuth(accountId, expectedContext, discardInitial).catch(() => {})
-        if (isCurrentOAuthOperation(epoch)) {
-          clearOAuthPresentation()
-          await refresh(false)
-        }
-        throw cause
+        if (!isTeamContextMismatch(cause)) throw cause
+        const snapshot = await refresh(false)
+        if (!isCurrentOAuthOperation(epoch)) return
+        if (returnSelection !== undefined) setSelectedAccountId(returnSelection)
+        clearOAuthPresentation()
+        if (snapshot !== undefined) setTeamContextChanged(true)
+        else setError(t('teamContextChangedHint'))
+        return
       }
+      if (!isCurrentOAuthOperation(epoch)) return
+      const snapshot = await refresh(false)
+      if (!isCurrentOAuthOperation(epoch)) return
+      const refreshedAccount = snapshot?.overview.contributions.find(account => account.id === accountId)
+      if (cancelled.account.status === 'active' || refreshedAccount?.status === 'active') {
+        setSelectedAccountId(contributionSelectionKey(accountId))
+      } else if (returnSelection !== undefined) {
+        setSelectedAccountId(returnSelection)
+      }
+      if (snapshot === undefined || isSameTeamExpectedContext(
+        expectedContext,
+        createTeamExpectedContext(snapshot.status, snapshot.overview),
+      )) {
+        pendingBrowserAuthorizationActive.current = false
+        setOverview(current => current === undefined
+          ? current
+          : reconcileCancelledBrowserAuthorization(current, refreshedAccount ?? cancelled.account))
+      } else {
+        setTeamContextChanged(true)
+      }
+      clearOAuthPresentation()
     }).finally(() => {
       if (oauthOperationEpoch.current === epoch) oauthTransitionLocked.current = false
     })
-  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauthDiscardInitial, refresh, run])
-
-  const reopenBrowserOAuth = useCallback((authorizationUrl: string) => {
-    let nextPopup: Window | null = null
-    try {
-      nextPopup = window.open('about:blank', '_blank')
-      if (nextPopup === null) {
-        setOAuthNavigationBlocked(true)
-        return
-      }
-      nextPopup.opener = null
-      nextPopup.location.replace(authorizationUrl)
-      oauthPopup.current?.close()
-      oauthPopup.current = nextPopup
-      setOAuthNavigationBlocked(false)
-    } catch {
-      nextPopup?.close()
-      if (oauthPopup.current === nextPopup) oauthPopup.current = null
-      setOAuthNavigationBlocked(true)
-    }
-  }, [])
+  }, [clearOAuthPresentation, isCurrentOAuthOperation, oauthDiscardInitial, refresh, run, t])
 
   const members = useMemo(() => new Map(overview?.members.map(member => [member.id, member]) ?? []), [overview])
   const currentMember = overview?.currentMember
@@ -1914,6 +2056,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             )}
             {contributionHint === undefined ? null : <p>{contributionHint}</p>}
           </section>
+          {usageUnavailable ? (
+            <div className={styles.accountUsageWarning} role="alert">
+              <span>{t('usageUnavailableTitle')}</span>
+              <Button size="sm" variant="outline" disabled={usageLoading} onClick={() => { void refreshUsage() }}>{t('retry')}</Button>
+            </div>
+          ) : null}
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
             <dl className={styles.compactSummaryList}>
@@ -2043,7 +2191,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 ? <span className={`${styles.skeletonBlock} ${styles.directoryCountSkeleton}`} aria-hidden="true" />
                 : <span className={styles.directoryTitleCount}>{t('accountsCount', { count: accountCount })}</span>}
             </h3>
-            <Button className={styles.addAccountButton} size="sm" variant="outline" icon={<IconPlusOutline16 />} onClick={() => {
+            <Button className={styles.addAccountButton} size="sm" variant="outline" icon={<IconPlusOutline16 />} disabled={busy !== undefined || activeBrowserAuthorization !== undefined || oauth !== undefined || hasAuthorizingAccount} onClick={() => {
               setAccountLabel('')
               setAddAccountOpen(true)
             }}>{t('addAccount')}</Button>
@@ -2089,22 +2237,34 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             : null}
         </aside>
         <div className={styles.accountDetail} role="region" aria-label={t('accountDetails')}>
-          {oauth?.method === 'browser'
+          {activeBrowserAuthorization !== undefined
             ? <section className={styles.oauthInlinePanel} role="region" aria-labelledby="team-browser-authorization-title">
-                <div className={styles.oauthInlineStatus} role="status" aria-live="polite">
-                  <span className={styles.actionSpinner} aria-hidden="true" />
-                  <div>
-                    <h2 id="team-browser-authorization-title">{t('browserAuthorizationTitle')}</h2>
-                    <p>{t('browserAuthorizationHint')}</p>
+                <div className={styles.oauthInlineHeader}>
+                  <div className={styles.oauthInlineStatus} role="status" aria-live="polite">
+                    <span className={styles.actionSpinner} aria-hidden="true" />
+                    <div>
+                      <h2 id="team-browser-authorization-title">{t('browserAuthorizationTitle')}</h2>
+                      <p>{t('browserAuthorizationHint')}</p>
+                    </div>
                   </div>
+                  <Button
+                    className={styles.oauthCancelButton}
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy === `oauth-cancel-${activeBrowserAuthorization.accountId}`}
+                    onClick={() => {
+                      void cancelPresentedOAuth(
+                        activeBrowserAuthorization.accountId,
+                        activeBrowserAuthorization.expectedContext,
+                        activeBrowserAuthorization.discardInitial,
+                        activeBrowserAuthorization.returnSelection,
+                      )
+                    }}
+                  >{t('cancelAuthorization')}</Button>
                 </div>
                 {oauthNavigationBlocked ? <p className={styles.oauthInlineWarning} role="alert">{t('browserPopupBlocked')}</p> : null}
-                <p className={styles.oauthInlineExpiry}>{t('expiresAt', { time: formatTime(oauth.expiresAt) })}</p>
-                <div className={styles.oauthInlineActions}>
-                  <Button size="sm" variant="outline" disabled={busy !== undefined} onClick={() => { reopenBrowserOAuth(oauth.authorizationUrl) }}>{t('openProvider')}</Button>
-                  <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void switchOAuthToDeviceCode(oauth.account.id) }}>{t('useDeviceCode')}</Button>
-                  <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void cancelPresentedOAuth(oauth.account.id) }}>{t('cancelAuthorization')}</Button>
-                </div>
+                {oauthRefreshUnavailable ? <p className={styles.oauthInlineWarning} role="alert">{t('browserAuthorizationRefreshFailed')}</p> : null}
+                <p className={styles.oauthInlineExpiry}>{t('expiresAt', { time: formatTime(activeBrowserAuthorization.expiresAt) })}</p>
               </section>
             : selectedAccount === undefined
             ? localProfilesLoading

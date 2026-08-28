@@ -913,8 +913,17 @@
   background: color-mix(in srgb, var(--team-blue-strong) 3%, var(--team-workspace-layer));
 }
 
+.oauthInlineHeader {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+}
+
 .oauthInlineStatus {
   display: flex;
+  min-width: 0;
   max-width: 560px;
   align-items: flex-start;
   gap: 12px;
@@ -956,10 +965,9 @@
   color: var(--team-faint);
 }
 
-.oauthInlineActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.oauthCancelButton {
+  align-self: start;
+  white-space: nowrap;
 }
 
 .accountDetail .accountCard {
@@ -2041,6 +2049,25 @@
 .page .stopSharingButton:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--team-red) 78%, var(--team-line));
   background: color-mix(in srgb, var(--team-red) 10%, transparent);
+}
+
+.accountUsageWarning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+  border-left: 2px solid var(--team-amber);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--team-amber) 6%, var(--team-workspace-layer));
+  color: var(--team-amber);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.accountUsageWarning > button {
+  flex: 0 0 auto;
 }
 
 .capacityOverview {

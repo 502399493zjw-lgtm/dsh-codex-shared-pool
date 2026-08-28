@@ -161,6 +161,18 @@ export interface TeamManagementContributionResult {
   readonly account: TeamManagementContributionSummary
 }
 
+/**
+ * Minimum Browser-safe projection of a Host-owned browser OAuth operation.
+ * Provider URLs, handoff material, session identifiers, and credentials stay
+ * private to the local Host process.
+ */
+export interface TeamManagementPendingBrowserAuthorization {
+  readonly accountId: string
+  readonly method: 'browser'
+  readonly expiresAt: number
+  readonly discardInitial: boolean
+}
+
 /** Deliberately omits API-key summaries; the Browser never manages raw Team credentials. */
 interface TeamManagementOverviewBase {
   readonly team: TeamSummary
@@ -168,6 +180,7 @@ interface TeamManagementOverviewBase {
   readonly members: readonly TeamManagementMemberSummary[]
   readonly contributions: readonly TeamManagementContributionSummary[]
   readonly activeSharedAccounts: readonly TeamManagementSharedAccountDirectoryEntry[]
+  readonly pendingBrowserAuthorization?: TeamManagementPendingBrowserAuthorization
   readonly displayNameMigrationNotice?: TeamDisplayNameMigrationNotice
   /** Present only for the current Owner or the nominated target while pending. */
   readonly ownershipTransfer?: TeamOwnershipTransferSummary

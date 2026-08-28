@@ -214,6 +214,9 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
     'contributions',
     value => parseContribution(value, currentMember.id),
   ).filter(account => account.ownerMemberId === currentMember.id)
+  const pendingBrowserAuthorization = item.pendingBrowserAuthorization === undefined
+    ? undefined
+    : parsePendingBrowserAuthorization(item.pendingBrowserAuthorization, contributions)
   // Hosts released before the shared-account directory projection omitted this
   // additive field. Keep rolling upgrades usable while still validating every
   // entry once the field is present.
@@ -243,12 +246,38 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
     members: arrayField(item, 'members', parseManagementMember),
     contributions,
     activeSharedAccounts,
+    ...(pendingBrowserAuthorization === undefined ? {} : { pendingBrowserAuthorization }),
     ...(displayNameMigrationNotice === undefined ? {} : { displayNameMigrationNotice }),
     ...(ownershipTransfer === undefined ? {} : { ownershipTransfer }),
   }
   return viewerRole === 'owner'
     ? { viewerRole, ...base, invites: arrayField(item, 'invites', parseInvite) }
     : { viewerRole, ...base }
+}
+
+function parsePendingBrowserAuthorization(
+  value: unknown,
+  contributions: readonly TeamManagementContributionSummary[],
+) {
+  const item = object(value, 'pending browser authorization')
+  exactKeys(
+    item,
+    ['accountId', 'method', 'expiresAt', 'discardInitial'],
+    'pending browser authorization',
+  )
+  const pending = {
+    accountId: stringField(item, 'accountId'),
+    method: unionField(item, 'method', ['browser'] as const),
+    expiresAt: boundedIntegerField(item, 'expiresAt', 0, Number.MAX_SAFE_INTEGER),
+    discardInitial: booleanField(item, 'discardInitial'),
+  }
+  if (!contributions.some(account => (
+    account.id === pending.accountId
+    && account.status === 'authorizing'
+  ))) {
+    throw new Error('pending browser authorization has no matching authorizing account')
+  }
+  return pending
 }
 
 function parseActiveSharedAccount(value: unknown): TeamManagementSharedAccountDirectoryEntry {

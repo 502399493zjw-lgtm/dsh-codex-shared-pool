@@ -185,6 +185,7 @@ describe('Team Settings contribution grouping', () => {
       contribution('mine-active', 'member-1', 'active'),
       contribution('mine-paused', 'member-1', 'paused'),
       contribution('mine-reauth', 'member-1', 'reauth_required'),
+      contribution('mine-authorizing', 'member-1', 'authorizing'),
       contribution('friend-active', 'member-2', 'active'),
       contribution('friend-paused', 'member-2', 'paused'),
       contribution('revoked', 'member-1', 'revoked'),

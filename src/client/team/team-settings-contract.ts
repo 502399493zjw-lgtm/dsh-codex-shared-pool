@@ -40,7 +40,9 @@ export function groupTeamContributions(
   return {
     shared: ownContributions.filter(account => account.status === 'active'),
     unshared: ownContributions.filter(account =>
-      account.status !== 'active' && account.status !== 'revoked'),
+      account.status !== 'active'
+      && account.status !== 'authorizing'
+      && account.status !== 'revoked'),
   }
 }
 

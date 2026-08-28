@@ -68,6 +68,7 @@ import type {
   TeamManagementOverview,
   TeamManagementOwnershipTransferAcceptanceResult,
   TeamManagementOwnershipTransferSummary,
+  TeamManagementPendingBrowserAuthorization,
   TeamManagementStatus,
   TeamManagementSession,
   TeamManagementSharedAccountDirectoryEntry,
@@ -130,6 +131,7 @@ const MAX_LOCAL_BODY_BYTES = 16 * 1024
 const MAX_REMOTE_BODY_BYTES = 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 15_000
 const PENDING_JOIN_REF_SUFFIX = '_PENDING_JOIN'
+const BROWSER_OAUTH_PENDING_REF_SUFFIX = '_BROWSER_OAUTH_PENDING'
 const DISSOLUTION_PENDING_REF_SUFFIX = '_DISSOLUTION_PENDING'
 const DISSOLUTION_TERMINAL_REF_SUFFIX = '_DISSOLUTION_TERMINAL'
 const DISSOLUTION_KEY_DIGEST_REF_SUFFIX = '_DISSOLUTION_KEY_DIGEST'
@@ -139,6 +141,7 @@ const INVITE_PREVIEW_SESSION_TTL_MS = 15 * 60 * 1000
 const MAX_INVITE_PREVIEW_SESSIONS = 64
 const MANAGEMENT_SESSION_TTL_MS = 15 * 60 * 1000
 const MAX_MANAGEMENT_SESSIONS = 64
+const MAX_PENDING_BROWSER_OAUTH_OPERATIONS = 8
 const MANAGEMENT_CAPABILITY_PATTERN = /^dsh_tm_[A-Za-z0-9_-]{43}$/u
 
 interface InvitePreviewSession {
@@ -152,6 +155,17 @@ interface PendingJoinRecord {
   readonly apiKey: string
   readonly inviteToken: string
   readonly displayName: string
+}
+
+/** Browser-safe Host journal used to restore cancellation after an abrupt restart. */
+interface PendingBrowserOAuthRecord {
+  readonly expectedContext: TeamManagementExpectedContext
+  readonly pending: TeamManagementPendingBrowserAuthorization
+}
+
+interface PendingBrowserOAuthJournal {
+  readonly version: 1
+  readonly operations: readonly PendingBrowserOAuthRecord[]
 }
 
 /** Host-only journal. The raw recovery secret must never cross a Browser route. */
@@ -215,6 +229,15 @@ function projectedOAuthRemoteError(error: unknown): Error {
     : new Error(message)
 }
 
+function sameTeamManagementContext(
+  left: Readonly<TeamManagementExpectedContext>,
+  right: Readonly<TeamManagementExpectedContext>,
+): boolean {
+  return left.serverOrigin === right.serverOrigin
+    && left.teamId === right.teamId
+    && left.currentMemberId === right.currentMemberId
+}
+
 type Credentials = Pick<CredentialProvider, 'resolve' | 'describe' | 'set' | 'unset'>
 type LocalProfiles = Pick<OpenAICodexCredentialStore, 'listProfiles' | 'readProfileCredential'>
 
@@ -224,6 +247,10 @@ interface LocalBrowserOAuthOperation {
   /** Abort locally; callers that perform their own remote mutation suppress duplicate cleanup. */
   readonly abort: (reason: Error, suppressAutomaticCleanup?: boolean) => void
   readonly completion: Promise<void>
+  /** Immutable identity verified immediately before the remote OAuth mutation. */
+  readonly expectedContext: Readonly<TeamManagementExpectedContext>
+  /** Safe metadata projected only while the same contribution is authorizing. */
+  readonly pending: TeamManagementPendingBrowserAuthorization
 }
 
 interface LocalAccountValidationIntent {
@@ -504,6 +531,45 @@ function requiredExpectedContext(value: Record<string, unknown>): TeamManagement
     teamId: requiredUnmodifiedString(context, 'teamId'),
     currentMemberId: requiredUnmodifiedString(context, 'currentMemberId'),
   }
+}
+
+function parsePendingBrowserOAuthJournal(value: string): PendingBrowserOAuthJournal {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('pending browser OAuth journal is invalid')
+  }
+  const journal = record(parsed, 'pending browser OAuth journal')
+  exactKeys(journal, ['version', 'operations'])
+  if (journal.version !== 1 || !Array.isArray(journal.operations)) {
+    throw new Error('pending browser OAuth journal is invalid')
+  }
+  if (journal.operations.length > MAX_PENDING_BROWSER_OAUTH_OPERATIONS) {
+    throw new Error('pending browser OAuth journal is invalid')
+  }
+  const identities = new Set<string>()
+  const operations = journal.operations.map((candidate): PendingBrowserOAuthRecord => {
+    const operation = record(candidate, 'pending browser OAuth operation')
+    exactKeys(operation, ['expectedContext', 'pending'])
+    const expectedContext = requiredExpectedContext({ expectedContext: operation.expectedContext })
+    const rawPending = record(operation.pending, 'pending browser OAuth metadata')
+    exactKeys(rawPending, ['accountId', 'method', 'expiresAt', 'discardInitial'])
+    const accountId = requiredUnmodifiedString(rawPending, 'accountId')
+    if (rawPending.method !== 'browser') throw new Error('pending browser OAuth journal is invalid')
+    const expiresAt = requiredInteger(rawPending, 'expiresAt')
+    if (expiresAt < 0 || typeof rawPending.discardInitial !== 'boolean') {
+      throw new Error('pending browser OAuth journal is invalid')
+    }
+    const identity = `${expectedContext.serverOrigin}\u0000${expectedContext.teamId}\u0000${expectedContext.currentMemberId}\u0000${accountId}`
+    if (identities.has(identity)) throw new Error('pending browser OAuth journal is invalid')
+    identities.add(identity)
+    return {
+      expectedContext,
+      pending: { accountId, method: 'browser', expiresAt, discardInitial: rawPending.discardInitial },
+    }
+  })
+  return { version: 1, operations }
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -1185,6 +1251,7 @@ class TeamManagementProxy {
   private readonly localProfiles: LocalProfiles | undefined
   private readonly browserOAuth = new Map<string, LocalBrowserOAuthOperation>()
   private readonly invitePreviewSessions = new Map<string, InvitePreviewSession>()
+  private browserOAuthJournalTransition: Promise<void> = Promise.resolve()
   private credentialTransition: Promise<void> = Promise.resolve()
 
   constructor(
@@ -1233,7 +1300,43 @@ class TeamManagementProxy {
   }
 
   async overview(explicitKey?: string): Promise<TeamManagementOverview> {
-    return projectOverview(await this.remote(TEAM_OVERVIEW_PATH, explicitKey === undefined ? {} : { key: explicitKey }))
+    const overview = projectOverview(
+      await this.remote(TEAM_OVERVIEW_PATH, explicitKey === undefined ? {} : { key: explicitKey }),
+    )
+    const actualContext: TeamManagementExpectedContext = {
+      serverOrigin: new URL(this.requireEnabled()).origin,
+      teamId: overview.team.id,
+      currentMemberId: overview.currentMember.id,
+    }
+    let livePending: TeamManagementPendingBrowserAuthorization | undefined
+    for (const operation of this.browserOAuth.values()) {
+      if (!sameTeamManagementContext(operation.expectedContext, actualContext)) {
+        operation.abort(new TeamManagementContextMismatchError(), false)
+        continue
+      }
+      const account = overview.contributions.find(candidate => candidate.id === operation.pending.accountId)
+      if (account?.status !== 'authorizing') continue
+      livePending ??= operation.pending
+    }
+    const journal = await this.pendingBrowserOAuthJournal()
+    const retained = journal.filter((operation) => {
+      if (!sameTeamManagementContext(operation.expectedContext, actualContext)) return false
+      const account = overview.contributions.find(candidate => candidate.id === operation.pending.accountId)
+      return account === undefined || account.status === 'authorizing'
+    })
+    if (retained.length !== journal.length) {
+      await this.replacePendingBrowserOAuthJournal(retained).catch((error: unknown) => {
+        this.onBackgroundError(new Error('failed to prune stale browser OAuth recovery metadata', { cause: error }))
+      })
+    }
+    const recoveredPending = retained.find((operation) => {
+      const account = overview.contributions.find(candidate => candidate.id === operation.pending.accountId)
+      return account?.status === 'authorizing'
+    })?.pending
+    const pendingBrowserAuthorization = livePending ?? recoveredPending
+    return pendingBrowserAuthorization === undefined
+      ? overview
+      : { ...overview, pendingBrowserAuthorization }
   }
 
   async acknowledgeDisplayNameMigration(
@@ -1703,7 +1806,7 @@ class TeamManagementProxy {
       })
       const item = record(remote, 'OAuth result')
       return method === 'browser'
-        ? await this.beginBrowserOAuth(item, true, key, validationIntent)
+        ? await this.beginBrowserOAuth(item, true, key, expectedContext, validationIntent)
         : this.projectDeviceOAuth(item)
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
@@ -1756,15 +1859,29 @@ class TeamManagementProxy {
     try {
       const key = await this.expectedMutationKey(expectedContext)
       const operation = this.browserOAuth.get(accountId)
-      if (operation !== undefined) {
-        operation.abort(new Error('OpenAI Codex sign-in cancelled'))
-        await operation.completion.catch(() => {})
+      const ownedOperation = operation !== undefined
+        && sameTeamManagementContext(operation.expectedContext, expectedContext)
+        ? operation
+        : undefined
+      const persistedOperation = (await this.pendingBrowserOAuthJournal()).find(candidate => (
+        candidate.pending.accountId === accountId
+        && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+      ))
+      const effectiveDiscardInitial = ownedOperation?.pending.discardInitial
+        ?? persistedOperation?.pending.discardInitial
+        ?? discardInitial
+      if (ownedOperation !== undefined) {
+        ownedOperation.abort(new Error('OpenAI Codex sign-in cancelled'))
+        await ownedOperation.completion.catch(() => {})
       }
       const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
-        method: 'POST', body: { accountId, discardInitial }, key,
+        method: 'POST', body: { accountId, discardInitial: effectiveDiscardInitial }, key,
       }), 'OAuth cancellation')
       const account = projectContribution(item.account)
       if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+      await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
+        this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
+      })
       return { account }
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
@@ -1779,7 +1896,7 @@ class TeamManagementProxy {
     try {
       const key = await this.expectedMutationKey(expectedContext)
       const current = this.browserOAuth.get(accountId)
-      if (current !== undefined) {
+      if (current !== undefined && sameTeamManagementContext(current.expectedContext, expectedContext)) {
         current.abort(new Error('OpenAI Codex sign-in restarted'))
         await current.completion.catch(() => {})
       }
@@ -1788,7 +1905,7 @@ class TeamManagementProxy {
       })
       const item = record(remote, 'OAuth result')
       return method === 'browser'
-        ? await this.beginBrowserOAuth(item, false, key)
+        ? await this.beginBrowserOAuth(item, false, key, expectedContext)
         : this.projectDeviceOAuth(item)
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
@@ -1799,6 +1916,7 @@ class TeamManagementProxy {
     item: Record<string, unknown>,
     discardInitialOnFailure: boolean,
     key: string,
+    expectedContext: TeamManagementExpectedContext,
     validationIntent?: LocalAccountValidationIntent,
   ): Promise<TeamManagementOAuthResult> {
     const account = projectContribution(item.account)
@@ -1816,8 +1934,27 @@ class TeamManagementProxy {
       if (offer.version !== 1) throw new Error('remote Team returned an unsupported OAuth handoff version')
     } catch (error: unknown) {
       if (discardInitialOnFailure) {
-        await this.cancelRemoteOAuthBestEffort(account.id, true, key)
+        await this.cancelRemoteOAuthBestEffort(account.id, true, key, expectedContext)
       }
+      throw error
+    }
+
+    const frozenExpectedContext = Object.freeze({ ...expectedContext })
+    const pending = Object.freeze({
+      accountId: account.id,
+      method: 'browser',
+      expiresAt: offer.expiresAt,
+      discardInitial: discardInitialOnFailure,
+    } satisfies TeamManagementPendingBrowserAuthorization)
+    try {
+      await this.persistPendingBrowserOAuth({ expectedContext: frozenExpectedContext, pending })
+    } catch (error: unknown) {
+      await this.cancelRemoteOAuthBestEffort(
+        account.id,
+        discardInitialOnFailure,
+        key,
+        frozenExpectedContext,
+      )
       throw error
     }
 
@@ -1855,11 +1992,23 @@ class TeamManagementProxy {
     }
 
     let completion!: Promise<void>
-    completion = this.captureAndTransferOAuth(account, offer, interaction, cancellation.signal, key, validationIntent)
+    completion = this.captureAndTransferOAuth(
+      account,
+      offer,
+      interaction,
+      cancellation.signal,
+      frozenExpectedContext,
+      validationIntent,
+    )
       .catch(async (error: unknown) => {
         if (!authorizationSettled) rejectAuthorization(error)
         if (!suppressAutomaticCleanup) {
-          await this.cancelRemoteOAuthBestEffort(account.id, discardInitialOnFailure, key)
+          await this.cancelRemoteOAuthBestEffort(
+            account.id,
+            discardInitialOnFailure,
+            key,
+            frozenExpectedContext,
+          )
           this.onBackgroundError(projectedOAuthRemoteError(error))
         }
         throw error
@@ -1867,7 +2016,7 @@ class TeamManagementProxy {
       .finally(() => {
         if (this.browserOAuth.get(account.id)?.completion === completion) this.browserOAuth.delete(account.id)
       })
-    this.browserOAuth.set(account.id, { abort, completion })
+    this.browserOAuth.set(account.id, { abort, completion, expectedContext: frozenExpectedContext, pending })
     // Completion stays Host-side after the Browser receives and opens this URL.
     completion.catch(() => {})
     return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: offer.expiresAt }
@@ -1878,17 +2027,28 @@ class TeamManagementProxy {
     accountId: string,
     discardInitial: boolean,
     key: string,
-  ): Promise<void> {
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
           method: 'POST', body: { accountId, discardInitial }, key,
         })
-        return
+        await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
+          this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
+        })
+        return true
       } catch (error: unknown) {
-        if (error instanceof RemoteTeamError) return
+        if (
+          error instanceof RemoteTeamError
+          && error.status >= 400
+          && error.status < 500
+          && error.status !== 408
+          && error.status !== 429
+        ) return false
       }
     }
+    return false
   }
 
   private async captureAndTransferOAuth(
@@ -1896,7 +2056,7 @@ class TeamManagementProxy {
     offer: TeamCredentialHandoffOffer,
     interaction: AuthInteraction,
     signal: AbortSignal,
-    key: string,
+    expectedContext: TeamManagementExpectedContext,
     validationIntent?: LocalAccountValidationIntent,
   ): Promise<void> {
     const directory = await mkdtemp(join(this.temporaryRootDir, 'dsh-team-oauth-'))
@@ -1915,13 +2075,15 @@ class TeamManagementProxy {
       if (validationIntent !== undefined && providerAccountId !== validationIntent.expectedProviderAccountId) {
         throw new Error('independently authorized OpenAI account does not match the selected local account')
       }
+      const currentKey = await this.expectedMutationKey(expectedContext)
+      if (signal.aborted) throw abortReason(signal)
       const envelope = sealTeamCredentialHandoff(
         offer,
         { teamId: account.teamId, accountId: account.id },
         { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
       )
       const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
-        method: 'POST', body: { accountId: account.id, envelope }, key,
+        method: 'POST', body: { accountId: account.id, envelope }, key: currentKey,
       }), 'OAuth handoff completion')
       const completedAccount = projectContribution(completed.account)
       if (
@@ -1929,6 +2091,9 @@ class TeamManagementProxy {
         || completedAccount.teamId !== account.teamId
         || completedAccount.status !== 'active'
       ) throw new Error('remote Team returned a mismatched OAuth contribution')
+      await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
+        this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
+      })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
@@ -1994,6 +2159,10 @@ class TeamManagementProxy {
     return credentialRef(this.config.apiKeyRef ?? DEFAULT_TEAM_CLIENT_API_KEY_REF)
   }
 
+  private pendingBrowserOAuthRef(): CredentialRef {
+    return credentialRef(`${String(this.keyRef())}${BROWSER_OAUTH_PENDING_REF_SUFFIX}`)
+  }
+
   private pendingJoinRef(): CredentialRef {
     return credentialRef(`${String(this.keyRef())}${PENDING_JOIN_REF_SUFFIX}`)
   }
@@ -2016,6 +2185,75 @@ class TeamManagementProxy {
 
   private connectionTerminalKeyDigestRef(): CredentialRef {
     return credentialRef(`${String(this.keyRef())}${CONNECTION_TERMINAL_KEY_DIGEST_REF_SUFFIX}`)
+  }
+
+  private async pendingBrowserOAuthJournal(): Promise<readonly PendingBrowserOAuthRecord[]> {
+    const resolved = await this.credentials.resolve(this.pendingBrowserOAuthRef())
+    if (resolved === undefined) return []
+    try {
+      return parsePendingBrowserOAuthJournal(resolved.value).operations
+    } catch (error: unknown) {
+      this.onBackgroundError(new Error('discarded invalid browser OAuth recovery metadata', { cause: error }))
+      await this.credentials.unset(this.pendingBrowserOAuthRef()).catch((unsetError: unknown) => {
+        this.onBackgroundError(new Error('failed to discard invalid browser OAuth recovery metadata', { cause: unsetError }))
+      })
+      return []
+    }
+  }
+
+  private async replacePendingBrowserOAuthJournal(
+    operations: readonly PendingBrowserOAuthRecord[],
+  ): Promise<void> {
+    await this.withBrowserOAuthJournalTransition(async () => {
+      if (operations.length === 0) {
+        if (await this.credentials.resolve(this.pendingBrowserOAuthRef()) !== undefined) {
+          await this.credentials.unset(this.pendingBrowserOAuthRef())
+        }
+        return
+      }
+      await this.credentials.set(this.pendingBrowserOAuthRef(), JSON.stringify({
+        version: 1,
+        operations,
+      } satisfies PendingBrowserOAuthJournal))
+    })
+  }
+
+  private async persistPendingBrowserOAuth(operation: PendingBrowserOAuthRecord): Promise<void> {
+    await this.withBrowserOAuthJournalTransition(async () => {
+      const current = await this.pendingBrowserOAuthJournal()
+      const operations = current.filter(candidate => !(
+        candidate.pending.accountId === operation.pending.accountId
+        && sameTeamManagementContext(candidate.expectedContext, operation.expectedContext)
+      ))
+      if (operations.length >= MAX_PENDING_BROWSER_OAUTH_OPERATIONS) {
+        throw new Error('too many pending browser OAuth operations')
+      }
+      await this.credentials.set(this.pendingBrowserOAuthRef(), JSON.stringify({
+        version: 1,
+        operations: [...operations, operation],
+      } satisfies PendingBrowserOAuthJournal))
+    })
+  }
+
+  private async removePendingBrowserOAuth(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<void> {
+    await this.withBrowserOAuthJournalTransition(async () => {
+      const current = await this.pendingBrowserOAuthJournal()
+      const operations = current.filter(candidate => !(
+        candidate.pending.accountId === accountId
+        && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+      ))
+      if (operations.length === current.length) return
+      if (operations.length === 0) await this.credentials.unset(this.pendingBrowserOAuthRef())
+      else {
+        await this.credentials.set(this.pendingBrowserOAuthRef(), JSON.stringify({
+          version: 1,
+          operations,
+        } satisfies PendingBrowserOAuthJournal))
+      }
+    })
   }
 
   private confirmingDissolution(pending: PendingDissolutionRecord): TeamDissolutionView {
@@ -2451,6 +2689,18 @@ class TeamManagementProxy {
 
   private isMissingRemoteIdentity(error: unknown): boolean {
     return error instanceof RemoteTeamError && (error.status === 401 || error.status === 404)
+  }
+
+  private async withBrowserOAuthJournalTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.browserOAuthJournalTransition
+    let release!: () => void
+    this.browserOAuthJournalTransition = new Promise(resolve => { release = resolve })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
   }
 
   private async withCredentialTransition<T>(operation: () => Promise<T>): Promise<T> {

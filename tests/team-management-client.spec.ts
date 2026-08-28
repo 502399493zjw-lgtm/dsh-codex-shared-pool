@@ -130,6 +130,70 @@ describe('Team management browser API', () => {
     expect(parseTeamManagementOverview(legacy).activeSharedAccounts).toEqual([])
   })
 
+  it('preserves a strict browser-safe pending authorization projection', () => {
+    const parsed = parseTeamManagementOverview({
+      ...overview(),
+      contributions: [{ ...contribution(), status: 'authorizing' }],
+      pendingBrowserAuthorization: {
+        accountId: 'account-1',
+        method: 'browser',
+        expiresAt: 60_000,
+        discardInitial: true,
+      },
+    })
+
+    expect(parsed.pendingBrowserAuthorization).toEqual({
+      accountId: 'account-1',
+      method: 'browser',
+      expiresAt: 60_000,
+      discardInitial: true,
+    })
+  })
+
+  it('rejects secret-bearing pending browser authorization projections', () => {
+    expect(() => parseTeamManagementOverview({
+      ...overview(),
+      contributions: [{ ...contribution(), status: 'authorizing' }],
+      pendingBrowserAuthorization: {
+        accountId: 'account-1',
+        method: 'browser',
+        expiresAt: 60_000,
+        discardInitial: true,
+        refreshToken: 'must-not-cross-the-browser-boundary',
+      },
+    })).toThrow(/pending browser authorization|refreshToken|unexpected/iu)
+  })
+
+  it.each([
+    { accountId: 1, method: 'browser', expiresAt: 60_000, discardInitial: true },
+    { accountId: 'account-1', method: 'device_code', expiresAt: 60_000, discardInitial: true },
+    { accountId: 'account-1', method: 'browser', expiresAt: 'soon', discardInitial: true },
+    { accountId: 'account-1', method: 'browser', expiresAt: 1.5, discardInitial: true },
+    { accountId: 'account-1', method: 'browser', expiresAt: 60_000, discardInitial: 'yes' },
+  ])('rejects malformed pending browser authorization fields', pendingBrowserAuthorization => {
+    expect(() => parseTeamManagementOverview({
+      ...overview(),
+      contributions: [{ ...contribution(), status: 'authorizing' }],
+      pendingBrowserAuthorization,
+    })).toThrow(/accountId|method|expiresAt|discardInitial|pending browser authorization/iu)
+  })
+
+  it.each([
+    { contributions: [{ ...contribution(), status: 'active' }], accountId: 'account-1' },
+    { contributions: [{ ...contribution(), status: 'authorizing' }], accountId: 'account-other' },
+  ])('rejects pending browser authorization without its authorizing account', ({ contributions, accountId }) => {
+    expect(() => parseTeamManagementOverview({
+      ...overview(),
+      contributions,
+      pendingBrowserAuthorization: {
+        accountId,
+        method: 'browser',
+        expiresAt: 60_000,
+        discardInitial: false,
+      },
+    })).toThrow(/pending browser authorization|authorizing account/iu)
+  })
+
   it('rejects private fields in the active shared-account directory', () => {
     expect(() => parseTeamManagementOverview({
       ...overview(),

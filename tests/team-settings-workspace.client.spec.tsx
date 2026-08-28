@@ -76,7 +76,8 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
 
-const NOW = Date.UTC(2026, 7, 21, 12)
+// Keep fixture expirations deterministic and safely ahead of the wall clock.
+const NOW = Date.UTC(2030, 7, 21, 12)
 let oauthPopupReplace: ReturnType<typeof vi.fn>
 let oauthPopupClose: ReturnType<typeof vi.fn>
 
@@ -496,7 +497,20 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('heading', { name: '成员' })).toBeNull()
   })
 
-  it('starts a separate Team account authorization from the post-click account page', async () => {
+  it('keeps browser authorization transient and exposes only cancellation', async () => {
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      const account = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, account],
+      }
+      return {
+        account,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
 
@@ -513,6 +527,14 @@ describe('Team subscription-pool workspace', () => {
     expect(within(waiting).getByRole('status')).toBeDefined()
     expect(waiting.textContent).toContain('请在 OpenAI 窗口完成登录；你可以在这里继续等待或取消。')
     expect(waiting.textContent).not.toContain('一次性加密交接')
+    expect(within(waiting).getAllByRole('button')).toHaveLength(1)
+    expect(within(waiting).getByRole('button', { name: zh.cancelAuthorization })).toBeDefined()
+    expect(within(waiting).queryByRole('button', { name: zh.openProvider })).toBeNull()
+    expect(within(waiting).queryByRole('button', { name: zh.useDeviceCode })).toBeNull()
+    expect(within(settings).queryByText('朋友 Pro')).toBeNull()
+    expect(within(settings).getByRole('button', { name: zh.addAccount })).toHaveProperty('disabled', true)
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
   })
 
@@ -537,32 +559,18 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined()
   })
 
-  it('closes a reopened blank popup when navigation fails', async () => {
-    vi.mocked(window.open).mockReturnValueOnce(null)
-    render(<TeamSettings t={translate} embedded />)
-    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
-
-    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
-    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
-    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
-    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
-    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
-
-    const close = vi.fn()
-    const popup = {
-      location: { replace: () => { throw new Error('navigation blocked') } },
-      close,
-      opener: null,
-    } as unknown as Window
-    vi.mocked(window.open).mockReturnValueOnce(popup)
-    fireEvent.click(within(waiting).getByRole('button', { name: zh.openProvider }))
-
-    expect(close).toHaveBeenCalled()
-    expect(within(waiting).getByRole('alert').textContent).toBe(zh.browserPopupBlocked)
-  })
-
   it('confirms before separately authorizing a signed-in local Codex account for the Team', async () => {
     overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      const account = { ...mine, id: 'oauth-new', label: '本机账号 A', status: 'authorizing' as const }
+      overviewState = { ...overviewState, contributions: [account] }
+      return {
+        account,
+        method: 'browser' as const,
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
     render(<TeamSettings t={translate} embedded />)
 
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
@@ -642,131 +650,31 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
   })
 
-  it('offers device code only as an explicit fallback from browser authorization', async () => {
-    managementApi.cancelOAuth.mockResolvedValueOnce({
-      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
-    })
-    managementApi.reauthorizeOAuth.mockResolvedValueOnce({
-      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
-      method: 'device_code',
-      verificationUrl: 'https://auth.openai.com/device',
-      userCode: 'ABCD-EFGH',
-      expiresAt: NOW + 600_000,
-    })
-    render(<TeamSettings t={translate} embedded />)
-    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
-
-    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
-    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
-    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
-    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
-
-    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
-    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
-
-    await waitFor(() => {
-      expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), false)
-      expect(managementApi.reauthorizeOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), 'device_code')
-    })
-    expect(await screen.findByRole('dialog', { name: zh.deviceTitle })).toBeDefined()
-    expect(screen.getByText('ABCD-EFGH')).toBeDefined()
-  })
-
-  it('does not restart authorization when browser sign-in completes while switching to device code', async () => {
-    managementApi.cancelOAuth.mockResolvedValueOnce({
-      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'active' },
-    })
-    render(<TeamSettings t={translate} embedded />)
-    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
-
-    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
-    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
-    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
-    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
-
-    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
-    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
-
-    await waitFor(() => {
-      expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), false)
-    })
-    expect(managementApi.reauthorizeOAuth).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
-    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
-  })
-
-  it('discards a new placeholder if the device-code fallback fails to start', async () => {
-    managementApi.cancelOAuth
-      .mockResolvedValueOnce({
-        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
-      })
-      .mockResolvedValueOnce({
-        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'revoked' },
-      })
-    managementApi.reauthorizeOAuth.mockRejectedValueOnce(new Error('device fallback unavailable'))
-    render(<TeamSettings t={translate} embedded />)
-    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
-
-    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
-    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
-    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
-    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
-
-    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
-    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
-
-    await waitFor(() => {
-      expect(managementApi.cancelOAuth).toHaveBeenNthCalledWith(1, 'oauth-new', expectedContext(), false)
-      expect(managementApi.cancelOAuth).toHaveBeenNthCalledWith(2, 'oauth-new', expectedContext(), true)
-    })
-    expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
-    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
-  })
-
-  it('keeps the device challenge visible when a status refresh is still authorizing', async () => {
-    managementApi.cancelOAuth.mockResolvedValueOnce({
-      account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'reauth_required' },
-    })
-    managementApi.reauthorizeOAuth.mockImplementationOnce(async () => {
+  it('discards a newly-added placeholder and restores the prior account after cancellation', async () => {
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      const account = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
       overviewState = {
         ...overviewState,
-        contributions: [
-          ...overviewState.contributions,
-          { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
-        ],
+        contributions: [...overviewState.contributions, account],
       }
       return {
-        account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' },
-        method: 'device_code',
-        verificationUrl: 'https://auth.openai.com/device',
-        userCode: 'ABCD-EFGH',
+        account,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
         expiresAt: NOW + 600_000,
       }
     })
-    render(<TeamSettings t={translate} embedded />)
-    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
-
-    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
-    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
-    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
-    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
-    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
-    fireEvent.click(within(waiting).getByRole('button', { name: '使用设备码' }))
-
-    const deviceDialog = await screen.findByRole('dialog', { name: zh.deviceTitle })
-    const overviewCallsBeforeRefresh = managementApi.overview.mock.calls.length
-    fireEvent.click(within(deviceDialog).getByRole('button', { name: zh.checkAuthorization }))
-
-    await waitFor(() => {
-      expect(managementApi.overview.mock.calls.length).toBeGreaterThan(overviewCallsBeforeRefresh)
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: overviewState.contributions.filter((account: any) => account.id !== 'oauth-new'),
+      }
+      return { account: { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'revoked' as const } }
     })
-    expect(screen.getByRole('dialog', { name: zh.deviceTitle })).toBeDefined()
-    expect(screen.getByText('ABCD-EFGH')).toBeDefined()
-  })
-
-  it('discards a newly-added placeholder account when browser authorization is cancelled', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: `${paused.label} · ${zh.paused}` }))
+    expect(within(settings).getByRole('heading', { name: paused.label })).toBeDefined()
     fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
     const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
     fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
@@ -779,6 +687,407 @@ describe('Team subscription-pool workspace', () => {
       expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true)
     })
     expect(oauthPopupClose).toHaveBeenCalled()
+    expect(within(settings).getByRole('heading', { name: paused.label })).toBeDefined()
+    expect(within(settings).getByRole('button', { name: `${paused.label} · ${zh.paused}` }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(settings).queryByText('朋友 Pro')).toBeNull()
+  })
+
+  it('keeps a completed account selected when cancellation races with browser completion', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    const active = { ...authorizing, status: 'active' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: overviewState.contributions.map((account: any) => account.id === active.id ? active : account),
+      }
+      return { account: active }
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }))
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+      expect(within(panel).getByRole('heading', { name: active.label })).toBeDefined()
+    })
+    expect(within(panel).getByRole('button', { name: `${active.label} · ${zh.contributedByMe}` }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('selects the real account automatically when browser authorization completes', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+
+    overviewState = {
+      ...overviewState,
+      contributions: overviewState.contributions.map((account: any) =>
+        account.id === authorizing.id ? { ...account, status: 'active' as const } : account),
+    }
+    const settings = await openTeamSettings('usage')
+    const callsBeforeRefresh = managementApi.overview.mock.calls.length
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    await waitFor(() => {
+      expect(managementApi.overview.mock.calls.length).toBeGreaterThan(callsBeforeRefresh)
+    })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+      expect(screen.getByRole('heading', { name: '朋友 Pro' })).toBeDefined()
+    })
+  })
+
+  it('captures the return selection before a slow browser authorization request begins', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    let resolveOAuth!: (value: any) => void
+    managementApi.startOAuth.mockImplementationOnce(() => new Promise(resolve => { resolveOAuth = resolve }))
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: overviewState.contributions.filter((account: any) => account.id !== authorizing.id),
+      }
+      return { account: { ...authorizing, status: 'revoked' as const } }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }))
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    await waitFor(() => { expect(managementApi.startOAuth).toHaveBeenCalledTimes(1) })
+    fireEvent.click(within(panel).getByRole('button', { name: `${mine.label} · ${zh.contributedByMe}` }))
+    overviewState = { ...overviewState, contributions: [...overviewState.contributions, authorizing] }
+    await act(async () => {
+      resolveOAuth({
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      })
+    })
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    await waitFor(() => { expect(within(waiting).getByRole('button', { name: zh.cancelAuthorization })).not.toHaveProperty('disabled', true) })
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }).getAttribute('aria-pressed')).toBe('true')
+    })
+  })
+
+  it('keeps cancellation actionable while the first authorization refresh is still in flight', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    let resolveOverview!: (value: any) => void
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = { ...overviewState, contributions: [...overviewState.contributions, authorizing] }
+      managementApi.overview.mockImplementationOnce(() => new Promise(resolve => { resolveOverview = resolve }))
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    const cancel = within(waiting).getByRole('button', { name: zh.cancelAuthorization })
+    expect(cancel).not.toHaveProperty('disabled', true)
+    fireEvent.click(cancel)
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith(authorizing.id, expectedContext(), true)
+    })
+    await act(async () => { resolveOverview(overviewState) })
+  })
+
+  it('ends browser waiting safely when the first post-challenge snapshot has no placeholder', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockResolvedValueOnce({
+      account: authorizing,
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: NOW + 600_000,
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }))
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    expect(await screen.findByText('授权未完成，请重试。')).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a safe cancel path when the post-challenge overview refresh fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      managementApi.overview.mockRejectedValueOnce(new Error('temporary overview failure'))
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(await within(waiting).findByText('暂时无法刷新授权状态；你仍可取消本次授权。')).toBeDefined()
+    const cancel = within(waiting).getByRole('button', { name: zh.cancelAuthorization })
+    expect(cancel).not.toHaveProperty('disabled', true)
+    fireEvent.click(cancel)
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith(authorizing.id, expectedContext(), true)
+    })
+  })
+
+  it('keeps polling after the first post-challenge overview refresh fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      managementApi.overview.mockRejectedValueOnce(new Error('temporary overview failure'))
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: authorizing.label } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(await within(waiting).findByText('暂时无法刷新授权状态；你仍可取消本次授权。')).toBeDefined()
+
+    const active = { ...authorizing, status: 'active' as const }
+    overviewState = {
+      ...overviewState,
+      contributions: [...overviewState.contributions, active],
+      activeSharedAccounts: [
+        ...overviewState.activeSharedAccounts,
+        { id: active.id, ownerMemberId: active.ownerMemberId, label: active.label, status: active.status },
+      ],
+    }
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+      expect(within(panel).getByRole('heading', { name: active.label })).toBeDefined()
+    }, { timeout: 3_500 })
+    expect(managementApi.overview.mock.calls.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('clears stale browser authorization projection when cancel succeeds but refresh fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+        pendingBrowserAuthorization: {
+          accountId: authorizing.id,
+          method: 'browser',
+          expiresAt: NOW + 600_000,
+          discardInitial: true,
+        },
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      managementApi.overview.mockRejectedValueOnce(new Error('temporary overview failure after cancel'))
+      return { account: { ...authorizing, status: 'revoked' as const } }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }))
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: authorizing.label } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith(authorizing.id, expectedContext(), true)
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    })
+    expect(within(panel).getByRole('button', { name: zh.addAccount })).not.toHaveProperty('disabled', true)
+    expect(within(panel).getByRole('button', { name: `${paused.label} · ${zh.paused}` }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(panel).queryByText(authorizing.label)).toBeNull()
+  })
+
+  it('clears an old browser presentation when the refreshed Team identity changes', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      switchToSecondOwnerTeam()
+      overviewState = { ...overviewState, team: { ...overviewState.team, name: '另一个团队' } }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+      expect(screen.getByText('另一个团队')).toBeDefined()
+    })
+    expect(oauthPopupClose).toHaveBeenCalled()
+    expect(managementApi.cancelOAuth).not.toHaveBeenCalled()
+  })
+
+  it('clears browser authorization when cancellation discovers a different Team context', async () => {
+    const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+        pendingBrowserAuthorization: {
+          accountId: authorizing.id,
+          method: 'browser',
+          expiresAt: NOW + 600_000,
+          discardInitial: true,
+        },
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      switchToSecondOwnerTeam()
+      const { pendingBrowserAuthorization: _pendingBrowserAuthorization, ...nextOverview } = overviewState
+      overviewState = { ...nextOverview, team: { ...nextOverview.team, name: '另一个团队' } }
+      throw Object.assign(
+        new Error('Team connection changed; refresh before trying again'),
+        { status: 409 },
+      )
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: authorizing.label } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+      expect(screen.getByText('另一个团队')).toBeDefined()
+      expect(screen.getByText('Team 已更新，请重新确认后继续。')).toBeDefined()
+    })
+    expect(managementApi.cancelOAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('rehydrates a server-owned browser authorization after remount and exposes only cancellation', async () => {
+    const authorizing = { ...mine, id: 'oauth-existing', label: '朋友 Pro', status: 'authorizing' as const }
+    overviewState = {
+      ...overviewState,
+      contributions: [...overviewState.contributions, authorizing],
+      pendingBrowserAuthorization: {
+        accountId: authorizing.id,
+        method: 'browser',
+        expiresAt: NOW + 600_000,
+        discardInitial: true,
+      },
+    }
+    managementApi.cancelOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: overviewState.contributions.filter((account: any) => account.id !== authorizing.id),
+      }
+      delete overviewState.pendingBrowserAuthorization
+      return { account: { ...authorizing, status: 'revoked' as const } }
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(within(waiting).getAllByRole('button')).toHaveLength(1)
+    expect(within(panel).queryByText(authorizing.label)).toBeNull()
+    expect(within(panel).getByRole('button', { name: zh.addAccount })).toHaveProperty('disabled', true)
+    fireEvent.click(within(waiting).getByRole('button', { name: zh.cancelAuthorization }))
+
+    await waitFor(() => {
+      expect(managementApi.cancelOAuth).toHaveBeenCalledWith(authorizing.id, expectedContext(), true)
+    })
   })
 
   it('shows a safe action-oriented message when Team authorization cannot reach OpenAI', async () => {
@@ -896,7 +1205,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(details).queryByRole('button', { name: zh.recentRequests })).toBeNull()
   })
 
-  it('keeps paused, authorizing, and reauthorization statuses distinct', async () => {
+  it('keeps authorizing accounts out of the stable directory while preserving actionable statuses', async () => {
     const authorizing = { ...mine, id: 'mine-authorizing', label: '授权中账号', status: 'authorizing' as const }
     const reauthRequired = { ...mine, id: 'mine-reauth', label: '待登录账号', status: 'reauth_required' as const }
     overviewState = { ...overviewState, contributions: [paused, authorizing, reauthRequired] }
@@ -906,7 +1215,9 @@ describe('Team subscription-pool workspace', () => {
     const directory = within(settings).getByRole('complementary')
     const details = within(settings).getByRole('region', { name: zh.accountDetails })
 
-    for (const account of [paused, authorizing, reauthRequired]) {
+    expect(within(directory).queryByRole('button', { name: `${authorizing.label} · ${zh.authorizing}` })).toBeNull()
+
+    for (const account of [paused, reauthRequired]) {
       const status = zh[account.status]
       fireEvent.click(within(directory).getByRole('button', { name: `${account.label} · ${status}` }))
       expect(within(details).getByText(status)).toBeDefined()
@@ -938,6 +1249,21 @@ describe('Team subscription-pool workspace', () => {
       )
     })
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
+  })
+
+  it('shows an explicit warning in the selected shared account when Team usage is unavailable', async () => {
+    managementApi.usage.mockRejectedValueOnce(new Error('upstream-usage-secret'))
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+    const warning = await within(account).findByRole('alert')
+
+    expect(within(warning).getByText(zh.usageUnavailableTitle)).toBeDefined()
+    expect(within(warning).getByRole('button', { name: zh.retry })).toBeDefined()
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+    expect(account.textContent).not.toContain('upstream-usage-secret')
   })
 
   it('matches the approved weekly-sharing and recent-day account detail', async () => {
