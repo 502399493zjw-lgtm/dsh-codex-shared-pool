@@ -17,7 +17,7 @@ describe('OpenAI Codex profile settings contract', () => {
   it('keeps the add-account action inside a narrow settings sidebar', async () => {
     const source = await readFile(new URL('../src/client/OpenAICodexSettings.tsx', import.meta.url), 'utf8')
 
-    expect(source).toContain("width: '100%', minWidth: 0, maxWidth: 1040")
+    expect(source).toContain("width: '100%', minWidth: 0, maxWidth: 960, containerType: 'inline-size'")
     expect(source).toContain('.dsh-codex-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; min-width: 0; }')
     expect(source).toContain('.dsh-codex-add-account { max-width: 100%; min-width: 0; flex: 0 1 auto; }')
     expect(source).toContain('.dsh-codex-add-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }')
