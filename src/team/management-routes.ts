@@ -1943,12 +1943,7 @@ class TeamManagementProxy {
       }), 'OAuth cancellation')
       const account = projectContribution(item.account)
       if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
-      await this.removeLocalContributionBinding(accountId, expectedContext).catch((error: unknown) => {
-        this.onBackgroundError(new Error('failed to clear local contribution binding', { cause: error }))
-      })
-      await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
-        this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
-      })
+      await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
       return { account }
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
@@ -2102,15 +2097,12 @@ class TeamManagementProxy {
   ): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+        const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
           method: 'POST', body: { accountId, discardInitial }, key,
-        })
-        await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
-          this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
-        })
-        await this.removeLocalContributionBinding(accountId, expectedContext).catch((error: unknown) => {
-          this.onBackgroundError(new Error('failed to clear local contribution binding', { cause: error }))
-        })
+        }), 'OAuth cancellation')
+        const account = projectContribution(item.account)
+        if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+        await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
         return true
       } catch (error: unknown) {
         if (
@@ -2123,6 +2115,21 @@ class TeamManagementProxy {
       }
     }
     return false
+  }
+
+  private async clearOAuthRecoveryAfterFinalAccount(
+    account: TeamManagementContributionSummary,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<void> {
+    await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
+      this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
+    })
+    // Cancellation is a no-op once completion wins the race. Keep the durable profile
+    // identity for every non-revoked final state so refresh cannot ungroup an active account.
+    if (account.status !== 'revoked') return
+    await this.removeLocalContributionBinding(account.id, expectedContext).catch((error: unknown) => {
+      this.onBackgroundError(new Error('failed to clear local contribution binding', { cause: error }))
+    })
   }
 
   private async captureAndTransferOAuth(
@@ -2163,21 +2170,45 @@ class TeamManagementProxy {
         { teamId: account.teamId, accountId: account.id },
         { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
       )
-      const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
-        method: 'POST', body: { accountId: account.id, envelope }, key: currentKey,
-      }), 'OAuth handoff completion')
-      const completedAccount = projectContribution(completed.account)
-      if (
-        completedAccount.id !== account.id
-        || completedAccount.teamId !== account.teamId
-        || completedAccount.status !== 'active'
-      ) throw new Error('remote Team returned a mismatched OAuth contribution')
+      await this.completeRemoteOAuthHandoff(account, envelope, currentKey)
       await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
       })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  }
+
+  private async completeRemoteOAuthHandoff(
+    account: TeamManagementContributionSummary,
+    envelope: ReturnType<typeof sealTeamCredentialHandoff>,
+    key: string,
+  ): Promise<void> {
+    let failure: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
+          method: 'POST', body: { accountId: account.id, envelope }, key,
+        }), 'OAuth handoff completion')
+        const completedAccount = projectContribution(completed.account)
+        if (
+          completedAccount.id !== account.id
+          || completedAccount.teamId !== account.teamId
+          || completedAccount.status !== 'active'
+        ) throw new Error('remote Team returned a mismatched OAuth contribution')
+        return
+      } catch (error: unknown) {
+        failure = error
+        if (
+          error instanceof RemoteTeamError
+          && error.status >= 400
+          && error.status < 500
+          && error.status !== 408
+          && error.status !== 429
+        ) break
+      }
+    }
+    throw failure
   }
 
   async dispose(): Promise<void> {

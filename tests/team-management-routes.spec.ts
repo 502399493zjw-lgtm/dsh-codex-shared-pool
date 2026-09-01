@@ -1578,6 +1578,134 @@ describe('local Team management routes', () => {
     })
   })
 
+  it('retries the exact handoff envelope when the committed completion response is lost', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-retry-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const handoffs = new TeamCredentialHandoffRegistry()
+    const offer = handoffs.create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    const completionBodies: string[] = []
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        const rawBody = String(init?.body)
+        completionBodies.push(rawBody)
+        const body = JSON.parse(rawBody) as {
+          accountId: string
+          envelope: Parameters<typeof handoffs.complete>[1]
+        }
+        handoffs.completeReplaySafe({ teamId: 'team-1', accountId: body.accountId }, body.envelope)
+        if (completionBodies.length === 1) throw new Error('connection reset after commit')
+        return new Response(JSON.stringify({
+          account: { ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=retry' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      withOverviewPreflight(mutationFetch, overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      })),
+      {
+        loginProfile,
+        temporaryRootDir,
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
+          readProfileCredential: async () => ({
+            type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
+            accountId: 'provider-account-1',
+          }),
+        },
+      },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+
+    await vi.waitFor(() => { expect(completionBodies).toHaveLength(2) })
+    expect(completionBodies[1]).toBe(completionBodies[0])
+    await vi.waitFor(() => {
+      expect(JSON.parse(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '{}')).toMatchObject({
+        bindings: [{ accountId: 'account-1', sourceLocalProfileId: 'local-profile-1' }],
+      })
+    })
+    expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(false)
+  })
+
+  it('preserves the local profile binding when cancellation races with an active completion', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    credentials.put(LOCAL_CONTRIBUTION_BINDINGS_REF, JSON.stringify({
+      version: 1,
+      bindings: [{
+        expectedContext: EXPECTED_CONTEXT,
+        accountId: 'account-1',
+        sourceLocalProfileId: 'local-profile-1',
+      }],
+    }))
+    credentials.put(BROWSER_OAUTH_PENDING_REF, JSON.stringify({
+      version: 1,
+      operations: [{
+        expectedContext: EXPECTED_CONTEXT,
+        pending: {
+          accountId: 'account-1', method: 'browser', expiresAt: Date.now() + 900_000, discardInitial: true,
+        },
+      }],
+    }))
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'active', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const cancelled = await response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: true,
+    })))
+
+    expect(cancelled).toMatchObject({ status: 200, body: { account: { status: 'active' } } })
+    expect(JSON.parse(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '{}')).toMatchObject({
+      bindings: [{ accountId: 'account-1', sourceLocalProfileId: 'local-profile-1' }],
+    })
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
   it('times out browser OAuth at the handoff deadline and removes the initial contribution', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
