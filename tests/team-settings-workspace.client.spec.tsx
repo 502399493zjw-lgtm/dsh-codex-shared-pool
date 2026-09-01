@@ -1369,6 +1369,34 @@ describe('Team subscription-pool workspace', () => {
     expect(settings.compareDocumentPosition(directory) & Node.DOCUMENT_POSITION_CONTAINED_BY).not.toBe(0)
   })
 
+  it('keeps the zero-account empty state only in the detail pane', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: [],
+      activeSharedAccounts: [],
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ready', profiles: [] }),
+    }))
+
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(settings).getByRole('complementary')
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+
+    expect(within(directory).getByRole('heading', { name: `${zh.accountsLabel}${translate('accountsCount', { count: 0 })}` })).toBeDefined()
+    expect(within(directory).getByRole('button', { name: zh.addAccount })).toBeDefined()
+    expect(within(directory).getByText(zh.accountDirectoryHint)).toBeDefined()
+    expect(within(directory).queryByText(zh.noLocalAccountsTitle)).toBeNull()
+    expect(within(directory).queryByText(zh.noLocalAccountsHint)).toBeNull()
+    expect(within(details).getByText(zh.noLocalAccountsTitle)).toBeDefined()
+    expect(within(details).getByText(zh.noLocalAccountsHint)).toBeDefined()
+    expect(within(settings).getAllByText(zh.noLocalAccountsTitle)).toHaveLength(1)
+    expect(within(settings).getAllByText(zh.noLocalAccountsHint)).toHaveLength(1)
+  })
+
   it('uses stable account aliases and omits empty account groups like the approved prototype', async () => {
     overviewState = {
       ...overviewState,

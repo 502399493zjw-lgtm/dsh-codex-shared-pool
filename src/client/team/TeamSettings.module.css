@@ -1067,10 +1067,11 @@
   display: flex;
   min-height: 100%;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
   gap: 10px;
   padding: 28px;
+  text-align: center;
 }
 
 .accountDetailEmpty strong {
