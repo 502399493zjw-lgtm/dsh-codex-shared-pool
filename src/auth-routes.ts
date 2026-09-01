@@ -1,6 +1,7 @@
 /** Same-origin Web settings routes for OpenAI Codex OAuth. */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
@@ -20,6 +21,13 @@ import type {
   OpenAICodexProfilesStatus,
 } from './shared/types.ts'
 import type { LocalRoutingEventLedger } from './local-routing-events.ts'
+import {
+  isOpenAICodexAuthorizationPopupAttemptToken,
+  isOpenAICodexAuthorizationUrl,
+  OPENAI_CODEX_AUTHORIZATION_POPUP_PATH,
+  OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH,
+  OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_TTL_MS,
+} from './shared/authorization-popup.ts'
 
 /** Plugin-owned status endpoint consumed by its browser half. */
 export const OPENAI_CODEX_AUTH_STATUS_PATH = '/plugins/dsh-openai-codex/auth/status'
@@ -414,6 +422,12 @@ function trustedRequest(req: IncomingMessage): boolean {
   if (req.headers['sec-fetch-site'] === 'cross-site') return false
   const host = req.headers.host
   if (host === undefined) return false
+  try {
+    const hostname = new URL(`http://${host}`).hostname.toLowerCase()
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]') return false
+  } catch {
+    return false
+  }
   const origin = req.headers.origin
   if (origin === undefined) return true
   try {
@@ -430,6 +444,233 @@ function json(res: ServerResponse, status: number, value: unknown): void {
     'x-content-type-options': 'nosniff',
   })
   res.end(JSON.stringify(value))
+}
+
+export const AUTHORIZATION_POPUP_SESSION_TTL_MS = OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_TTL_MS
+const AUTHORIZATION_POPUP_SESSION_LIMIT = 64
+
+type AuthorizationPopupSessionStatus = 'waiting' | 'ready' | 'acknowledged' | 'cancelled'
+type AuthorizationPopupSessionSnapshot = {
+  readonly status: AuthorizationPopupSessionStatus
+  readonly authorizationUrl?: string
+}
+type AuthorizationPopupSessionWaiter = (snapshot: AuthorizationPopupSessionSnapshot | null) => void
+
+interface AuthorizationPopupSession {
+  readonly attemptToken: string
+  readonly expiresAt: number
+  readonly waiters: Set<AuthorizationPopupSessionWaiter>
+  status: AuthorizationPopupSessionStatus
+  authorizationUrl?: string
+}
+
+/** Short-lived, bounded handoff state shared by the settings page and adopted tab. */
+export class AuthorizationPopupSessions {
+  private readonly sessions = new Map<string, AuthorizationPopupSession>()
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly ttlMs = AUTHORIZATION_POPUP_SESSION_TTL_MS,
+    private readonly maxSessions = AUTHORIZATION_POPUP_SESSION_LIMIT,
+  ) {}
+
+  get size(): number { return this.sessions.size }
+
+  open(attemptToken: string): AuthorizationPopupSessionStatus {
+    this.expire()
+    const existing = this.sessions.get(attemptToken)
+    if (existing !== undefined) return existing.status
+    this.store({
+      attemptToken,
+      expiresAt: this.now() + this.ttlMs,
+      status: 'waiting',
+      waiters: new Set(),
+    })
+    return 'waiting'
+  }
+
+  publish(attemptToken: string, authorizationUrl: string): AuthorizationPopupSessionStatus | null {
+    this.expire()
+    let session = this.sessions.get(attemptToken)
+    if (session === undefined) {
+      session = {
+        attemptToken,
+        expiresAt: this.now() + this.ttlMs,
+        status: 'waiting',
+        waiters: new Set(),
+      }
+      this.store(session)
+    }
+    if (session.status === 'cancelled') return null
+    if (session.authorizationUrl !== undefined && session.authorizationUrl !== authorizationUrl) return null
+    session.authorizationUrl = authorizationUrl
+    if (session.status !== 'acknowledged') session.status = 'ready'
+    this.notify(session, this.snapshot(session))
+    return session.status
+  }
+
+  acknowledge(attemptToken: string): AuthorizationPopupSessionStatus | null {
+    this.expire()
+    const session = this.sessions.get(attemptToken)
+    if (session === undefined || session.status === 'cancelled' || session.authorizationUrl === undefined) return null
+    session.status = 'acknowledged'
+    this.notify(session, this.snapshot(session))
+    return session.status
+  }
+
+  cancel(attemptToken: string): AuthorizationPopupSessionStatus {
+    this.expire()
+    const existing = this.sessions.get(attemptToken)
+    if (existing !== undefined) {
+      existing.status = 'cancelled'
+      delete existing.authorizationUrl
+      this.notify(existing, this.snapshot(existing))
+      return existing.status
+    }
+    this.store({
+      attemptToken,
+      expiresAt: this.now() + this.ttlMs,
+      status: 'cancelled',
+      waiters: new Set(),
+    })
+    return 'cancelled'
+  }
+
+  status(attemptToken: string): AuthorizationPopupSessionSnapshot | null {
+    this.expire()
+    const session = this.sessions.get(attemptToken)
+    return session === undefined ? null : this.snapshot(session)
+  }
+
+  waitForNavigation(attemptToken: string): Promise<AuthorizationPopupSessionSnapshot | null> {
+    this.expire()
+    const session = this.sessions.get(attemptToken)
+    if (session === undefined) return Promise.resolve(null)
+    if (session.status !== 'waiting') return Promise.resolve(this.snapshot(session))
+    return new Promise(resolve => { session.waiters.add(resolve) })
+  }
+
+  clear(): void {
+    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
+    for (const session of this.sessions.values()) this.notify(session, null)
+    this.sessions.clear()
+  }
+
+  private expire(): void {
+    const now = this.now()
+    for (const [attemptToken, session] of this.sessions) {
+      if (session.expiresAt <= now) {
+        this.sessions.delete(attemptToken)
+        this.notify(session, null)
+      }
+    }
+    this.scheduleExpiry()
+  }
+
+  private store(session: AuthorizationPopupSession): void {
+    if (!this.sessions.has(session.attemptToken) && this.sessions.size >= Math.max(1, this.maxSessions)) {
+      let evictionCandidate: string | undefined
+      for (const [attemptToken, existing] of this.sessions) {
+        evictionCandidate ??= attemptToken
+        if (existing.status === 'acknowledged' || existing.status === 'cancelled') {
+          evictionCandidate = attemptToken
+          break
+        }
+      }
+      if (evictionCandidate !== undefined) {
+        const evicted = this.sessions.get(evictionCandidate)
+        this.sessions.delete(evictionCandidate)
+        if (evicted !== undefined) this.notify(evicted, null)
+      }
+    }
+    this.sessions.set(session.attemptToken, session)
+    this.scheduleExpiry()
+  }
+
+  private scheduleExpiry(): void {
+    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
+    let earliestExpiry: number | undefined
+    for (const session of this.sessions.values()) {
+      earliestExpiry = earliestExpiry === undefined ? session.expiresAt : Math.min(earliestExpiry, session.expiresAt)
+    }
+    if (earliestExpiry === undefined) return
+    this.expiryTimer = setTimeout(() => {
+      this.expiryTimer = undefined
+      this.expire()
+    }, Math.max(0, earliestExpiry - this.now()))
+    this.expiryTimer.unref?.()
+  }
+
+  private snapshot(session: AuthorizationPopupSession): AuthorizationPopupSessionSnapshot {
+    return session.status === 'ready' && session.authorizationUrl !== undefined
+      ? { status: 'ready', authorizationUrl: session.authorizationUrl }
+      : { status: session.status }
+  }
+
+  private notify(session: AuthorizationPopupSession, snapshot: AuthorizationPopupSessionSnapshot | null): void {
+    const waiters = [...session.waiters]
+    session.waiters.clear()
+    for (const resolve of waiters) resolve(snapshot)
+  }
+}
+
+function popupAttemptFromRequest(req: IncomingMessage): string {
+  const parsed = new URL(req.url ?? '', 'http://localhost')
+  const attempts = parsed.searchParams.getAll('attempt')
+  if (
+    (parsed.pathname !== OPENAI_CODEX_AUTHORIZATION_POPUP_PATH
+      && parsed.pathname !== OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH)
+    || attempts.length !== 1
+    || [...parsed.searchParams.keys()].some(key => key !== 'attempt')
+    || !isOpenAICodexAuthorizationPopupAttemptToken(attempts[0] ?? '')
+  ) throw new Error('invalid popup request')
+  return attempts[0]!
+}
+
+function authorizationPopup(res: ServerResponse, attemptToken: string): void {
+  const nonce = randomBytes(18).toString('base64')
+  const sessionUrl = `${OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH}?attempt=${encodeURIComponent(attemptToken)}`
+  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>正在准备安全授权</title></head><body><main><p>正在打开 OpenAI 登录页面…</p></main><script nonce="${nonce}">try{window.name=''}catch{}window.location.replace(${JSON.stringify(sessionUrl)})</script></body></html>`
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store, max-age=0',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'x-frame-options': 'DENY',
+    'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; frame-ancestors 'none'`,
+  })
+  res.end(body)
+}
+
+function acceptsHtml(req: IncomingMessage): boolean {
+  const accept = req.headers.accept
+  return (Array.isArray(accept) ? accept : [accept]).some(value => value?.toLowerCase().includes('text/html') === true)
+}
+
+function authorizationPopupRedirect(res: ServerResponse, authorizationUrl: string): void {
+  res.writeHead(302, {
+    location: authorizationUrl,
+    'cache-control': 'no-store, max-age=0',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  })
+  res.end()
+}
+
+function authorizationPopupUnavailable(res: ServerResponse, reason: 'cancelled' | 'expired'): void {
+  const body = reason === 'cancelled' ? '授权已取消，可以关闭此页面。' : '授权准备已过期，请关闭后重试。'
+  res.writeHead(reason === 'cancelled' ? 409 : 410, {
+    'content-type': 'text/plain; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store, max-age=0',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  })
+  res.end(body)
 }
 
 function loginErrorResponse(res: ServerResponse, error: unknown): void {
@@ -460,6 +701,29 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     throw new Error('request body must be an object')
   }
   return value as Record<string, unknown>
+}
+
+type AuthorizationPopupSessionCommand =
+  | { readonly kind: 'publish'; readonly attemptToken: string; readonly authorizationUrl: string }
+  | { readonly kind: 'cancel'; readonly attemptToken: string }
+
+function authorizationPopupSessionCommand(value: Record<string, unknown>): AuthorizationPopupSessionCommand {
+  const keys = Object.keys(value).sort()
+  const attemptToken = value.attemptToken
+  if (typeof attemptToken !== 'string' || !isOpenAICodexAuthorizationPopupAttemptToken(attemptToken)) {
+    throw new Error('invalid popup attempt')
+  }
+  if (keys.length === 2 && keys[0] === 'attemptToken' && keys[1] === 'authorizationUrl') {
+    const authorizationUrl = value.authorizationUrl
+    if (typeof authorizationUrl !== 'string' || !isOpenAICodexAuthorizationUrl(authorizationUrl)) {
+      throw new Error('invalid authorization URL')
+    }
+    return { kind: 'publish', attemptToken, authorizationUrl }
+  }
+  if (keys.length === 2 && keys[0] === 'attemptToken' && keys[1] === 'cancel' && value.cancel === true) {
+    return { kind: 'cancel', attemptToken }
+  }
+  throw new Error('invalid popup session command')
 }
 
 function exactStrings<const Key extends string>(
@@ -521,8 +785,74 @@ export function registerOpenAICodexAuthRoutes(
   routingEvents: LocalRoutingEventLedger,
 ): void {
   const auth = new OpenAICodexWebAuth(store, {}, routingEvents)
+  const authorizationPopupSessions = new AuthorizationPopupSessions()
   ctx.effect(() => {
     const routes = [
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_AUTHORIZATION_POPUP_PATH,
+        handler: (req, res) => {
+          if (!trustedRequest(req)) { json(res, 403, { error: 'forbidden' }); return }
+          if (req.method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            const attemptToken = popupAttemptFromRequest(req)
+            authorizationPopupSessions.open(attemptToken)
+            authorizationPopup(res, attemptToken)
+          } catch {
+            json(res, 400, { error: 'invalid popup request' })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH,
+        handler: async (req, res) => {
+          if (!trustedRequest(req)) { json(res, 403, { error: 'forbidden' }); return }
+          if (req.method === 'GET') {
+            try {
+              const attemptToken = popupAttemptFromRequest(req)
+              if (acceptsHtml(req)) {
+                const handoff = await authorizationPopupSessions.waitForNavigation(attemptToken)
+                if (handoff === null) { authorizationPopupUnavailable(res, 'expired'); return }
+                if (handoff.status === 'cancelled') { authorizationPopupUnavailable(res, 'cancelled'); return }
+                if (handoff.status !== 'ready' || handoff.authorizationUrl === undefined) {
+                  authorizationPopupUnavailable(res, 'expired')
+                  return
+                }
+                if (authorizationPopupSessions.acknowledge(attemptToken) !== 'acknowledged') {
+                  authorizationPopupUnavailable(res, 'expired')
+                  return
+                }
+                authorizationPopupRedirect(res, handoff.authorizationUrl)
+                return
+              }
+              const status = authorizationPopupSessions.status(attemptToken)
+              if (status === null) { json(res, 404, { status: 'expired' }); return }
+              json(res, 200, { status: status.status })
+            } catch {
+              json(res, 400, { error: 'invalid popup session request' })
+            }
+            return
+          }
+          if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+          if (req.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+            json(res, 415, { error: 'application/json required' })
+            return
+          }
+          try {
+            const command = authorizationPopupSessionCommand(await readJson(req))
+            if (command.kind === 'publish') {
+              const status = authorizationPopupSessions.publish(command.attemptToken, command.authorizationUrl)
+              if (status === null) { json(res, 409, { error: 'popup session is not writable' }); return }
+              json(res, 200, { status: 'published' })
+              return
+            }
+            json(res, 200, { status: authorizationPopupSessions.cancel(command.attemptToken) })
+          } catch {
+            json(res, 400, { error: 'invalid popup session request' })
+          }
+        },
+      }),
       ctx.webServer.register({
         kind: 'exact',
         path: OPENAI_CODEX_NETWORK_STATUS_PATH,
@@ -709,6 +1039,7 @@ export function registerOpenAICodexAuthRoutes(
     ]
     return async () => {
       for (const dispose of routes) dispose()
+      authorizationPopupSessions.clear()
       await auth.dispose()
     }
   }, 'dsh-openai-codex: Web OAuth routes')
