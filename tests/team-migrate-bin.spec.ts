@@ -24,6 +24,9 @@ describe('Team database migration command', () => {
     expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_lifecycle_operations[\s\S]*public\.team_dissolution_recovery_rate_limits[\s\S]*FROM dsh_team_broker/u)
     expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.team_ownership_transfers[\s\S]*public\.team_ownership_transfer_audit_events[\s\S]*FROM dsh_team_broker/u)
     expect(shipped).toMatch(/REVOKE ALL ON TABLE[\s\S]*public\.teams[\s\S]*FROM dsh_team_broker/u)
+    expect(shipped).toMatch(/GRANT SELECT \(id, status\) ON TABLE public\.teams TO dsh_team_broker/u)
+    expect(shipped).toMatch(/GRANT SELECT \(id, team_id, status\) ON TABLE public\.team_contributions TO dsh_team_broker/u)
+    expect(shipped).toMatch(/team_lock_credential_scope[\s\S]*SECURITY DEFINER/u)
     expect(logins).toMatch(/CREATE ROLE dsh_team_host_login LOGIN PASSWORD '\$POSTGRES_TEAM_HOST_PASSWORD'/u)
     expect(logins).toMatch(/CREATE ROLE dsh_team_broker_login LOGIN PASSWORD '\$POSTGRES_TEAM_BROKER_PASSWORD'/u)
     expect(logins).toMatch(/validate_hex_secret "\$POSTGRES_TEAM_HOST_PASSWORD"/u)
@@ -44,6 +47,7 @@ describe('Team database migration command', () => {
       broker_role_migration_audit: false,
       broker_display_name_migration_audit: false,
       broker_display_name_migration_ack: false,
+      broker_credential_scope: true,
       broker_credentials: true,
     }] }))
 

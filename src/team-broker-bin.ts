@@ -102,6 +102,7 @@ export async function runTeamCredentialBroker(
       storage: new PostgresTeamEnvelopeCredentialBackend({
         pool,
         keyEncryptionProvider: providers,
+        credentialScopeLock: 'restricted-function',
       }),
       onBackgroundError: (message) => {
         stderr.write(`dsh-codex-team-broker: background OAuth state error: ${safeExternalErrorMessage(message, 500)}\n`)

@@ -13,6 +13,38 @@ BEGIN
 END
 $roles$;
 
+-- Acquire lifecycle row locks without granting the credential-only workload
+-- UPDATE access to Team control tables. PostgreSQL row-locking SELECTs require
+-- UPDATE privilege, so expose only a fixed allow/deny capability.
+CREATE OR REPLACE FUNCTION public.team_lock_credential_scope(
+  target_team_id text,
+  target_account_id text
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $credential_scope$
+DECLARE
+  team_status text;
+  contribution_status text;
+BEGIN
+  SELECT status INTO team_status
+  FROM public.teams
+  WHERE id = target_team_id
+  FOR UPDATE;
+  IF team_status IS NULL OR team_status NOT IN ('active', 'paused') THEN
+    RETURN false;
+  END IF;
+  SELECT status INTO contribution_status
+  FROM public.team_contributions
+  WHERE team_id = target_team_id AND id = target_account_id
+  FOR UPDATE;
+  RETURN contribution_status IS NOT NULL AND contribution_status <> 'revoked';
+END
+$credential_scope$;
+
+REVOKE ALL ON FUNCTION public.team_lock_credential_scope(text, text) FROM PUBLIC;
+
 GRANT USAGE ON SCHEMA public TO dsh_team_host, dsh_team_broker;
 
 REVOKE ALL ON TABLE
@@ -106,6 +138,10 @@ REVOKE ALL ON TABLE
   public.team_ownership_transfer_audit_events,
   public.team_schema_migrations
 FROM dsh_team_broker;
+
+GRANT SELECT (id, status) ON TABLE public.teams TO dsh_team_broker;
+GRANT SELECT (id, team_id, status) ON TABLE public.team_contributions TO dsh_team_broker;
+GRANT EXECUTE ON FUNCTION public.team_lock_credential_scope(text, text) TO dsh_team_broker;
 
 -- Example (replace these workload roles with your own LOGIN/workload identities):
 -- GRANT dsh_team_host TO my_team_host_login;

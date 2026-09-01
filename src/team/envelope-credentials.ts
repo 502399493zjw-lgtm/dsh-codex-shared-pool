@@ -26,13 +26,17 @@ const MAX_WRAPPED_KEY_BYTES = 196_608
 const MAX_WRAPPED_KEY_METADATA_BYTES = 49_152
 
 /** Public so tests can assert SQL shape without overstating pg-mem lock semantics. */
-export const POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL = `
+export const POSTGRES_CREDENTIAL_SCOPE_MUTATION_LOCK_SQL = `
+  SELECT team_lock_credential_scope($1, $2) AS allowed
+`
+
+const POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL = `
   SELECT status FROM teams
   WHERE id = $1
   FOR UPDATE
 `
 
-export const POSTGRES_CREDENTIAL_CONTRIBUTION_MUTATION_LOCK_SQL = `
+const POSTGRES_CREDENTIAL_CONTRIBUTION_MUTATION_LOCK_SQL = `
   SELECT status FROM team_contributions
   WHERE team_id = $1 AND id = $2
   FOR UPDATE
@@ -175,6 +179,8 @@ export class Aes256GcmTeamKeyEncryptionProvider implements TeamKeyEncryptionProv
 export interface PostgresTeamEnvelopeCredentialBackendOptions {
   readonly pool: Pool
   readonly keyEncryptionProvider: TeamKeyEncryptionProvider
+  /** Standalone Broker roles lock lifecycle rows through the restricted database capability. */
+  readonly credentialScopeLock?: 'control-tables' | 'restricted-function'
   readonly now?: () => number
   readonly id?: () => string
 }
@@ -453,10 +459,16 @@ export class PostgresTeamEnvelopeCredentialBackend implements TeamCredentialStor
   }
 
   private async lockWritableCredentialScope(client: PoolClient, ref: TeamCredentialRef): Promise<void> {
-    const team = await client.query<LifecycleStatusRow>(POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL, [ref.teamId])
-    if (team.rows[0]?.status !== 'active' && team.rows[0]?.status !== 'paused') {
-      throw credentialUnavailableError()
+    if (this.options.credentialScopeLock === 'restricted-function') {
+      const scope = await client.query<CredentialScopeLockRow>(
+        POSTGRES_CREDENTIAL_SCOPE_MUTATION_LOCK_SQL,
+        [ref.teamId, ref.accountId],
+      )
+      if (scope.rows[0]?.allowed !== true) throw credentialUnavailableError()
+      return
     }
+    const team = await client.query<LifecycleStatusRow>(POSTGRES_CREDENTIAL_TEAM_MUTATION_LOCK_SQL, [ref.teamId])
+    if (team.rows[0]?.status !== 'active' && team.rows[0]?.status !== 'paused') throw credentialUnavailableError()
     const contribution = await client.query<LifecycleStatusRow>(
       POSTGRES_CREDENTIAL_CONTRIBUTION_MUTATION_LOCK_SQL,
       [ref.teamId, ref.accountId],
@@ -599,6 +611,10 @@ interface CredentialEnvelopeRow extends QueryResultRow {
 interface CredentialEnvelopeIdentity extends QueryResultRow {
   account_id: string
   team_id: string
+}
+
+interface CredentialScopeLockRow extends QueryResultRow {
+  allowed: boolean
 }
 
 interface LifecycleStatusRow extends QueryResultRow {

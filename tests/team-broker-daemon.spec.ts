@@ -66,11 +66,15 @@ describe('Team credential broker daemon', () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [{ table_oid: 1234, allowed: true }] })
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ allowed: false }] })
 
     await expect(verifyTeamCredentialBrokerDatabase({ query })).resolves.toBeUndefined()
-    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenCalledTimes(4)
     expect(String(query.mock.calls[0]?.[0])).toMatch(/has_table_privilege|team_contribution_credentials/iu)
     expect(String(query.mock.calls[1]?.[0])).toMatch(/SELECT\s+team_id.*account_id.*envelope_version/is)
+    expect(String(query.mock.calls[2]?.[0])).toMatch(/teams.*team_contributions/is)
+    expect(String(query.mock.calls[3]?.[0])).toMatch(/team_lock_credential_scope/iu)
 
     await expect(verifyTeamCredentialBrokerDatabase({
       query: vi.fn(async () => ({ rows: [{ table_oid: 1234, allowed: false }] })),

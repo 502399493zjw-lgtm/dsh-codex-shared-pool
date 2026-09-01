@@ -113,6 +113,12 @@ describePostgres('real PostgreSQL Team concurrency', () => {
         VALUES
           ('owner-role-boundary', 'team-role-boundary', 'Owner', 'owner', 'owner', 'active', 1),
           ('target-role-boundary', 'team-role-boundary', 'Target', 'target', 'member', 'active', 2);
+        INSERT INTO team_contributions
+          (id, team_id, owner_member_id, label, status, personal_reserve_percent,
+           max_shared_requests_per_window, max_shared_concurrency, created_at, updated_at)
+        VALUES
+          ('account-role-boundary', 'team-role-boundary', 'owner-role-boundary',
+           'Owner Codex', 'active', 20, NULL, 1, 2, 2);
         INSERT INTO team_member_display_name_migration_audit_events
           (id, team_id, member_id, migration_version, previous_display_name,
            next_display_name, repair_reason, created_at)
@@ -195,6 +201,26 @@ describePostgres('real PostgreSQL Team concurrency', () => {
         SET acknowledged_at = 4
         WHERE id = 'display-audit-role-boundary'
       `)).rejects.toThrow(/permission denied/iu)
+      const brokerClient = { query: broker.query.bind(broker), release: () => undefined }
+      const brokerPool = {
+        query: broker.query.bind(broker),
+        connect: async () => brokerClient,
+      } as unknown as Pool
+      const credentialBackend = new PostgresTeamEnvelopeCredentialBackend({
+        pool: brokerPool,
+        keyEncryptionProvider: new Aes256GcmTeamKeyEncryptionProvider(Buffer.alloc(32, 0x44)),
+        credentialScopeLock: 'restricted-function',
+      })
+      const credentialStore = credentialBackend.open({
+        teamId: 'team-role-boundary', accountId: 'account-role-boundary',
+      })
+      await credentialStore.addProfile('Owner Codex', {
+        type: 'oauth', access: 'broker-role-access', refresh: 'broker-role-refresh',
+        expires: 2_000_000_000_000, accountId: 'broker-role-provider-account',
+      })
+      await expect(credentialStore.listProfiles()).resolves.toMatchObject([{ label: 'Owner Codex' }])
+      await expect(broker.query('SELECT name FROM teams')).rejects.toThrow(/permission denied/iu)
+      await expect(broker.query('SELECT label FROM team_contributions')).rejects.toThrow(/permission denied/iu)
       await broker.query('RESET ROLE')
 
       untrusted = await pool.connect()

@@ -121,6 +121,13 @@ export async function verifyTeamCredentialBrokerDatabase(database: TeamCredentia
     FROM team_contribution_credentials
     LIMIT 0
   `)
+  await database.query(`
+    SELECT team.id, team.status, contribution.id, contribution.team_id, contribution.status
+    FROM teams AS team
+    CROSS JOIN team_contributions AS contribution
+    LIMIT 0
+  `)
+  await database.query("SELECT team_lock_credential_scope('__readiness__', '__readiness__') AS allowed")
 }
 
 /** Start one loopback-by-default broker server after its dependencies pass readiness checks. */
