@@ -120,6 +120,7 @@ const MANAGEMENT_ORIGIN = 'http://127.0.0.1:31415'
 const MANAGEMENT_CAPABILITY = `dsh_tm_${'c'.repeat(43)}`
 const TEAM_KEY_REF = 'DSH_CODEX_SHARED_POOL_TEAM_API_KEY'
 const BROWSER_OAUTH_PENDING_REF = `${TEAM_KEY_REF}_BROWSER_OAUTH_PENDING`
+const LOCAL_CONTRIBUTION_BINDINGS_REF = `${TEAM_KEY_REF}_LOCAL_CONTRIBUTION_BINDINGS`
 const DISSOLUTION_PENDING_REF = `${TEAM_KEY_REF}_DISSOLUTION_PENDING`
 const DISSOLUTION_TERMINAL_REF = `${TEAM_KEY_REF}_DISSOLUTION_TERMINAL`
 const DISSOLUTION_KEY_DIGEST_REF = `${TEAM_KEY_REF}_DISSOLUTION_KEY_DIGEST`
@@ -1544,11 +1545,87 @@ describe('local Team management routes', () => {
     expect(mutationFetch.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ label: 'Personal Pro', method: 'browser' }))
     await vi.waitFor(() => { expect(mutationFetch).toHaveBeenCalledTimes(2) })
     await vi.waitFor(() => { expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined() })
+    await vi.waitFor(() => {
+      expect(JSON.parse(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '{}')).toMatchObject({
+        version: 1,
+        bindings: [{
+          accountId: 'account-1',
+          sourceLocalProfileId: 'local-profile-1',
+          expectedContext: EXPECTED_CONTEXT,
+        }],
+      })
+    })
     expect(await readdir(temporaryRootDir)).toEqual([])
     await vi.waitFor(async () => {
       const settled = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
       expect(settled.body.pendingBrowserAuthorization).toBeUndefined()
     })
+
+    const activeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(overview({
+      contributions: [{ ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined }],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const restarted = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      activeFetch,
+    )
+    const afterRestart = await response(
+      route(restarted.routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler,
+      request('GET'),
+    )
+    expect(afterRestart.body.contributions[0]).toMatchObject({
+      id: 'account-1', status: 'active', sourceLocalProfileId: 'local-profile-1',
+    })
+  })
+
+  it('times out browser OAuth at the handoff deadline and removes the initial contribution', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: {
+            version: 1,
+            sessionId: 'timeout-session',
+            serverPublicKey: 'unused-before-timeout',
+            expiresAt: Date.now() + 30,
+          },
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=timeout' })
+      return new Promise((_resolve, reject) => {
+        interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      withOverviewPreflight(mutationFetch, overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      })),
+      { loginProfile },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+
+    await vi.waitFor(() => {
+      expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel')))
+        .toBe(true)
+    })
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
   })
 
   it('rejects a browser OAuth account mismatch and discards the initial remote contribution', async () => {

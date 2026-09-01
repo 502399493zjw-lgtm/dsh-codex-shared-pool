@@ -39,7 +39,10 @@ describe('Local Team credential broker', () => {
         status: 'active',
         accountLabel: 'Owner Codex',
       })
-      await expect(broker.completeOAuthHandoff(ref, envelope)).rejects.toThrow(/unknown|already used/iu)
+      await expect(broker.completeOAuthHandoff(ref, envelope)).resolves.toEqual({
+        status: 'active',
+        accountLabel: 'Owner Codex',
+      })
       expect(JSON.stringify(challenge)).not.toMatch(/host-only|chatgpt-account/iu)
       await broker.dispose()
     } finally {

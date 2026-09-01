@@ -235,9 +235,14 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
     ref: TeamCredentialRef,
     envelope: TeamCredentialHandoffEnvelope,
   ): Promise<TeamCredentialActiveState> {
-    const payload = this.handoffs.complete(ref, envelope)
+    const completion = this.handoffs.completeReplaySafe(ref, envelope)
     const store = this.storage.open(ref)
     const existing = await store.listProfiles()
+    if (completion.replayed && existing.length === 1) {
+      return { status: 'active', accountLabel: existing[0]!.label }
+    }
+    if (completion.replayed) throw new Error('Team account replay has no isolated credential')
+    const payload = completion.payload
     if (existing.length > 0) throw new Error('Team account already has an isolated credential')
     try {
       const accountLabel = authenticatedAccountLabel(payload.label)

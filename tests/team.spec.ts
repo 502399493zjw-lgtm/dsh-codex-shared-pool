@@ -1787,8 +1787,13 @@ describe('Team control plane', () => {
 
     await expect(service.completeContributionOAuthHandoff(owner, started.account.id, envelope))
       .resolves.toMatchObject({ id: started.account.id, label: 'Owner Codex', status: 'active' })
+    await expect(service.completeContributionOAuthHandoff(owner, started.account.id, envelope))
+      .resolves.toMatchObject({ id: started.account.id, label: 'Owner Codex', status: 'active' })
     expect(broker.methods).toEqual(['browser'])
     expect(broker.completed).toEqual([{
+      ref: { teamId: owner.teamId, accountId: started.account.id },
+      envelope,
+    }, {
       ref: { teamId: owner.teamId, accountId: started.account.id },
       envelope,
     }])
