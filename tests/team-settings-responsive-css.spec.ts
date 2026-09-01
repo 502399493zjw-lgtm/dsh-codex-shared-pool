@@ -90,6 +90,12 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.page \.detailFooterButton\s*\{[^}]*min-height:\s*60px;/s)
   })
 
+  it('centers the sole zero-account empty state in the detail pane', () => {
+    expect(css).toMatch(
+      /\.accountDetailEmpty\s*\{[^}]*min-height:\s*100%;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;[^}]*text-align:\s*center;/s,
+    )
+  })
+
   it('disables every account-loading animation when reduced motion is requested', () => {
     expect(css).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*\.skeletonBlock,\s*\.quotaTrack\[data-loading='true'\]\s*\{\s*animation:\s*none;/s,

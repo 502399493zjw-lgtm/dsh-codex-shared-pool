@@ -2223,17 +2223,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               {renderAccountDirectorySkeleton()}
             </>
           ) : null}
-          {accountCount === 0 && !localProfilesLoading
-            ? localProfilesUnavailable
-              ? <div className={styles.directoryState} role="alert">
-                  <strong>{t('localAccountsUnavailableTitle')}</strong>
-                  <span>{t('localAccountsUnavailableHint')}</span>
-                  <Button size="sm" variant="outline" onClick={() => { void refreshLocalProfiles() }}>{t('retry')}</Button>
-                </div>
-              : <div className={styles.directoryState}>
-                  <strong>{t('noLocalAccountsTitle')}</strong>
-                  <span>{t('noLocalAccountsHint')}</span>
-                </div>
+          {accountCount === 0 && !localProfilesLoading && localProfilesUnavailable
+            ? <div className={styles.directoryState} role="alert">
+                <strong>{t('localAccountsUnavailableTitle')}</strong>
+                <span>{t('localAccountsUnavailableHint')}</span>
+                <Button size="sm" variant="outline" onClick={() => { void refreshLocalProfiles() }}>{t('retry')}</Button>
+              </div>
             : null}
         </aside>
         <div className={styles.accountDetail} role="region" aria-label={t('accountDetails')}>
