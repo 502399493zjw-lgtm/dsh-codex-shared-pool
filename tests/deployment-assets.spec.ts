@@ -348,7 +348,6 @@ describe('self-hosted deployment assets', () => {
 
       const alpha = authorization === `Bearer ${alphaKey}` || authorization === `Bearer ${alphaFriendKey}`
       const owner = authorization === `Bearer ${alphaKey}` || authorization === `Bearer ${betaKey}`
-      const key = alpha ? alphaKey : betaKey
       const teamId = alpha ? 'team-alpha' : 'team-beta'
       const memberId = owner ? (alpha ? 'member-alpha' : 'member-beta') : (alpha ? 'friend-alpha' : 'friend-beta')
       const teamName = alpha ? 'CI Alpha' : 'CI Beta'
@@ -357,23 +356,19 @@ describe('self-hosted deployment assets', () => {
       const ownerMemberId = alpha ? 'member-alpha' : 'member-beta'
       const friendMemberId = alpha ? 'friend-alpha' : 'friend-beta'
       return Response.json({
+        viewerRole: owner ? 'owner' : 'member',
         team: { id: teamId, name: teamName, status: 'active', createdAt: 1 },
         currentMember: { id: memberId, teamId, displayName, role: owner ? 'owner' : 'member', status: 'active', joinedAt: owner ? 1 : 2 },
         members: [
           { id: ownerMemberId, teamId, displayName: ownerName, role: 'owner', status: 'active', joinedAt: 1 },
           { id: friendMemberId, teamId, displayName: alpha ? 'Carol' : 'Dave', role: 'member', status: 'active', joinedAt: 2 },
         ],
-        invites: [{
-          id: alpha ? 'invite-alpha' : 'invite-beta',
-          teamId,
-          invitedByMemberId: ownerMemberId,
-          status: 'accepted',
-          expiresAt: 60_000,
-          createdAt: 1,
-          acceptedAt: 2,
-        }],
-        apiKeys: [{ id: `key-${memberId}`, teamId, memberId, label: 'bootstrap', prefix: key.slice(0, 18), createdAt: 1 }],
+        ...(owner ? { invites: [{
+          id: alpha ? 'invite-alpha' : 'invite-beta', teamId, invitedByMemberId: ownerMemberId,
+          status: 'accepted', expiresAt: 60_000, createdAt: 1, acceptedAt: 2,
+        }] } : {}),
         contributions: [],
+        activeSharedAccounts: [],
       })
     }
 
@@ -420,6 +415,7 @@ describe('self-hosted deployment assets', () => {
           ownerName: 'Live Owner',
         })
         return Response.json({
+          viewerRole: 'owner',
           team: { id: 'team-live', name: 'Live sharing smoke live-test-id', status: 'active', createdAt: 1 },
           member: {
             id: 'member-owner', teamId: 'team-live', displayName: 'Live Owner', role: 'owner', status: 'active', joinedAt: 1,
@@ -472,12 +468,12 @@ describe('self-hosted deployment assets', () => {
           },
           members: [],
           invites: [],
-          apiKeys: [],
           contributions: [{
             id: 'account-live', teamId: 'team-live', ownerMemberId: 'member-owner', label: 'Live Codex contribution',
             status: overviewReads === 1 ? 'authorizing' : 'active', personalReservePercent: 10,
             maxSharedRequestsPerWindow: null, dailySharedCreditLimit: null, maxSharedConcurrency: 1, allowedModels: [], createdAt: 3, updatedAt: 3,
           }],
+          activeSharedAccounts: [],
         })
       }
       if (url.endsWith('/responses')) {
@@ -738,6 +734,7 @@ describe('self-hosted deployment assets', () => {
       ))!
       const isOwner = authorization === `Bearer ${item.apiKey}`
       return Response.json({
+        viewerRole: isOwner ? 'owner' : 'member',
         team: { id: item.teamId, name: item.teamName, status: 'active' },
         currentMember: {
           id: isOwner ? item.memberId : item.friendMemberId,
@@ -747,9 +744,9 @@ describe('self-hosted deployment assets', () => {
           status: 'active',
         },
         members: [{ id: 'foreign-member', teamId: 'team-beta' }],
-        invites: [],
-        apiKeys: [],
+        ...(isOwner ? { invites: [] } : {}),
         contributions: [],
+        activeSharedAccounts: [],
       })
     }
 

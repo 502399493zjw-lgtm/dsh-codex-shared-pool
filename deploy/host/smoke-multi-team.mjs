@@ -142,6 +142,9 @@ function validateOverview(value, expected, bootstraps, deploymentSecrets) {
   const overview = record(value, 'Team overview')
   const team = record(overview.team, 'Team overview')
   const member = record(overview.currentMember, 'Team overview')
+  if (overview.viewerRole !== expected.role) {
+    throw new Error('Team isolation failed: authenticated viewer role mismatch')
+  }
   if (team.id !== expected.teamId || team.name !== expected.teamName || team.status !== 'active') {
     throw new Error('Team isolation failed: authenticated Team mismatch')
   }
@@ -154,12 +157,24 @@ function validateOverview(value, expected, bootstraps, deploymentSecrets) {
   ) {
     throw new Error('Team isolation failed: authenticated member mismatch')
   }
-  for (const key of ['members', 'invites', 'apiKeys', 'contributions']) {
+  for (const key of ['members', 'contributions']) {
     requireTeamScopedList(overview, key, expected.teamId)
+  }
+  if (expected.role === 'owner') requireTeamScopedList(overview, 'invites', expected.teamId)
+  else if ('invites' in overview) throw new Error('Team overview exposed Owner-only invitations to a member')
+  if ('apiKeys' in overview) throw new Error('Team overview exposed API-key metadata')
+  if (!Array.isArray(overview.activeSharedAccounts)) {
+    throw new Error('invalid Team overview: activeSharedAccounts is missing')
   }
   const memberIds = new Set(overview.members.map(candidate => requiredString(record(candidate, 'Team overview'), 'id', 'Team overview')))
   if (expected.expectedMemberIds.some(memberId => !memberIds.has(memberId))) {
     throw new Error('Team isolation failed: expected Team membership is incomplete')
+  }
+  for (const candidate of overview.activeSharedAccounts) {
+    const account = record(candidate, 'Team overview')
+    if (!memberIds.has(requiredString(account, 'ownerMemberId', 'Team overview'))) {
+      throw new Error('Team isolation failed: shared account owner is outside the Team')
+    }
   }
   rejectSecretFields(overview)
   const serialized = rejectSecretValues(
