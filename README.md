@@ -113,6 +113,37 @@ dsh plugin --profile web add dsh-codex-shared-pool@0.1.0
 - 账号别名和最近请求记录不包含原始 profile id、prompt、response 或 token。
 - 本项目通过公开 Cordis/DSH 扩展点安装，不修改或 fork DSH 核心。
 
+## 第二期：Team 共享与自托管
+
+第二期在同一个 npm 包中加入邀请制 Team、成员额度共享、Team 请求路由和自托管部署。OAuth 凭据、数据库连接和密钥仍只存在于 Host；Browser 只读取插件 same-origin 路由返回的最小脱敏投影。
+
+自托管模板在一台中央服务器上运行 four long-running processes：PostgreSQL、仅监听回环地址的 stock DSH Team Host、Credential Broker，以及窄接口的 Team API Edge；另有 one-shot database migrator 在应用负载启动前完成迁移并退出：
+
+```sh
+node deploy/self-hosted/init-secrets.mjs
+docker compose -f deploy/self-hosted/compose.yml up --build -d
+```
+
+初始化器会在被忽略的 `deploy/self-hosted/.secrets/` 下创建 four mode-`0600` files：
+
+- `postgres.env`：初始化数据库和不同运行身份的密码；
+- `team-migrations.env`：只向一次性迁移器提供 schema-owner 数据库 URL；
+- `team-host.env`：向 Team Host 提供控制面所需配置，但不提供凭据解密密钥；
+- `credential-broker.env`：只向 Broker 提供 envelope master key、数据库 URL 和内部 API key。
+
+需要让上游请求经过代理时，另行创建被 Git 忽略的
+`deploy/self-hosted/.secrets/outbound-network.env`，并将权限设为 `0600`。这个文件不由初始化器生成；按需只填写标准的 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`，不要把代理地址或凭据写入 Compose、镜像或仓库。`NO_PROXY` 必须包含 `127.0.0.1` 和 `localhost`，以免回环上的 Host/Broker 请求绕远。
+
+Compose 会把同一份可选代理文件交给 Team Host 和 Credential Broker。修改 `outbound-network.env` 后，必须重建或重启 Team Host 与 Credential Broker 才会生效：
+
+```sh
+docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-host credential-broker
+```
+
+数据库按权限拆分为 `dsh_team_host_login` 和 `dsh_team_broker_login`。Team Host cannot read `team_contribution_credentials`；Credential Broker cannot read the Team control-plane tables。DSH Web/Remote API 不对公网暴露，Team API Edge 只转发 `/plugins/dsh-codex-shared-pool/team/...`。
+
+完整验收与部署说明见 [第二期验收文档](docs/acceptance/team-mvp-phase-two.md)。
+
 ## 开发与验证
 
 ```bash

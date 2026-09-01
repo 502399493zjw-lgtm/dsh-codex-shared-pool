@@ -9,6 +9,7 @@ export function safeExternalErrorMessage(error: unknown, maxLength = 1000): stri
   const message = error instanceof Error ? error.message : String(error)
   const limit = Number.isFinite(maxLength) ? Math.max(0, Math.floor(maxLength)) : 1000
   return message
+    .replace(/\bdsh_(?:team|invite)_[A-Za-z0-9._~-]+\b/giu, '[redacted team credential]')
     .replace(/\bdsh_[A-Za-z0-9._~-]{16,}\b/giu, '[redacted credential]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, '[redacted token]')
     .replace(/(\bauthorization\s*:\s*)[^\r\n]+/giu, '$1[redacted]')

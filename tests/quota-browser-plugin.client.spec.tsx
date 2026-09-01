@@ -57,7 +57,7 @@ function installStockSettingsShell(): {
     general.textContent = 'General'
     const codex = document.createElement('button')
     codex.type = 'button'
-    codex.textContent = 'OpenAI Codex'
+    codex.textContent = 'Codex subscription pool'
     codex.addEventListener('click', sectionClick)
     nav.append(general, codex)
     dialog.append(nav)

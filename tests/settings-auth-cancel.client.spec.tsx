@@ -48,6 +48,35 @@ function response(value: unknown): Response {
   } as Response
 }
 
+function requestPath(input: RequestInfo | URL): string {
+  return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+}
+
+function popupSessionResponse(input: RequestInfo | URL, init?: RequestInit): Response | undefined {
+  const path = requestPath(input)
+  if (!path.includes('/auth/popup/session')) return undefined
+  return init?.method === 'POST'
+    ? response({ status: 'published' })
+    : response({ status: 'acknowledged' })
+}
+
+function expectAuthorizationPublication(
+  fetchMock: ReturnType<typeof vi.fn>,
+  authorizationUrl: string,
+): void {
+  const publication = fetchMock.mock.calls.find(([input, init]) => {
+    if (!requestPath(input as RequestInfo | URL).endsWith('/auth/popup/session') || init?.method !== 'POST') {
+      return false
+    }
+    return (JSON.parse(String(init.body)) as { authorizationUrl?: string }).authorizationUrl === authorizationUrl
+  })
+  expect(publication).toBeDefined()
+  expect(JSON.parse(String(publication?.[1]?.body))).toEqual({
+    attemptToken: expect.stringMatching(/^[a-f0-9]{64}$/),
+    authorizationUrl,
+  })
+}
+
 const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): string => {
   let value: string = en[key]
   for (const [name, replacement] of Object.entries(params ?? {})) {
@@ -61,14 +90,16 @@ describe('OpenAI Codex settings authorization', () => {
     let resolveFirstLogin: ((value: Response) => void) | undefined
     const firstLogin = new Promise<Response>((resolve) => { resolveFirstLogin = resolve })
     let loginRequests = 0
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const sessionResponse = popupSessionResponse(input, init)
+      if (sessionResponse !== undefined) return sessionResponse
+      const path = requestPath(input)
       if (path.endsWith('/profiles/login/cancel')) return response({ cancelled: true })
       if (path.endsWith('/profiles/login')) {
         loginRequests += 1
         return loginRequests === 1
           ? firstLogin
-          : response({ url: 'https://auth.openai.test/retry' })
+          : response({ url: 'https://auth.openai.com/oauth/authorize?attempt=retry' })
       }
       if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
@@ -111,23 +142,27 @@ describe('OpenAI Codex settings authorization', () => {
     expect(firstPopup.close).toHaveBeenCalledOnce()
     const retry = screen.getByRole('button', { name: en.addAccount })
     expect(retry).toHaveProperty('disabled', false)
-    resolveFirstLogin?.(response({ url: 'https://auth.openai.test/late' }))
+    resolveFirstLogin?.(response({ url: 'https://auth.openai.com/oauth/authorize?attempt=late' }))
     await waitFor(() => { expect(firstPopup.location.replace).not.toHaveBeenCalled() })
 
     fireEvent.click(retry)
 
     await screen.findByText(en.signingIn)
     await waitFor(() => {
-      expect(retryPopup.location.replace).toHaveBeenCalledWith('https://auth.openai.test/retry')
+      expectAuthorizationPublication(fetchMock, 'https://auth.openai.com/oauth/authorize?attempt=retry')
     })
     expect(loginRequests).toBe(2)
   })
 
   it('cancels the login and restores the empty state when the popup closes', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const sessionResponse = popupSessionResponse(input, init)
+      if (sessionResponse !== undefined) return sessionResponse
+      const path = requestPath(input)
       if (path.endsWith('/profiles/login/cancel')) return response({ cancelled: true })
-      if (path.endsWith('/profiles/login')) return response({ url: 'https://auth.openai.test/authorize' })
+      if (path.endsWith('/profiles/login')) {
+        return response({ url: 'https://auth.openai.com/oauth/authorize?attempt=close' })
+      }
       if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
         return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
@@ -155,7 +190,7 @@ describe('OpenAI Codex settings authorization', () => {
 
     await screen.findByText(en.signingIn)
     await waitFor(() => {
-      expect(popup.location.replace).toHaveBeenCalledWith('https://auth.openai.test/authorize')
+      expectAuthorizationPublication(fetchMock, 'https://auth.openai.com/oauth/authorize?attempt=close')
     })
     popup.closed = true
     await screen.findByText(en.signInCancelled, {}, { timeout: 1_000 })
@@ -209,5 +244,60 @@ describe('OpenAI Codex settings authorization', () => {
     resolveLogin?.(response({ url: 'https://auth.openai.test/authorize' }))
     await waitFor(() => { expect(popup.close).toHaveBeenCalledOnce() })
     expect(popup.location.replace).not.toHaveBeenCalled()
+  })
+
+  it('keeps authorization alive when the in-app browser adopts the new tab without a WindowProxy', async () => {
+    const authorizationUrl = 'https://auth.openai.com/oauth/authorize?client_id=test&state=test'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles/login/cancel')) return response({ cancelled: true })
+      if (path.endsWith('/profiles/login')) return response({ url: authorizationUrl })
+      if (path.includes('/auth/popup/session')) {
+        return init?.method === 'POST'
+          ? response({ status: 'ready' })
+          : response({ status: 'acknowledged' })
+      }
+      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/image-tools')) {
+        return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      }
+      if (path.endsWith('/response-api')) {
+        return response({ useFastMode: false, useWebSocketContextReuse: false })
+      }
+      if (path.endsWith('/network')) {
+        return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      }
+      throw new Error(`unexpected request: ${init?.method ?? 'GET'} ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const view = render(<OpenAICodexSettings t={t} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: en.addAccount }))
+
+    await waitFor(() => {
+      expect(open).toHaveBeenCalledWith(
+        expect.stringMatching(/^\/plugins\/dsh-openai-codex\/auth\/popup\?attempt=[a-f0-9]{64}$/),
+        'dsh-openai-codex-authorization',
+      )
+    })
+    await waitFor(() => {
+      const publication = fetchMock.mock.calls.find(([input, init]) => (
+        String(input) === '/plugins/dsh-openai-codex/auth/popup/session' && init?.method === 'POST'
+      ))
+      expect(publication).toBeDefined()
+      expect(JSON.parse(String(publication?.[1]?.body))).toEqual({
+        attemptToken: expect.stringMatching(/^[a-f0-9]{64}$/),
+        authorizationUrl,
+      })
+    })
+
+    view.unmount()
+
+    await new Promise(resolve => window.setTimeout(resolve, 0))
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/plugins/dsh-openai-codex/profiles/login/cancel',
+      expect.anything(),
+    )
   })
 })

@@ -26,7 +26,11 @@ import type {
   ResponseApiPreferences,
 } from '../shared/types.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
-import { watchAuthorizationPopupClose } from './authorization-popup.ts'
+import {
+  openAuthorizationPopupBridge,
+  watchAuthorizationPopupClose,
+} from './authorization-popup.ts'
+import type { AuthorizationPopupController } from './authorization-popup.ts'
 import {
   loadResponsePreferences,
   updateResponsePreferences,
@@ -81,7 +85,10 @@ export interface OpenAICodexSettingsInjected {
 }
 
 /** Props delivered by the settings slot renderer. */
-export type OpenAICodexSettingsProps = Partial<OpenAICodexSettingsInjected>
+export interface OpenAICodexSettingsProps extends Partial<OpenAICodexSettingsInjected> {
+  /** Suppress the child heading when rendered inside the subscription-pool tabs. */
+  readonly embedded?: boolean
+}
 
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minWidth: 0, maxWidth: 1040 }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
@@ -290,7 +297,7 @@ function authorizationFailureMessage(
 type AccountDialog = 'rename' | 'remove'
 
 /** OpenAI Codex account status, global allocation priority, and OAuth actions. */
-export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
+export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettingsProps) {
   if (t === undefined) throw new Error('OpenAI Codex settings requires its translation function')
   const [status, setStatus] = useState<AccountStatus>({ status: 'loading' })
   const [busy, setBusy] = useState(false)
@@ -314,7 +321,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const [signInNotice, setSignInNotice] = useState<string>()
   const [signInCancelling, setSignInCancelling] = useState(false)
   const popupWatchRef = useRef<(() => void) | undefined>(undefined)
-  const loginPopupRef = useRef<Window | null>(null)
+  const loginPopupRef = useRef<AuthorizationPopupController | null>(null)
   const loginOperationRef = useRef<object | undefined>(undefined)
   const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
   const latestRoutingEventIdRef = useRef<string | null | undefined>(undefined)
@@ -454,8 +461,7 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   const signIn = async (): Promise<void> => {
     stopPopupWatch()
     setSignInNotice(undefined)
-    const popup = window.open('about:blank', '_blank')
-    if (popup !== null) popup.opener = null
+    const popup = openAuthorizationPopupBridge()
     loginPopupRef.current = popup
     setBusy(true)
     setStatus({ status: 'signing-in' })
@@ -476,12 +482,28 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
         setStatus({ status: 'error', message: t('popupBlocked') })
         return
       }
-      popup.location.replace(challenge.url)
-      popupWatchRef.current = watchAuthorizationPopupClose(popup, () => {
-        popupWatchRef.current = undefined
+      if (!(await popup.navigate(challenge.url))) {
+        loginOperationRef.current = undefined
+        popup.close()
         if (loginPopupRef.current === popup) loginPopupRef.current = null
-        void cancelSignIn()
-      })
+        await jsonRequest(CANCEL_LOGIN_PATH, 'POST')
+        setBusy(false)
+        setStatus({ status: 'error', message: t('popupBlocked') })
+        return
+      }
+      if (popup.window === null) {
+        // The in-app browser adopted the tab. Once the Host acknowledges its
+        // redirect, the provider flow is independent of this settings view.
+        if (loginOperationRef.current === operation) loginOperationRef.current = undefined
+        if (loginPopupRef.current === popup) loginPopupRef.current = null
+        setBusy(false)
+      } else {
+        popupWatchRef.current = watchAuthorizationPopupClose(popup.window, () => {
+          popupWatchRef.current = undefined
+          if (loginPopupRef.current === popup) loginPopupRef.current = null
+          void cancelSignIn()
+        })
+      }
     } catch (error: unknown) {
       const loginWasActive = loginOperationRef.current === operation
       if (loginWasActive) loginOperationRef.current = undefined
@@ -598,7 +620,11 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
   }
 
   return (
-    <section className="dsh-codex-settings" style={pageStyle} aria-labelledby="openai-codex-settings-title">
+    <section
+      className="dsh-codex-settings"
+      style={pageStyle}
+      {...embedded ? { 'aria-label': t('localTab') } : { 'aria-labelledby': 'openai-codex-settings-title' }}
+    >
       <style>{`
         .dsh-codex-settings, .dsh-codex-settings * { box-sizing: border-box; }
         .dsh-codex-settings button, .dsh-codex-settings input, .dsh-codex-settings select { font: inherit; }
@@ -693,10 +719,10 @@ export function OpenAICodexSettings({ t }: OpenAICodexSettingsProps) {
           .dsh-codex-settings *, .dsh-codex-settings *::before, .dsh-codex-settings *::after { transition: none !important; }
         }
       `}</style>
-      <div>
+      {embedded ? null : <div>
         <h2 id="openai-codex-settings-title" style={titleStyle}>{t('title')}</h2>
         <p style={{ ...bodyStyle, marginTop: 6 }}>{t('intro')}</p>
-      </div>
+      </div>}
 
       <div className="dsh-codex-workspace">
         <aside className="dsh-codex-profile-list" aria-label={t('accountList')}>
