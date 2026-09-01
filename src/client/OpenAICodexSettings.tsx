@@ -26,7 +26,11 @@ import type {
   ResponseApiPreferences,
 } from '../shared/types.ts'
 import type { OpenAICodexSettingsKey } from './locales.ts'
-import { watchAuthorizationPopupClose } from './authorization-popup.ts'
+import {
+  openAuthorizationPopupBridge,
+  watchAuthorizationPopupClose,
+} from './authorization-popup.ts'
+import type { AuthorizationPopupController } from './authorization-popup.ts'
 import {
   loadResponsePreferences,
   updateResponsePreferences,
@@ -317,7 +321,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
   const [signInNotice, setSignInNotice] = useState<string>()
   const [signInCancelling, setSignInCancelling] = useState(false)
   const popupWatchRef = useRef<(() => void) | undefined>(undefined)
-  const loginPopupRef = useRef<Window | null>(null)
+  const loginPopupRef = useRef<AuthorizationPopupController | null>(null)
   const loginOperationRef = useRef<object | undefined>(undefined)
   const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
   const latestRoutingEventIdRef = useRef<string | null | undefined>(undefined)
@@ -457,8 +461,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
   const signIn = async (): Promise<void> => {
     stopPopupWatch()
     setSignInNotice(undefined)
-    const popup = window.open('about:blank', '_blank')
-    if (popup !== null) popup.opener = null
+    const popup = openAuthorizationPopupBridge()
     loginPopupRef.current = popup
     setBusy(true)
     setStatus({ status: 'signing-in' })
@@ -479,12 +482,28 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         setStatus({ status: 'error', message: t('popupBlocked') })
         return
       }
-      popup.location.replace(challenge.url)
-      popupWatchRef.current = watchAuthorizationPopupClose(popup, () => {
-        popupWatchRef.current = undefined
+      if (!(await popup.navigate(challenge.url))) {
+        loginOperationRef.current = undefined
+        popup.close()
         if (loginPopupRef.current === popup) loginPopupRef.current = null
-        void cancelSignIn()
-      })
+        await jsonRequest(CANCEL_LOGIN_PATH, 'POST')
+        setBusy(false)
+        setStatus({ status: 'error', message: t('popupBlocked') })
+        return
+      }
+      if (popup.window === null) {
+        // The in-app browser adopted the tab. Once the Host acknowledges its
+        // redirect, the provider flow is independent of this settings view.
+        if (loginOperationRef.current === operation) loginOperationRef.current = undefined
+        if (loginPopupRef.current === popup) loginPopupRef.current = null
+        setBusy(false)
+      } else {
+        popupWatchRef.current = watchAuthorizationPopupClose(popup.window, () => {
+          popupWatchRef.current = undefined
+          if (loginPopupRef.current === popup) loginPopupRef.current = null
+          void cancelSignIn()
+        })
+      }
     } catch (error: unknown) {
       const loginWasActive = loginOperationRef.current === operation
       if (loginWasActive) loginOperationRef.current = undefined
