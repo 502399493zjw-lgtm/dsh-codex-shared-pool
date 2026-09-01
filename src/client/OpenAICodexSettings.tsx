@@ -90,7 +90,7 @@ export interface OpenAICodexSettingsProps extends Partial<OpenAICodexSettingsInj
   readonly embedded?: boolean
 }
 
-const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minWidth: 0, maxWidth: 1040 }
+const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minWidth: 0, maxWidth: 960, containerType: 'inline-size' }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
 const badgeStyle: CSSProperties = { padding: '2px 8px', borderRadius: 999, background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary, #3964fe) 14%, transparent)', color: 'var(--dsw-alias-state-business-primary, #3964fe)', fontSize: 12, fontWeight: 600 }
@@ -667,6 +667,13 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
         .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
         .dsh-codex-cancel-auth { margin-top: 16px; }
+        @container (max-width: 520px) {
+          .dsh-codex-workspace { grid-template-columns: minmax(0, 1fr); }
+          .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
+          .dsh-codex-profile-detail { min-height: 420px; padding-right: 18px; padding-left: 18px; }
+          .dsh-codex-detail-actions { margin-right: -18px; margin-left: -18px; }
+          .dsh-codex-empty { min-height: 280px; }
+        }
         .dsh-codex-routing { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
         .dsh-codex-routing-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 54px; padding: 15px 20px; border: 0; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-routing-trigger:hover { background: var(--dsw-alias-interactive-bg-hover); }
