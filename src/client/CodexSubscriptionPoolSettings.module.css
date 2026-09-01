@@ -5,8 +5,8 @@
   --subscription-pool-blue: var(--dsw-alias-state-business-primary, #3964fe);
   box-sizing: border-box;
   display: flex;
-  width: 100%;
-  max-width: 1040px;
+  width: min(100%, 960px);
+  max-width: 960px;
   min-width: 0;
   margin-inline: auto;
   flex-direction: column;
@@ -19,20 +19,27 @@
  * the subscription-pool marker so every other settings section retains the
  * stock shell dimensions.
  */
-@media (min-width: 981px) {
+@media (min-width: 641px) {
   :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
-    width: min(1500px, calc(100vw - 36px));
-    max-width: calc(100vw - 36px);
+    width: clamp(760px, calc(100vw - 48px), 1280px);
+    max-width: calc(100vw - 24px);
+    min-width: 0;
   }
 
   :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
-    width: 244px;
-    flex: 0 0 244px;
+    width: clamp(200px, 18vw, 224px);
+    flex: 0 0 clamp(200px, 18vw, 224px);
+  }
+
+  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
+    min-width: 0;
   }
 
   :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) > :last-child {
-    padding-right: 54px;
-    padding-left: 54px;
+    width: 100%;
+    min-width: 0;
+    padding-right: clamp(24px, 4vw, 48px);
+    padding-left: clamp(24px, 4vw, 48px);
   }
 
   :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {

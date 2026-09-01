@@ -23,8 +23,9 @@
   container-name: team-settings;
   container-type: inline-size;
   display: flex;
-  width: 100%;
-  max-width: 1040px;
+  width: min(100%, 960px);
+  max-width: 960px;
+  min-width: 0;
   flex-direction: column;
   gap: 22px;
   color: var(--team-ink);
@@ -2664,7 +2665,22 @@
 
 }
 
+@container team-settings (max-width: 640px) {
+  .accountWorkspace {
+    grid-template-columns: minmax(220px, .82fr) minmax(0, 1.45fr);
+  }
+}
+
 @container team-settings (max-width: 520px) {
+  .accountWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .accountDirectory {
+    border-right: 0;
+    border-bottom: 1px solid var(--team-panel-line-strong);
+  }
+
   .usageCards[data-owner='true'] {
     grid-template-columns: 1fr;
   }
@@ -2673,12 +2689,6 @@
     border-top: 1px solid var(--team-line);
     border-left: 0;
     padding-left: 0;
-  }
-}
-
-@container team-settings (max-width: 640px) {
-  .accountWorkspace {
-    grid-template-columns: minmax(220px, .82fr) minmax(0, 1.45fr);
   }
 }
 
@@ -2763,7 +2773,7 @@
   }
 
   .accountWorkspace {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .page .accountActionButton {

@@ -13,24 +13,43 @@ const subscriptionPoolSource = readFileSync(
   new URL('../src/client/CodexSubscriptionPoolSettings.tsx', import.meta.url),
   'utf8',
 )
+const localSettingsSource = readFileSync(
+  new URL('../src/client/OpenAICodexSettings.tsx', import.meta.url),
+  'utf8',
+)
 
 describe('Team Settings responsive container contract', () => {
-  it('scopes the prototype-width settings shell to the subscription-pool section', () => {
+  it('bounds the subscription-pool settings shell with stable viewport gutters', () => {
     expect(subscriptionPoolSource).toMatch(/data-dsh-codex-subscription-pool/)
     expect(subscriptionPoolCss).toMatch(
-      /@media \(min-width: 981px\)\s*\{[\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[\s\S]*?width:\s*min\(1500px,\s*calc\(100vw - 36px\)\);/,
+      /@media \(min-width: 641px\)\s*\{[\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*\{[^}]*width:\s*clamp\(760px,\s*calc\(100vw - 48px\),\s*1280px\);[^}]*max-width:\s*calc\(100vw - 24px\);[^}]*min-width:\s*0;/,
     )
     expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*width:\s*244px;[^}]*flex:\s*0 0 244px;/s,
+      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*width:\s*clamp\(200px,\s*18vw,\s*224px\);[^}]*flex:\s*0 0 clamp\(200px,\s*18vw,\s*224px\);/s,
     )
     expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\) > :last-child\s*\{[^}]*padding-right:\s*54px;[^}]*padding-left:\s*54px;/s,
+      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\)\s*\{[^}]*min-width:\s*0;/s,
+    )
+    expect(subscriptionPoolCss).toMatch(
+      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\) > :last-child\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*padding-right:\s*clamp\(24px,\s*4vw,\s*48px\);[^}]*padding-left:\s*clamp\(24px,\s*4vw,\s*48px\);/s,
     )
     expect(subscriptionPoolCss).toMatch(
       /body\[data-ds-dark-theme\][\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*\{[^}]*border:\s*1px solid #35383d;[^}]*background:\s*#242629;/s,
     )
     expect(subscriptionPoolCss).toMatch(
       /body\[data-ds-dark-theme\][\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*border-right:\s*1px solid #383c42;/s,
+    )
+  })
+
+  it('caps both local and Team panels and lets their master-detail layouts collapse safely', () => {
+    expect(subscriptionPoolCss).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;/s)
+    expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
+    expect(localSettingsSource).toMatch(/maxWidth:\s*960,\s*containerType:\s*'inline-size'/)
+    expect(localSettingsSource).toMatch(
+      /@container \(max-width:\s*520px\)\s*\{[\s\S]*?\.dsh-codex-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    )
+    expect(css).toMatch(
+      /@container team-settings \(max-width: 520px\)\s*\{[\s\S]*?\.accountWorkspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     )
   })
 
@@ -75,7 +94,7 @@ describe('Team Settings responsive container contract', () => {
       /@container team-settings \(max-width: 640px\)\s*\{[\s\S]*?\.accountWorkspace\s*\{[^}]*grid-template-columns:\s*minmax\(220px,\s*\.82fr\)\s+minmax\(0,\s*1\.45fr\);/,
     )
     expect(css).toMatch(
-      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.accountWorkspace\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.accountWorkspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     )
     expect(css).not.toMatch(/@media \(max-width: (?:720|980)px\)\s*\{[\s\S]*?\.accountWorkspace/)
   })
