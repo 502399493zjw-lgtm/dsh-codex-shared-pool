@@ -67,6 +67,8 @@ const host: UserConfig = {
     index: 'src/index.ts',
     invariant: 'src/invariant.ts',
     bin: 'src/bin.ts',
+    'team-broker-bin': 'src/team-broker-bin.ts',
+    'team-migrate-bin': 'src/team-migrate-bin.ts',
   },
   outDir: 'lib',
   format: 'esm',
@@ -74,7 +76,7 @@ const host: UserConfig = {
   target: 'es2024',
   fixedExtension: false,
   dts: false,
-  sourcemap: false,
+  sourcemap: true,
   clean: false,
   deps: {
     alwaysBundle: [...HOST_BUNDLED_MODULES],
@@ -90,7 +92,7 @@ const client: UserConfig = {
   platform: 'browser',
   target: 'es2022',
   dts: false,
-  sourcemap: false,
+  sourcemap: true,
   clean: false,
   plugins: [inlineClientCss()],
   deps: {

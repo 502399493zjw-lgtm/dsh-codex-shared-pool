@@ -36,8 +36,11 @@ describe('standalone dsh-codex-shared-pool project boundary', () => {
       client: { platform: 'web' },
     })
     expect(dependencySpecs.every(specifier => !specifier.startsWith('workspace:'))).toBe(true)
-    expect(Object.keys(manifest.dependencies ?? {}))
-      .not.toEqual(expect.arrayContaining([expect.stringMatching(/^@deepseek-ai\//u)]))
+    expect(manifest.dependencies).toMatchObject({
+      '@deepseek-ai/dsh-sdk-protocol': '0.1.0-rc.8',
+      '@deepseek-ai/schemastery': '^3.18.1',
+      pg: '^8.23.0',
+    })
     expect(manifest.peerDependencies).toMatchObject({
       '@deepseek-ai/dsh-sdk-protocol': '0.1.0-rc.8',
       '@deepseek-ai/schemastery': '^3.18.1',

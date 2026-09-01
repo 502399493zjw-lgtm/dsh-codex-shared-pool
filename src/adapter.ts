@@ -14,6 +14,7 @@ import type { OpenAICodexCredentialStore } from './store.ts'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexResponseRuntime } from './responses.ts'
 import type { ResponseApiPreferences } from './tool-policy.ts'
+import { resolveTeamClientBaseUrl, teamClientResponsesUrl } from './team/client.ts'
 
 /** Provider idle ceiling used by the composite route. */
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
@@ -79,6 +80,23 @@ function requestProvider(provider: Provider): Provider {
         },
       },
     },
+  }
+}
+
+export interface OpenAICodexTeamClientAdapterOptions {
+  /** Validated Team base URL ending in the plugin Team path. */
+  readonly baseUrl: string
+  /** Per-request Host credential resolver returning a Codex-compatible Team bearer. */
+  readonly resolveApiKey: () => Promise<string>
+}
+
+/** Rewrite the complete static Codex model catalog to one Team gateway. */
+export function createTeamClientProvider(provider: Provider, baseUrl: string): Provider {
+  const resolvedBaseUrl = resolveTeamClientBaseUrl(baseUrl)
+  return {
+    ...provider,
+    baseUrl: resolvedBaseUrl,
+    getModels: () => provider.getModels().map(model => ({ ...model, baseUrl: resolvedBaseUrl })),
   }
 }
 
@@ -181,10 +199,29 @@ export function createOpenAICodexAdapter(
   credentials: OpenAICodexCredentialStore,
   resolveAttachments: () => AttachmentStore | undefined,
   responsePreferences: () => ResponseApiPreferences,
-  routingEvents?: LocalRoutingEventLedger,
+  teamClientOrRoutingEvents?: OpenAICodexTeamClientAdapterOptions | LocalRoutingEventLedger,
+  routingEventsOverride?: LocalRoutingEventLedger,
 ): PiAiAdapter {
-  const provider = openaiCodexProvider()
-  const responses = new OpenAICodexResponseRuntime(responsePreferences)
+  const teamClient = teamClientOrRoutingEvents !== undefined && 'resolveApiKey' in teamClientOrRoutingEvents
+    ? teamClientOrRoutingEvents
+    : undefined
+  const routingEvents = teamClient === undefined
+    ? teamClientOrRoutingEvents as LocalRoutingEventLedger | undefined
+    : routingEventsOverride
+  const localProvider = openaiCodexProvider()
+  const provider = teamClient === undefined
+    ? localProvider
+    : createTeamClientProvider(localProvider, teamClient.baseUrl)
+  const responses = new OpenAICodexResponseRuntime(
+    responsePreferences,
+    teamClient === undefined ? undefined : () => {
+      // Team routing owns upstream stickiness; there is no local WebSocket
+      // continuation to close when the gateway changes an upstream account.
+    },
+    teamClient === undefined
+      ? {}
+      : { forceSse: true, responsesUrl: teamClientResponsesUrl(teamClient.baseUrl) },
+  )
   const profiles = new Map<string, ResolvedPiAiProviderProfile>([[OPENAI_CODEX_PROVIDER, {
     provider: OPENAI_CODEX_PROVIDER,
     displayName: 'OpenAI Codex',
@@ -194,11 +231,17 @@ export function createOpenAICodexAdapter(
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider)),
   }]])
-  const models: MutableModels = createModels({ credentials })
-  models.setProvider(provider)
+  let resolveApiKey: () => Promise<string | undefined>
+  if (teamClient === undefined) {
+    const models: MutableModels = createModels({ credentials })
+    models.setProvider(localProvider)
+    resolveApiKey = async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey
+  } else {
+    resolveApiKey = teamClient.resolveApiKey
+  }
   return new OpenAICodexAdapter({
     profiles: () => profiles,
-    resolveApiKey: async () => (await models.getAuth(OPENAI_CODEX_PROVIDER))?.auth.apiKey,
+    resolveApiKey,
     resolveAttachments,
-  }, responses, credentials, true, routingEvents)
+  }, responses, credentials, teamClient === undefined, routingEvents)
 }
