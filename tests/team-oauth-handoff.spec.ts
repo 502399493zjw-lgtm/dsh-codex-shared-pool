@@ -14,13 +14,16 @@ const credential = {
 }
 
 describe('Team credential OAuth handoff', () => {
-  it('decrypts one short-lived envelope only for the bound contribution account', () => {
+  it('retains only an exact-envelope receipt while keeping direct consumption one-time', () => {
     const registry = new TeamCredentialHandoffRegistry({ now: () => 1_000, ttlMs: 60_000 })
     const offer = registry.create(ref)
     const envelope = sealTeamCredentialHandoff(offer, ref, { label: 'Personal Codex', credential })
 
     expect(registry.complete(ref, envelope)).toEqual({ label: 'Personal Codex', credential })
-    expect(() => registry.complete(ref, envelope)).toThrow(/expired|unknown|already used/iu)
+    expect(() => registry.complete(ref, envelope)).toThrow(/already used/iu)
+    expect(registry.completeReplaySafe(ref, envelope)).toEqual({ replayed: true })
+    expect(() => registry.complete(ref, { ...envelope, tag: `${envelope.tag.slice(0, -2)}AA` }))
+      .toThrow(/expired|unknown|already used|replay/iu)
   })
 
   it('binds ciphertext to the team and account and rejects tampering', () => {

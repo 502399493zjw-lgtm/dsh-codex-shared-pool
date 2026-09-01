@@ -46,6 +46,18 @@ export function groupTeamContributions(
   }
 }
 
+export function localProfilesAvailableForTeam<T extends { readonly id: string }>(
+  profiles: readonly T[],
+  contributions: readonly TeamManagementContributionSummary[],
+  currentMemberId: string,
+): readonly T[] {
+  const represented = new Set(contributions
+    .filter(account => account.ownerMemberId === currentMemberId && account.status !== 'revoked')
+    .map(account => account.sourceLocalProfileId)
+    .filter((id): id is string => id !== undefined))
+  return profiles.filter(profile => !represented.has(profile.id))
+}
+
 export type ContributionProtectionDraftResult = {
   readonly ok: true
   readonly patch: {

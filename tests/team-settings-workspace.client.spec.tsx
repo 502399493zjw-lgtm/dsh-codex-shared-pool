@@ -1442,6 +1442,30 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('moves a durably bound local profile into shared accounts immediately and after remount', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: [{ ...mine, label: '本机账号 A', sourceLocalProfileId: 'local-a' }],
+    }
+
+    const first = render(<TeamSettings t={translate} embedded />)
+    let settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    let directory = within(settings).getByRole('complementary')
+    let details = within(settings).getByRole('region', { name: zh.accountDetails })
+
+    expect(within(directory).queryByRole('button', { name: /本机账号 A · 本机已登录/u })).toBeNull()
+    expect(within(directory).getByRole('button', { name: /本机账号 A · 我贡献/u })).toBeDefined()
+    expect(within(details).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
+
+    first.unmount()
+    render(<TeamSettings t={translate} embedded />)
+    settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    directory = within(settings).getByRole('complementary')
+    details = within(settings).getByRole('region', { name: zh.accountDetails })
+    expect(within(directory).getByRole('button', { name: /本机账号 A · 我贡献/u })).toBeDefined()
+    expect(within(details).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
+  })
+
   it('shows which local account authorization is pending immediately after click', async () => {
     let resolveOAuth!: (value: Awaited<ReturnType<typeof managementApi.startOAuth>>) => void
     managementApi.startOAuth.mockImplementationOnce(() => new Promise(resolve => {

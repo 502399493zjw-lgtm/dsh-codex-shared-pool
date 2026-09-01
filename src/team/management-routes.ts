@@ -132,6 +132,7 @@ const MAX_REMOTE_BODY_BYTES = 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 15_000
 const PENDING_JOIN_REF_SUFFIX = '_PENDING_JOIN'
 const BROWSER_OAUTH_PENDING_REF_SUFFIX = '_BROWSER_OAUTH_PENDING'
+const LOCAL_CONTRIBUTION_BINDINGS_REF_SUFFIX = '_LOCAL_CONTRIBUTION_BINDINGS'
 const DISSOLUTION_PENDING_REF_SUFFIX = '_DISSOLUTION_PENDING'
 const DISSOLUTION_TERMINAL_REF_SUFFIX = '_DISSOLUTION_TERMINAL'
 const DISSOLUTION_KEY_DIGEST_REF_SUFFIX = '_DISSOLUTION_KEY_DIGEST'
@@ -166,6 +167,17 @@ interface PendingBrowserOAuthRecord {
 interface PendingBrowserOAuthJournal {
   readonly version: 1
   readonly operations: readonly PendingBrowserOAuthRecord[]
+}
+
+interface LocalContributionBinding {
+  readonly expectedContext: TeamManagementExpectedContext
+  readonly accountId: string
+  readonly sourceLocalProfileId: string
+}
+
+interface LocalContributionBindingJournal {
+  readonly version: 1
+  readonly bindings: readonly LocalContributionBinding[]
 }
 
 /** Host-only journal. The raw recovery secret must never cross a Browser route. */
@@ -255,6 +267,7 @@ interface LocalBrowserOAuthOperation {
 
 interface LocalAccountValidationIntent {
   readonly expectedProviderAccountId: string
+  readonly sourceLocalProfileId: string
 }
 
 export interface TeamManagementRouteOptions {
@@ -570,6 +583,37 @@ function parsePendingBrowserOAuthJournal(value: string): PendingBrowserOAuthJour
     }
   })
   return { version: 1, operations }
+}
+
+function parseLocalContributionBindingJournal(value: string): LocalContributionBindingJournal {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    throw new Error('local contribution binding journal is invalid')
+  }
+  const journal = record(parsed, 'local contribution binding journal')
+  exactKeys(journal, ['version', 'bindings'])
+  if (journal.version !== 1 || !Array.isArray(journal.bindings) || journal.bindings.length > 256) {
+    throw new Error('local contribution binding journal is invalid')
+  }
+  const accountIds = new Set<string>()
+  const profileIds = new Set<string>()
+  const bindings = journal.bindings.map((candidate): LocalContributionBinding => {
+    const binding = record(candidate, 'local contribution binding')
+    exactKeys(binding, ['expectedContext', 'accountId', 'sourceLocalProfileId'])
+    const expectedContext = requiredExpectedContext({ expectedContext: binding.expectedContext })
+    const accountId = requiredUnmodifiedString(binding, 'accountId')
+    const sourceLocalProfileId = requiredUnmodifiedString(binding, 'sourceLocalProfileId')
+    const scope = `${expectedContext.serverOrigin}\u0000${expectedContext.teamId}\u0000${expectedContext.currentMemberId}\u0000`
+    if (accountIds.has(`${scope}${accountId}`) || profileIds.has(`${scope}${sourceLocalProfileId}`)) {
+      throw new Error('local contribution binding journal is invalid')
+    }
+    accountIds.add(`${scope}${accountId}`)
+    profileIds.add(`${scope}${sourceLocalProfileId}`)
+    return { expectedContext, accountId, sourceLocalProfileId }
+  })
+  return { version: 1, bindings }
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -1252,6 +1296,7 @@ class TeamManagementProxy {
   private readonly browserOAuth = new Map<string, LocalBrowserOAuthOperation>()
   private readonly invitePreviewSessions = new Map<string, InvitePreviewSession>()
   private browserOAuthJournalTransition: Promise<void> = Promise.resolve()
+  private localContributionBindingTransition: Promise<void> = Promise.resolve()
   private credentialTransition: Promise<void> = Promise.resolve()
 
   constructor(
@@ -1300,13 +1345,32 @@ class TeamManagementProxy {
   }
 
   async overview(explicitKey?: string): Promise<TeamManagementOverview> {
-    const overview = projectOverview(
+    let overview = projectOverview(
       await this.remote(TEAM_OVERVIEW_PATH, explicitKey === undefined ? {} : { key: explicitKey }),
     )
     const actualContext: TeamManagementExpectedContext = {
       serverOrigin: new URL(this.requireEnabled()).origin,
       teamId: overview.team.id,
       currentMemberId: overview.currentMember.id,
+    }
+    const bindings = await this.localContributionBindings()
+    const retainedBindings = bindings.filter((binding) => {
+      if (!sameTeamManagementContext(binding.expectedContext, actualContext)) return false
+      const account = overview.contributions.find(candidate => candidate.id === binding.accountId)
+      return account !== undefined && account.status !== 'revoked'
+    })
+    if (retainedBindings.length !== bindings.length) {
+      await this.replaceLocalContributionBindings(retainedBindings).catch((error: unknown) => {
+        this.onBackgroundError(new Error('failed to prune stale local contribution bindings', { cause: error }))
+      })
+    }
+    const bindingByAccountId = new Map(retainedBindings.map(binding => [binding.accountId, binding]))
+    overview = {
+      ...overview,
+      contributions: overview.contributions.map((account) => {
+        const binding = bindingByAccountId.get(account.id)
+        return binding === undefined ? account : { ...account, sourceLocalProfileId: binding.sourceLocalProfileId }
+      }),
     }
     let livePending: TeamManagementPendingBrowserAuthorization | undefined
     for (const operation of this.browserOAuth.values()) {
@@ -1830,7 +1894,7 @@ class TeamManagementProxy {
     if (typeof accountId !== 'string' || accountId.trim() === '') {
       throw new Error('selected local Codex account has no provider account identity')
     }
-    return { expectedProviderAccountId: accountId }
+    return { expectedProviderAccountId: accountId, sourceLocalProfileId }
   }
 
   private projectDeviceOAuth(item: Record<string, unknown>): TeamManagementOAuthResult {
@@ -1879,9 +1943,7 @@ class TeamManagementProxy {
       }), 'OAuth cancellation')
       const account = projectContribution(item.account)
       if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
-      await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
-        this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
-      })
+      await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
       return { account }
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
@@ -1964,6 +2026,9 @@ class TeamManagementProxy {
       if (suppressCleanup) suppressAutomaticCleanup = true
       cancellation.abort(reason)
     }
+    const expirationTimer = setTimeout(() => {
+      abort(new Error('OpenAI Codex sign-in timed out'), false)
+    }, Math.max(0, offer.expiresAt - this.now()))
     let resolveAuthorization!: (url: string) => void
     let rejectAuthorization!: (error: unknown) => void
     let authorizationSettled = false
@@ -2014,6 +2079,7 @@ class TeamManagementProxy {
         throw error
       })
       .finally(() => {
+        clearTimeout(expirationTimer)
         if (this.browserOAuth.get(account.id)?.completion === completion) this.browserOAuth.delete(account.id)
       })
     this.browserOAuth.set(account.id, { abort, completion, expectedContext: frozenExpectedContext, pending })
@@ -2031,12 +2097,12 @@ class TeamManagementProxy {
   ): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+        const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
           method: 'POST', body: { accountId, discardInitial }, key,
-        })
-        await this.removePendingBrowserOAuth(accountId, expectedContext).catch((error: unknown) => {
-          this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
-        })
+        }), 'OAuth cancellation')
+        const account = projectContribution(item.account)
+        if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+        await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
         return true
       } catch (error: unknown) {
         if (
@@ -2049,6 +2115,21 @@ class TeamManagementProxy {
       }
     }
     return false
+  }
+
+  private async clearOAuthRecoveryAfterFinalAccount(
+    account: TeamManagementContributionSummary,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<void> {
+    await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
+      this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
+    })
+    // Cancellation is a no-op once completion wins the race. Keep the durable profile
+    // identity for every non-revoked final state so refresh cannot ungroup an active account.
+    if (account.status !== 'revoked') return
+    await this.removeLocalContributionBinding(account.id, expectedContext).catch((error: unknown) => {
+      this.onBackgroundError(new Error('failed to clear local contribution binding', { cause: error }))
+    })
   }
 
   private async captureAndTransferOAuth(
@@ -2077,26 +2158,57 @@ class TeamManagementProxy {
       }
       const currentKey = await this.expectedMutationKey(expectedContext)
       if (signal.aborted) throw abortReason(signal)
+      if (validationIntent !== undefined) {
+        await this.persistLocalContributionBinding({
+          expectedContext,
+          accountId: account.id,
+          sourceLocalProfileId: validationIntent.sourceLocalProfileId,
+        })
+      }
       const envelope = sealTeamCredentialHandoff(
         offer,
         { teamId: account.teamId, accountId: account.id },
         { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
       )
-      const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
-        method: 'POST', body: { accountId: account.id, envelope }, key: currentKey,
-      }), 'OAuth handoff completion')
-      const completedAccount = projectContribution(completed.account)
-      if (
-        completedAccount.id !== account.id
-        || completedAccount.teamId !== account.teamId
-        || completedAccount.status !== 'active'
-      ) throw new Error('remote Team returned a mismatched OAuth contribution')
+      await this.completeRemoteOAuthHandoff(account, envelope, currentKey)
       await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
       })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  }
+
+  private async completeRemoteOAuthHandoff(
+    account: TeamManagementContributionSummary,
+    envelope: ReturnType<typeof sealTeamCredentialHandoff>,
+    key: string,
+  ): Promise<void> {
+    let failure: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
+          method: 'POST', body: { accountId: account.id, envelope }, key,
+        }), 'OAuth handoff completion')
+        const completedAccount = projectContribution(completed.account)
+        if (
+          completedAccount.id !== account.id
+          || completedAccount.teamId !== account.teamId
+          || completedAccount.status !== 'active'
+        ) throw new Error('remote Team returned a mismatched OAuth contribution')
+        return
+      } catch (error: unknown) {
+        failure = error
+        if (
+          error instanceof RemoteTeamError
+          && error.status >= 400
+          && error.status < 500
+          && error.status !== 408
+          && error.status !== 429
+        ) break
+      }
+    }
+    throw failure
   }
 
   async dispose(): Promise<void> {
@@ -2126,7 +2238,9 @@ class TeamManagementProxy {
     const item = record(await this.remote(TEAM_CONTRIBUTION_REVOKE_PATH, {
       method: 'POST', body: { accountId }, key,
     }), 'contribution revocation')
-    return { account: projectContribution(item.account) }
+    const account = projectContribution(item.account)
+    await this.removeLocalContributionBinding(accountId, expectedContext)
+    return { account }
   }
 
   async usage(): Promise<TeamManagementUsageResult> {
@@ -2161,6 +2275,10 @@ class TeamManagementProxy {
 
   private pendingBrowserOAuthRef(): CredentialRef {
     return credentialRef(`${String(this.keyRef())}${BROWSER_OAUTH_PENDING_REF_SUFFIX}`)
+  }
+
+  private localContributionBindingsRef(): CredentialRef {
+    return credentialRef(`${String(this.keyRef())}${LOCAL_CONTRIBUTION_BINDINGS_REF_SUFFIX}`)
   }
 
   private pendingJoinRef(): CredentialRef {
@@ -2199,6 +2317,63 @@ class TeamManagementProxy {
       })
       return []
     }
+  }
+
+  private async localContributionBindings(): Promise<readonly LocalContributionBinding[]> {
+    const resolved = await this.credentials.resolve(this.localContributionBindingsRef())
+    if (resolved === undefined) return []
+    try {
+      return parseLocalContributionBindingJournal(resolved.value).bindings
+    } catch (error: unknown) {
+      this.onBackgroundError(new Error('discarded invalid local contribution bindings', { cause: error }))
+      await this.credentials.unset(this.localContributionBindingsRef()).catch((unsetError: unknown) => {
+        this.onBackgroundError(new Error('failed to discard invalid local contribution bindings', { cause: unsetError }))
+      })
+      return []
+    }
+  }
+
+  private async replaceLocalContributionBindings(bindings: readonly LocalContributionBinding[]): Promise<void> {
+    await this.withLocalContributionBindingTransition(async () => {
+      if (bindings.length === 0) {
+        if (await this.credentials.resolve(this.localContributionBindingsRef()) !== undefined) {
+          await this.credentials.unset(this.localContributionBindingsRef())
+        }
+        return
+      }
+      await this.credentials.set(this.localContributionBindingsRef(), JSON.stringify({ version: 1, bindings }))
+    })
+  }
+
+  private async persistLocalContributionBinding(binding: LocalContributionBinding): Promise<void> {
+    await this.withLocalContributionBindingTransition(async () => {
+      const current = await this.localContributionBindings()
+      const bindings = current.filter(candidate => !(
+        sameTeamManagementContext(candidate.expectedContext, binding.expectedContext)
+        && (candidate.accountId === binding.accountId
+          || candidate.sourceLocalProfileId === binding.sourceLocalProfileId)
+      ))
+      await this.credentials.set(this.localContributionBindingsRef(), JSON.stringify({
+        version: 1,
+        bindings: [...bindings, binding],
+      } satisfies LocalContributionBindingJournal))
+    })
+  }
+
+  private async removeLocalContributionBinding(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+  ): Promise<void> {
+    await this.withLocalContributionBindingTransition(async () => {
+      const current = await this.localContributionBindings()
+      const bindings = current.filter(candidate => !(
+        candidate.accountId === accountId
+        && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+      ))
+      if (bindings.length === current.length) return
+      if (bindings.length === 0) await this.credentials.unset(this.localContributionBindingsRef())
+      else await this.credentials.set(this.localContributionBindingsRef(), JSON.stringify({ version: 1, bindings }))
+    })
   }
 
   private async replacePendingBrowserOAuthJournal(
@@ -2695,6 +2870,18 @@ class TeamManagementProxy {
     const previous = this.browserOAuthJournalTransition
     let release!: () => void
     this.browserOAuthJournalTransition = new Promise(resolve => { release = resolve })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
+  private async withLocalContributionBindingTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.localContributionBindingTransition
+    let release!: () => void
+    this.localContributionBindingTransition = new Promise(resolve => { release = resolve })
     await previous
     try {
       return await operation()

@@ -136,7 +136,10 @@ export type TeamManagementContributionSummary = Pick<TeamContributionAccountSumm
   | 'updatedAt'
   | 'lastError'
   | 'capacity'
->
+> & {
+  /** Opaque Host-local profile identity; present only on this member's bound contribution. */
+  readonly sourceLocalProfileId?: string
+}
 
 /** Explicit minimum Browser projection for the Team-wide active sharing directory. */
 export type TeamManagementSharedAccountDirectoryEntry = Pick<TeamSharedAccountDirectoryEntry,

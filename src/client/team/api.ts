@@ -577,6 +577,7 @@ function parseContribution(value: unknown, capacityOwnerMemberId?: string): Team
     || status !== 'active'
     ? undefined
     : parseCapacity(item.capacity)
+  const sourceLocalProfileId = optionalStringField(item, 'sourceLocalProfileId')
   return {
     id: stringField(item, 'id'),
     teamId: stringField(item, 'teamId'),
@@ -592,6 +593,7 @@ function parseContribution(value: unknown, capacityOwnerMemberId?: string): Team
     updatedAt: numberField(item, 'updatedAt'),
     ...(lastError === undefined ? {} : { lastError }),
     ...(capacity === undefined ? {} : { capacity }),
+    ...(sourceLocalProfileId === undefined ? {} : { sourceLocalProfileId }),
   }
 }
 

@@ -42,6 +42,7 @@ import {
   canRemoveTeamMember,
   canTransferTeamOwnership,
   groupTeamContributions,
+  localProfilesAvailableForTeam,
   parseContributionProtectionDraft,
 } from './team-settings-contract.ts'
 import styles from './TeamSettings.module.css'
@@ -1774,11 +1775,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     : []
   const pendingInviteCount = pendingInvites.length
   const contributionGroups = groupTeamContributions(overview.contributions, overview.currentMember.id)
+  const localTeamProfiles = localProfilesAvailableForTeam(
+    localProfiles,
+    overview.contributions,
+    overview.currentMember.id,
+  )
   const listedAccounts = [...contributionGroups.shared, ...contributionGroups.unshared]
   const teammateSharedAccounts = (overview.activeSharedAccounts ?? [])
     .filter(account => account.ownerMemberId !== overview.currentMember.id)
   const requestedLocalAccount = selectedAccountId?.startsWith('local:') === true
-    ? localProfiles.find(account => localSelectionKey(account.id) === selectedAccountId)
+    ? localTeamProfiles.find(account => localSelectionKey(account.id) === selectedAccountId)
     : undefined
   const requestedContributionAccount = selectedAccountId?.startsWith('contribution:') === true
     ? listedAccounts.find(account => contributionSelectionKey(account.id) === selectedAccountId)
@@ -1796,8 +1802,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           ? { kind: 'contribution', account: contributionGroups.shared[0] }
           : teammateSharedAccounts[0] !== undefined
             ? { kind: 'shared-directory', account: teammateSharedAccounts[0] }
-            : localProfiles[0] !== undefined
-              ? { kind: 'local', account: localProfiles[0] }
+            : localTeamProfiles[0] !== undefined
+              ? { kind: 'local', account: localTeamProfiles[0] }
               : contributionGroups.unshared[0] === undefined
                 ? undefined
                 : { kind: 'contribution', account: contributionGroups.unshared[0] }
@@ -1805,7 +1811,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const accountAliases = new Map([
     ...contributionGroups.shared.map(account => contributionSelectionKey(account.id)),
     ...teammateSharedAccounts.map(account => sharedDirectorySelectionKey(account.id)),
-    ...localProfiles.map(profile => localSelectionKey(profile.id)),
+    ...localTeamProfiles.map(profile => localSelectionKey(profile.id)),
     ...contributionGroups.unshared.map(account => contributionSelectionKey(account.id)),
   ].map((key, index) => [key, t('accountAlias', { letter: accountAliasLetter(index) })]))
 
@@ -2180,7 +2186,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
 
     const sharedAccountCount = contributionGroups.shared.length + teammateSharedAccounts.length
-    const accountCount = listedAccounts.length + teammateSharedAccounts.length + localProfiles.length
+    const accountCount = listedAccounts.length + teammateSharedAccounts.length + localTeamProfiles.length
 
     return (
       <section className={styles.accountWorkspace} role="region" aria-labelledby="team-accounts-title" aria-busy={localProfilesLoading}>
@@ -2207,13 +2213,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               {teammateSharedAccounts.map(renderSharedDirectoryNavigation)}
             </div>
           </section>}
-          {contributionGroups.unshared.length + localProfiles.length === 0 ? null : <section className={styles.directoryGroup} role="region" aria-labelledby="team-unshared-accounts-title">
+          {contributionGroups.unshared.length + localTeamProfiles.length === 0 ? null : <section className={styles.directoryGroup} role="region" aria-labelledby="team-unshared-accounts-title">
             <div className={styles.directoryGroupHeader}>
               <h4 id="team-unshared-accounts-title" className={styles.directoryGroupTitle}>{t('unsharedAccounts')}</h4>
-              <span>{contributionGroups.unshared.length + localProfiles.length}</span>
+              <span>{contributionGroups.unshared.length + localTeamProfiles.length}</span>
             </div>
             <div className={styles.accountNavList}>
-              {localProfiles.map(renderLocalNavigation)}
+              {localTeamProfiles.map(renderLocalNavigation)}
               {contributionGroups.unshared.map(renderContributionNavigation)}
             </div>
           </section>}

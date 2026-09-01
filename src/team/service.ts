@@ -297,10 +297,15 @@ export class TeamService {
     envelope: TeamCredentialHandoffEnvelope,
   ): Promise<TeamContributionAccountSummary> {
     const account = await this.store.updateContributionAccount(auth, accountId, {})
-    if (account.status !== 'authorizing') throw new Error('contribution account is not awaiting authorization')
+    if (account.status !== 'authorizing' && account.status !== 'active') {
+      throw new Error('contribution account is not awaiting authorization')
+    }
     const ref = { teamId: account.teamId, accountId: account.id }
+    let brokerCompleted = false
     try {
       const activation = await this.broker.completeOAuthHandoff(ref, envelope)
+      brokerCompleted = true
+      if (account.status === 'active') return account
       const current = await this.store.setContributionAccountStatus(
         account.teamId,
         account.id,
@@ -317,13 +322,15 @@ export class TeamService {
       return current
     } catch (error: unknown) {
       const projectedError = safeTeamOAuthErrorMessage(error)
-      await this.store.setContributionAccountStatus(
-        account.teamId,
-        account.id,
-        'reauth_required',
-        projectedError,
-        'authorizing',
-      ).catch(() => undefined)
+      if (account.status === 'authorizing' && !brokerCompleted) {
+        await this.store.setContributionAccountStatus(
+          account.teamId,
+          account.id,
+          'reauth_required',
+          projectedError,
+          'authorizing',
+        ).catch(() => undefined)
+      }
       throw new Error(projectedError)
     }
   }

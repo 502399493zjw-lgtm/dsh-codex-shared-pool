@@ -46,16 +46,27 @@ interface PendingHandoff {
   readonly expiresAt: number
 }
 
+interface CompletedHandoff {
+  readonly ref: TeamCredentialRef
+  readonly envelope: TeamCredentialHandoffEnvelope
+  readonly expiresAt: number
+}
+
+export type TeamCredentialHandoffCompletion =
+  | { readonly replayed: false; readonly payload: TeamCredentialHandoffPayload }
+  | { readonly replayed: true }
+
 export interface TeamCredentialHandoffRegistryOptions {
   readonly now?: () => number
   readonly ttlMs?: number
 }
 
-/** Keeps ephemeral server private keys in memory and consumes each offer at most once. */
+/** Decrypts each offer once and keeps only an exact-envelope replay receipt until expiry. */
 export class TeamCredentialHandoffRegistry {
   private readonly now: () => number
   private readonly ttlMs: number
   private readonly pending = new Map<string, PendingHandoff>()
+  private readonly completed = new Map<string, CompletedHandoff>()
 
   constructor(options: TeamCredentialHandoffRegistryOptions = {}) {
     this.now = options.now ?? Date.now
@@ -78,10 +89,28 @@ export class TeamCredentialHandoffRegistry {
   }
 
   complete(refInput: TeamCredentialRef, envelopeInput: TeamCredentialHandoffEnvelope): TeamCredentialHandoffPayload {
+    const completion = this.completeReplaySafe(refInput, envelopeInput)
+    if (completion.replayed) throw new Error('OAuth handoff session is already used')
+    return completion.payload
+  }
+
+  completeReplaySafe(
+    refInput: TeamCredentialRef,
+    envelopeInput: TeamCredentialHandoffEnvelope,
+  ): TeamCredentialHandoffCompletion {
     const ref = parseRef(refInput)
     const envelope = parseEnvelope(envelopeInput)
     const pending = this.pending.get(envelope.sessionId)
-    if (pending === undefined) throw new Error('OAuth handoff session is unknown, expired, or already used')
+    if (pending === undefined) {
+      const completed = this.completed.get(envelope.sessionId)
+      if (
+        completed !== undefined
+        && completed.expiresAt >= this.now()
+        && sameRef(completed.ref, ref)
+        && sameEnvelope(completed.envelope, envelope)
+      ) return { replayed: true }
+      throw new Error('OAuth handoff session is unknown, expired, already used, or replay differs')
+    }
     if (!sameRef(pending.ref, ref)) throw new Error('OAuth handoff session belongs to another Team account')
     if (pending.expiresAt < this.now()) {
       this.pending.delete(envelope.sessionId)
@@ -104,7 +133,9 @@ export class TeamCredentialHandoffRegistry {
         decipher.update(decodeBase64Url(envelope.ciphertext, 'ciphertext', 1, MAX_CIPHERTEXT_BYTES)),
         decipher.final(),
       ])
-      return parsePayload(JSON.parse(plaintext.toString('utf8')) as unknown)
+      const payload = parsePayload(JSON.parse(plaintext.toString('utf8')) as unknown)
+      this.completed.set(envelope.sessionId, { ref, envelope, expiresAt: pending.expiresAt })
+      return { replayed: false, payload }
     } catch (error: unknown) {
       if (error instanceof SyntaxError) throw new Error('OAuth handoff payload is invalid')
       if (error instanceof Error && error.message.startsWith('OAuth handoff')) throw error
@@ -117,10 +148,14 @@ export class TeamCredentialHandoffRegistry {
     for (const [sessionId, pending] of this.pending) {
       if (sameRef(pending.ref, ref)) this.pending.delete(sessionId)
     }
+    for (const [sessionId, completed] of this.completed) {
+      if (sameRef(completed.ref, ref)) this.completed.delete(sessionId)
+    }
   }
 
   dispose(): void {
     this.pending.clear()
+    this.completed.clear()
   }
 
   private prune(): void {
@@ -128,7 +163,19 @@ export class TeamCredentialHandoffRegistry {
     for (const [sessionId, pending] of this.pending) {
       if (pending.expiresAt < now) this.pending.delete(sessionId)
     }
+    for (const [sessionId, completed] of this.completed) {
+      if (completed.expiresAt < now) this.completed.delete(sessionId)
+    }
   }
+}
+
+function sameEnvelope(left: TeamCredentialHandoffEnvelope, right: TeamCredentialHandoffEnvelope): boolean {
+  return left.version === right.version
+    && left.sessionId === right.sessionId
+    && left.clientPublicKey === right.clientPublicKey
+    && left.iv === right.iv
+    && left.ciphertext === right.ciphertext
+    && left.tag === right.tag
 }
 
 /** Encrypt a captured OAuth credential using only the public handoff offer. */

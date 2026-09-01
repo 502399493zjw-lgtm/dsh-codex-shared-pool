@@ -10,6 +10,7 @@ import {
   canRemoveTeamMember,
   canTransferTeamOwnership,
   groupTeamContributions,
+  localProfilesAvailableForTeam,
   parseContributionProtectionDraft,
 } from '../src/client/team/team-settings-contract.ts'
 import { en, zh } from '../src/client/team/locales.ts'
@@ -193,5 +194,20 @@ describe('Team Settings contribution grouping', () => {
 
     expect(groups.shared.map(account => account.id)).toEqual(['mine-active'])
     expect(groups.unshared.map(account => account.id)).toEqual(['mine-paused', 'mine-reauth'])
+  })
+
+  it('removes a local profile once its own durable Team contribution represents it', () => {
+    const profiles = [
+      { id: 'local-1', label: 'Personal', createdAt: 1, updatedAt: 1 },
+      { id: 'local-2', label: 'Backup', createdAt: 2, updatedAt: 2 },
+    ]
+    const active = { ...contribution('shared', 'member-1', 'active'), sourceLocalProfileId: 'local-1' }
+
+    expect(localProfilesAvailableForTeam(profiles, [active], 'member-1').map(profile => profile.id))
+      .toEqual(['local-2'])
+    expect(localProfilesAvailableForTeam(profiles, [{ ...active, status: 'revoked' }], 'member-1'))
+      .toEqual(profiles)
+    expect(localProfilesAvailableForTeam(profiles, [{ ...active, ownerMemberId: 'member-2' }], 'member-1'))
+      .toEqual(profiles)
   })
 })
