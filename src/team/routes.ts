@@ -10,6 +10,7 @@ import {
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
+  TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
   TEAM_CONTRIBUTION_REVOKE_PATH,
   TEAM_CONTRIBUTION_UPDATE_PATH,
   TEAM_CONTRIBUTIONS_PATH,
@@ -147,6 +148,15 @@ function oauthCancelInput(value: Record<string, unknown>): { accountId: string; 
     throw new Error('discardInitial must be a boolean')
   }
   return { accountId, discardInitial: value.discardInitial === true }
+}
+
+function providerAccountMatchInput(value: Record<string, unknown>): { providerAccountId: string } {
+  exactFields(value, ['providerAccountId'])
+  const providerAccountId = nonEmptyUnmodifiedString(value, 'providerAccountId')
+  if (providerAccountId.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(providerAccountId)) {
+    throw new Error('providerAccountId is invalid')
+  }
+  return { providerAccountId }
 }
 
 function oauthHandoffInput(value: Record<string, unknown>): {
@@ -495,6 +505,27 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
               currentMemberId: auth.memberId,
               accounts: await service.listContributionAccounts(auth),
             })
+          } catch (error: unknown) {
+            const message = safeMessage(error)
+            json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })
+          }
+        },
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            // Authenticate before parsing so unauthenticated callers cannot use this as an identity oracle.
+            const auth = requireAuth(await authenticate(req, service))
+            const { providerAccountId } = providerAccountMatchInput(await readJson(req))
+            try {
+              const accountIds = await service.findOwnedProviderAccountMatches(auth, providerAccountId)
+              json(res, 200, { accountIds })
+            } catch {
+              json(res, 502, { error: 'provider-account match unavailable' })
+            }
           } catch (error: unknown) {
             const message = safeMessage(error)
             json(res, /API key required/iu.test(message) ? 401 : statusFor(error), { error: message })

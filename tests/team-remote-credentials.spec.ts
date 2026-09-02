@@ -10,6 +10,7 @@ import {
   createTeamCredentialBrokerHttpHandler,
   RemoteTeamCredentialBroker,
   resolveTeamCredentialBrokerBaseUrl,
+  TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH,
   TEAM_CREDENTIAL_BROKER_PATH_PREFIX,
 } from '../src/team/remote-credentials.ts'
 import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
@@ -75,6 +76,112 @@ describe('remote Team credential broker boundary', () => {
       'authorizing',
     )
     expect(JSON.stringify(onStatusChange.mock.calls)).not.toMatch(/provider refused|opaque-provider-token/iu)
+    await remote.dispose()
+  })
+
+  it('matches provider-account identity through the authenticated broker boundary without exporting it', async () => {
+    const providerAccountId = 'provider-account-private-sentinel'
+    const matchesProviderAccount = vi.fn(async (_ref: TeamCredentialRef, candidate: string) => (
+      candidate === providerAccountId
+    ))
+    const baseUrl = await listen(fakeBroker({ matchesProviderAccount }))
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+    })
+
+    await expect(remote.matchesProviderAccount(ref, providerAccountId)).resolves.toBe(true)
+    await expect(remote.matchesProviderAccount(ref, 'different-provider-account')).resolves.toBe(false)
+    expect(matchesProviderAccount).toHaveBeenNthCalledWith(1, ref, providerAccountId)
+    expect(matchesProviderAccount).toHaveBeenNthCalledWith(2, ref, 'different-provider-account')
+
+    const rawResponse = await fetch(
+      TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH.replace(TEAM_CREDENTIAL_BROKER_PATH_PREFIX, baseUrl),
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${INTERNAL_KEY}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ ...ref, providerAccountId }),
+      },
+    )
+    const rawBody = await rawResponse.text()
+    expect(rawResponse.status).toBe(200)
+    expect(JSON.parse(rawBody)).toEqual({ matches: true })
+    expect(rawBody).not.toContain(providerAccountId)
+    await remote.dispose()
+  })
+
+  it('requires an exact provider-account match request schema before invoking the broker', async () => {
+    const matchesProviderAccount = vi.fn(async () => true)
+    const baseUrl = await listen(fakeBroker({ matchesProviderAccount }))
+    const endpoint = TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH
+      .replace(TEAM_CREDENTIAL_BROKER_PATH_PREFIX, baseUrl)
+    const request = (body: unknown) => fetch(endpoint, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${INTERNAL_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    await expect(request({ ...ref })).resolves.toMatchObject({ status: 400 })
+    await expect(request({ ...ref, providerAccountId: '' })).resolves.toMatchObject({ status: 400 })
+    await expect(request({
+      ...ref,
+      providerAccountId: 'provider-account-private-sentinel',
+      token: 'provider-token-private-sentinel',
+    })).resolves.toMatchObject({ status: 400 })
+    expect(matchesProviderAccount).not.toHaveBeenCalled()
+  })
+
+  it('rejects non-boolean match results without reflecting broker-owned identity or tokens', async () => {
+    const providerAccountId = 'provider-account-private-sentinel'
+    const providerToken = 'provider-token-private-sentinel'
+    const matchesProviderAccount = vi.fn(async () => ({
+      matches: true,
+      providerAccountId,
+      token: providerToken,
+    }))
+    const baseUrl = await listen(fakeBroker({
+      matchesProviderAccount: matchesProviderAccount as unknown as TeamCredentialBroker['matchesProviderAccount'],
+    }))
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+    })
+
+    let message = ''
+    try {
+      await remote.matchesProviderAccount(ref, providerAccountId)
+      throw new Error('expected provider-account match to reject an invalid broker result')
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toMatch(/invalid.*match|HTTP 502/iu)
+    expect(message).not.toContain(providerAccountId)
+    expect(message).not.toContain(providerToken)
+    await remote.dispose()
+  })
+
+  it('rejects a remote provider-account match response with extra identity fields', async () => {
+    const providerAccountId = 'provider-account-private-sentinel'
+    const providerToken = 'provider-token-private-sentinel'
+    const baseUrl = await listenHandler(async (_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ matches: true, providerAccountId, token: providerToken }))
+    })
+    const remote = new RemoteTeamCredentialBroker({
+      baseUrl,
+      resolveApiKey: async () => INTERNAL_KEY,
+    })
+
+    let message = ''
+    try {
+      await remote.matchesProviderAccount(ref, providerAccountId)
+      throw new Error('expected provider-account match to reject an invalid remote response')
+    } catch (error: unknown) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    expect(message).toMatch(/invalid.*match/iu)
+    expect(message).not.toContain(providerAccountId)
+    expect(message).not.toContain(providerToken)
     await remote.dispose()
   })
 
@@ -419,6 +526,7 @@ describe('remote Team credential broker boundary', () => {
 })
 
 function fakeBroker(overrides: Partial<TeamCredentialBroker> = {}): TeamCredentialBroker & {
+  matchesProviderAccount: ReturnType<typeof vi.fn>
   readUsage: ReturnType<typeof vi.fn>
   forwardResponses: ReturnType<typeof vi.fn>
   revoke: ReturnType<typeof vi.fn>
@@ -428,6 +536,7 @@ function fakeBroker(overrides: Partial<TeamCredentialBroker> = {}): TeamCredenti
     restartOAuth: vi.fn(async () => { throw new Error('not used') }),
     cancelOAuth: vi.fn(async () => undefined),
     inspectAuthorization: vi.fn(async () => ({ status: 'active' as const })),
+    matchesProviderAccount: vi.fn(async () => false),
     readUsage: vi.fn(async () => ({
       rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 75, windowSeconds: 18_000 }] }],
     })),
@@ -436,6 +545,7 @@ function fakeBroker(overrides: Partial<TeamCredentialBroker> = {}): TeamCredenti
     dispose: vi.fn(async () => undefined),
     ...overrides,
   } as TeamCredentialBroker & {
+    matchesProviderAccount: ReturnType<typeof vi.fn>
     readUsage: ReturnType<typeof vi.fn>
     forwardResponses: ReturnType<typeof vi.fn>
     revoke: ReturnType<typeof vi.fn>

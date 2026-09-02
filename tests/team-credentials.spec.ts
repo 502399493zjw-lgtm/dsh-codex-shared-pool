@@ -79,6 +79,30 @@ describe('Local Team credential broker', () => {
     }
   })
 
+  it('matches only the exact provider account identity held in isolated storage', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-match-provider-account-'))
+    try {
+      const ref = { teamId: 'team-1', accountId: 'account-1' }
+      const store = new OpenAICodexCredentialStore(join(rootDir, ref.teamId, `${ref.accountId}.json`))
+      await store.addProfile('Owner Codex', {
+        type: 'oauth',
+        access: 'host-only-access-token',
+        refresh: 'host-only-refresh-token',
+        expires: Date.now() + 60_000,
+        accountId: 'chatgpt-account-1',
+      })
+      const broker = new LocalTeamCredentialBroker({ rootDir })
+
+      await expect(broker.matchesProviderAccount(ref, 'chatgpt-account-1')).resolves.toBe(true)
+      await expect(broker.matchesProviderAccount(ref, 'chatgpt-account-2')).resolves.toBe(false)
+      await expect(broker.matchesProviderAccount(ref, '')).resolves.toBe(false)
+      await expect(broker.matchesProviderAccount(ref, 'chatgpt-account-1\n')).resolves.toBe(false)
+      await broker.dispose()
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+
   it('uses provider device code login so a central broker does not depend on the contributor localhost', async () => {
     const rootDir = await mkdtemp(join(tmpdir(), 'dsh-team-device-auth-'))
     try {

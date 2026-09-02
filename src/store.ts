@@ -517,6 +517,14 @@ export class OpenAICodexCredentialStore implements OpenAICodexProfileStore {
   }
 
   /**
+   * Read only the provider account identifier needed for Host-side identity coordination.
+   * Tokens remain inside the credential store.
+   */
+  async readProfileProviderAccountId(profileId: string): Promise<string | undefined> {
+    return (await this.readDocument()).profiles.find(candidate => candidate.id === profileId)?.credential.accountId
+  }
+
+  /**
    * Atomically update one profile credential.
    * @param profileId - Profile to update.
    * @param fn - Credential transformation applied inside the transaction.

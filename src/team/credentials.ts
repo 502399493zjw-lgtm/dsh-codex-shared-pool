@@ -1,5 +1,6 @@
 /** Host-only credential broker boundary for Team contribution accounts. */
 
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { rm } from 'node:fs/promises'
 import { createModels } from '@earendil-works/pi-ai'
@@ -62,6 +63,8 @@ export interface TeamCredentialBroker {
   cancelOAuth(ref: TeamCredentialRef): Promise<void>
   /** Inspect Host-owned credential state without returning provider identity or tokens. */
   inspectAuthorization(ref: TeamCredentialRef): Promise<TeamCredentialAuthorizationState>
+  /** Compare one provider account identity without returning stored identity or tokens. */
+  matchesProviderAccount(ref: TeamCredentialRef, providerAccountId: string): Promise<boolean>
   /** Return only provider quota metadata after refreshing OAuth internally. */
   readUsage(ref: TeamCredentialRef, signal?: AbortSignal): Promise<OpenAICodexUsage>
   /** Forward one fixed-endpoint Responses request without exposing OAuth material. */
@@ -276,6 +279,21 @@ export class LocalTeamCredentialBroker implements TeamCredentialBroker {
           status: 'reauth_required',
           lastError: 'authorization was interrupted; authorize this account again',
         }
+  }
+
+  async matchesProviderAccount(ref: TeamCredentialRef, providerAccountId: string): Promise<boolean> {
+    if (providerAccountId.length === 0 || providerAccountId.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(providerAccountId)) {
+      return false
+    }
+    const credential = await this.store(ref).read(OPENAI_CODEX_PROVIDER)
+    const storedAccountId = credential?.type === 'oauth' && typeof credential.accountId === 'string'
+      ? credential.accountId
+      : undefined
+    if (storedAccountId === undefined || storedAccountId.length === 0) return false
+    return timingSafeEqual(
+      createHash('sha256').update(storedAccountId).digest(),
+      createHash('sha256').update(providerAccountId).digest(),
+    )
   }
 
   async readUsage(ref: TeamCredentialRef, signal?: AbortSignal): Promise<OpenAICodexUsage> {

@@ -142,6 +142,30 @@ export class TeamService {
     return this.store.listContributionAccounts(auth)
   }
 
+  /**
+   * Return only this member's contribution ids whose isolated credential matches
+   * the supplied provider identity. The identity itself never enters a projection.
+   */
+  async findOwnedProviderAccountMatches(
+    auth: TeamAuthContext,
+    providerAccountId: string,
+  ): Promise<readonly string[]> {
+    const accounts = (await this.store.listContributionAccounts(auth)).filter(account => (
+      account.ownerMemberId === auth.memberId
+      && account.status !== 'authorizing'
+      && account.status !== 'revoked'
+    ))
+    const matches = await Promise.all(accounts.map(async account => (
+      await this.broker.matchesProviderAccount(
+        { teamId: account.teamId, accountId: account.id },
+        providerAccountId,
+      )
+        ? account.id
+        : undefined
+    )))
+    return matches.filter((accountId): accountId is string => accountId !== undefined)
+  }
+
   /** Add live capacity only to accounts owned by the authenticated member. */
   async overview(auth: TeamAuthContext): Promise<TeamOverview> {
     const overview = await this.store.overview(auth)
