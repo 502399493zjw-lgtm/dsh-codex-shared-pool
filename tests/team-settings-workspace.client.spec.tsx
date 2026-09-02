@@ -1124,6 +1124,54 @@ describe('Team subscription-pool workspace', () => {
     expect(document.body.textContent).not.toContain('team_authorization_failed')
   })
 
+  it('refreshes a reconciled local account and localizes the already-shared conflict', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [{ ...mine, label: '本机账号 A', sourceLocalProfileId: 'local-a' }],
+      }
+      throw Object.assign(
+        new Error('remote Team request failed: team_local_account_already_shared'),
+        { status: 409 },
+      )
+    })
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+      .getByRole('button', { name: '继续，再次授权' }))
+
+    expect(await screen.findByText('这个 OpenAI 账号已在 Team 中共享，已自动关联到现有账号，无需再次授权。')).toBeDefined()
+    expect(document.body.textContent).not.toContain('team_local_account_already_shared')
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    const directory = within(panel).getByRole('complementary')
+    expect(within(directory).getByRole('button', { name: /本机账号 A · 我贡献/u })).toBeDefined()
+    expect(within(directory).queryByRole('button', { name: /本机账号 A · 本机已登录/u })).toBeNull()
+  })
+
+  it('localizes a competing browser authorization and closes the stale local-account confirmation', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    managementApi.startOAuth.mockRejectedValueOnce(Object.assign(
+      new Error('remote Team request failed: team_browser_authorization_already_pending'),
+      { status: 409 },
+    ))
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+    const dialogName = '将 本机账号 A 用于 Team'
+    fireEvent.click(within(screen.getByRole('dialog', { name: dialogName }))
+      .getByRole('button', { name: '继续，再次授权' }))
+
+    expect(await screen.findByText('已有另一个 OpenAI 浏览器授权正在进行，请先完成或取消后再发起新的授权。')).toBeDefined()
+    expect(document.body.textContent).not.toContain('team_browser_authorization_already_pending')
+    expect(screen.queryByRole('dialog', { name: dialogName })).toBeNull()
+  })
+
   it('edits sharing limits from the owned account card', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })

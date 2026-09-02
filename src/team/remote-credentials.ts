@@ -25,6 +25,7 @@ export const TEAM_CREDENTIAL_BROKER_OAUTH_RESTART_PATH = `${TEAM_CREDENTIAL_BROK
 export const TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/cancel`
 export const TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/oauth/handoff/complete`
 export const TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/authorization`
+export const TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/provider-account/match`
 export const TEAM_CREDENTIAL_BROKER_USAGE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/usage`
 export const TEAM_CREDENTIAL_BROKER_RESPONSES_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/responses`
 export const TEAM_CREDENTIAL_BROKER_REVOKE_PATH = `${TEAM_CREDENTIAL_BROKER_PATH_PREFIX}/revoke`
@@ -183,6 +184,13 @@ export class RemoteTeamCredentialBroker implements TeamCredentialBroker {
     const state = parseAuthorizationState(await this.postJson(TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH, ref))
     if (state.status === 'authorizing') this.ensureMonitor(ref)
     return state
+  }
+
+  async matchesProviderAccount(ref: TeamCredentialRef, providerAccountId: string): Promise<boolean> {
+    return parseProviderAccountMatch(await this.postJson(
+      TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH,
+      { ...ref, providerAccountId },
+    ))
   }
 
   async readUsage(ref: TeamCredentialRef, signal?: AbortSignal): Promise<OpenAICodexUsage> {
@@ -399,6 +407,11 @@ export function createTeamCredentialBrokerHttpHandler(
         } else if (path === TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH) {
           const ref = parseCredentialRef(body)
           writeJson(res, 200, parseAuthorizationState(await options.broker.inspectAuthorization(ref)))
+        } else if (path === TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH) {
+          const { ref, providerAccountId } = parseProviderAccountMatchRequest(body)
+          writeJson(res, 200, { matches: parseProviderAccountMatch({
+            matches: await options.broker.matchesProviderAccount(ref, providerAccountId),
+          }) })
         } else if (path === TEAM_CREDENTIAL_BROKER_USAGE_PATH) {
           const ref = parseCredentialRef(body)
           writeJson(res, 200, parseUsage(await options.broker.readUsage(ref, cancellation.signal)))
@@ -431,6 +444,7 @@ const BROKER_PATHS = new Set([
   TEAM_CREDENTIAL_BROKER_OAUTH_CANCEL_PATH,
   TEAM_CREDENTIAL_BROKER_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CREDENTIAL_BROKER_AUTHORIZATION_PATH,
+  TEAM_CREDENTIAL_BROKER_PROVIDER_ACCOUNT_MATCH_PATH,
   TEAM_CREDENTIAL_BROKER_USAGE_PATH,
   TEAM_CREDENTIAL_BROKER_RESPONSES_PATH,
   TEAM_CREDENTIAL_BROKER_REVOKE_PATH,
@@ -532,6 +546,34 @@ function parseCredentialRef(value: unknown): TeamCredentialRef {
     teamId: identifier(value['teamId'], 'team id'),
     accountId: identifier(value['accountId'], 'account id'),
   }
+}
+
+function parseProviderAccountMatchRequest(value: unknown): {
+  ref: TeamCredentialRef
+  providerAccountId: string
+} {
+  if (!isRecord(value) || !exactKeys(value, ['teamId', 'accountId', 'providerAccountId'])) {
+    throw new BrokerInputError(400, 'provider-account match request is invalid')
+  }
+  return {
+    ref: parseCredentialRef({ teamId: value['teamId'], accountId: value['accountId'] }),
+    providerAccountId: providerAccountId(value['providerAccountId']),
+  }
+}
+
+function providerAccountId(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 1_024
+    || /[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new BrokerInputError(400, 'provider account id is invalid')
+  }
+  return value
+}
+
+function parseProviderAccountMatch(value: unknown): boolean {
+  if (!isRecord(value) || !exactKeys(value, ['matches']) || typeof value['matches'] !== 'boolean') {
+    throw new BrokerInputError(502, 'credential broker returned an invalid provider-account match')
+  }
+  return value['matches']
 }
 
 function identifier(value: unknown, label: string): string {

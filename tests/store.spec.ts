@@ -129,6 +129,14 @@ describe('OpenAICodexCredentialStore', () => {
       .rejects.toThrow(/account already exists/)
   })
 
+  it('reads only a profile provider account id for Host-side identity coordination', async () => {
+    const auth = await store()
+    const profile = await auth.addProfile('Personal', credential('private-access-token'))
+
+    expect(await auth.readProfileProviderAccountId(profile.id)).toBe('account-1')
+    expect(await auth.readProfileProviderAccountId('missing-profile')).toBeUndefined()
+  })
+
   it('shows the OpenAI account name, falling back to email and then the stored label', async () => {
     const auth = await store()
     await auth.addProfile('Stored label', credential(accessToken({ name: ' Ada Lovelace ', email: 'ada@example.com' })))

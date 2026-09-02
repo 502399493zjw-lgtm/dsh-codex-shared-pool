@@ -15,6 +15,8 @@ import { TeamCredentialHandoffRegistry } from '../src/team/oauth-handoff.ts'
 import {
   TEAM_AUTHORIZATION_FAILED_CODE,
   TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+  TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+  TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
@@ -50,6 +52,7 @@ import {
 import type { TeamClientConfig } from '../src/team/client.ts'
 import {
   TEAM_CONNECTION_TERMINAL_PATH,
+  TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_DISPLAY_NAME_MIGRATION_ACK_PATH,
   TEAM_DISSOLVE_ACK_PATH,
@@ -300,6 +303,25 @@ function withOverviewPreflight(
 ) {
   return vi.fn<typeof globalThis.fetch>(async (input, init) => {
     if (String(input) === 'https://pool.example/plugins/dsh-codex-shared-pool/team/overview') {
+      return new Response(JSON.stringify(currentOverview), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    return mutationFetch(input, init)
+  })
+}
+
+function withOverviewSequence(
+  mutationFetch: typeof globalThis.fetch,
+  currentOverviews: readonly Record<string, unknown>[],
+) {
+  if (currentOverviews.length === 0) throw new Error('overview sequence must not be empty')
+  let overviewReadIndex = 0
+  return vi.fn<typeof globalThis.fetch>(async (input, init) => {
+    if (String(input) === 'https://pool.example/plugins/dsh-codex-shared-pool/team/overview') {
+      const currentOverview = currentOverviews[Math.min(overviewReadIndex, currentOverviews.length - 1)]!
+      overviewReadIndex += 1
       return new Response(JSON.stringify(currentOverview), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -1316,9 +1338,12 @@ describe('local Team management routes', () => {
         interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
       })
     }
-    const fetch = withOverviewPreflight(mutationFetch, overview({
-      contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-    }))
+    const fetch = withOverviewSequence(mutationFetch, [
+      overview({ contributions: [contribution()] }),
+      overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      }),
+    ])
     const { routes } = setup(
       { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
       credentials,
@@ -1496,9 +1521,18 @@ describe('local Team management routes', () => {
         accountId: 'provider-account-1',
       })
     }
-    const fetch = withOverviewPreflight(mutationFetch, overview({
-      contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-    }))
+    const fetch = withOverviewSequence(mutationFetch, [
+      overview(),
+      overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      }),
+      overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      }),
+      overview({
+        contributions: [{ ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined }],
+      }),
+    ])
     const { routes } = setup(
       { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
       credentials,
@@ -1508,12 +1542,9 @@ describe('local Team management routes', () => {
         temporaryRootDir,
         localProfiles: {
           listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
-          readProfileCredential: async (profileId: string) => profileId === 'local-profile-1'
-            ? {
-                type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
-                accountId: 'provider-account-1',
-              }
-            : undefined,
+          readProfileProviderAccountId: async (profileId: string) => (
+            profileId === 'local-profile-1' ? 'provider-account-1' : undefined
+          ),
         },
       },
     )
@@ -1578,6 +1609,621 @@ describe('local Team management routes', () => {
     })
   })
 
+  it('reconciles a Team-first contribution to a later local profile without exposing provider identity', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const providerAccountId = 'provider-account-private-sentinel'
+    const remoteOverview = overview({
+      contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+      activeSharedAccounts: [{
+        id: 'account-1', label: 'Owner Codex', ownerMemberId: 'member-1', status: 'active',
+      }],
+    })
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(remoteOverview), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        expect(url).toBe(`https://pool.example${TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH}`)
+        expect(JSON.parse(String(init?.body))).toEqual({ providerAccountId })
+        return new Response(JSON.stringify({ accountIds: ['account-1'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const localProfiles = {
+      listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 2 }],
+      readProfileProviderAccountId: async (profileId: string) => (
+        profileId === 'local-profile-1' ? providerAccountId : undefined
+      ),
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { localProfiles },
+    )
+
+    const projected = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(projected).toMatchObject({
+      status: 200,
+      body: {
+        contributions: [{
+          id: 'account-1', status: 'active', sourceLocalProfileId: 'local-profile-1',
+        }],
+      },
+    })
+    expect(JSON.stringify(projected.body)).not.toContain(providerAccountId)
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).not.toContain(providerAccountId)
+    expect(JSON.parse(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '{}')).toMatchObject({
+      version: 1,
+      bindings: [{
+        expectedContext: EXPECTED_CONTEXT,
+        accountId: 'account-1',
+        sourceLocalProfileId: 'local-profile-1',
+      }],
+    })
+  })
+
+  it('does not guess a local binding when one provider identity matches multiple current contributions', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const providerAccountId = 'provider-account-ambiguous-private-sentinel'
+    const remoteOverview = overview({
+      contributions: [
+        { ...contribution(), id: 'account-1', status: 'active', lastError: undefined },
+        { ...contribution(), id: 'account-2', label: 'Second Codex', status: 'paused', lastError: undefined },
+      ],
+    })
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(remoteOverview), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        return new Response(JSON.stringify({ accountIds: ['account-1', 'account-2'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 2 }],
+          readProfileProviderAccountId: async () => providerAccountId,
+        },
+      },
+    )
+
+    const projected = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(projected.status).toBe(200)
+    const contributions = projected.body.contributions as Array<Record<string, unknown>>
+    expect(contributions.map(account => account.id)).toEqual(['account-1', 'account-2'])
+    for (const account of contributions) expect(account).not.toHaveProperty('sourceLocalProfileId')
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).toBeUndefined()
+    expect(JSON.stringify(projected.body)).not.toContain(providerAccountId)
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/provider-account/matches')))
+      .toBe(true)
+  })
+
+  it('does not guess a local binding when multiple local profiles match one contribution', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const providerAccountId = 'provider-account-local-ambiguity-private-sentinel'
+    const remoteOverview = overview({
+      contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+    })
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(remoteOverview), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ providerAccountId })
+        return new Response(JSON.stringify({ accountIds: ['account-1'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [
+            { id: 'local-profile-1', label: 'Local one', createdAt: 1, updatedAt: 2 },
+            { id: 'local-profile-2', label: 'Local two', createdAt: 3, updatedAt: 4 },
+          ],
+          readProfileProviderAccountId: async () => providerAccountId,
+        },
+      },
+    )
+
+    const projected = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(projected.status).toBe(200)
+    expect(projected.body.contributions).toMatchObject([{ id: 'account-1' }])
+    expect(projected.body.contributions[0]).not.toHaveProperty('sourceLocalProfileId')
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).toBeUndefined()
+    expect(JSON.stringify(projected.body)).not.toContain(providerAccountId)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('replaces a stale binding when the same provider account is re-added as a new local profile', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    credentials.put(LOCAL_CONTRIBUTION_BINDINGS_REF, JSON.stringify({
+      version: 1,
+      bindings: [{
+        expectedContext: EXPECTED_CONTEXT,
+        accountId: 'account-1',
+        sourceLocalProfileId: 'local-profile-removed',
+      }],
+    }))
+    const providerAccountId = 'provider-account-readded-private-sentinel'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ providerAccountId })
+        return new Response(JSON.stringify({ accountIds: ['account-1'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-new', label: 'Local', createdAt: 3, updatedAt: 4 }],
+          readProfileProviderAccountId: async () => providerAccountId,
+        },
+      },
+    )
+
+    const projected = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(projected).toMatchObject({
+      status: 200,
+      body: {
+        contributions: [{ id: 'account-1', sourceLocalProfileId: 'local-profile-new' }],
+      },
+    })
+    expect(JSON.parse(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '{}')).toMatchObject({
+      bindings: [{ accountId: 'account-1', sourceLocalProfileId: 'local-profile-new' }],
+    })
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).not.toContain('local-profile-removed')
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).not.toContain(providerAccountId)
+  })
+
+  it('drops a persisted binding when the same local profile changes provider identity', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    credentials.put(LOCAL_CONTRIBUTION_BINDINGS_REF, JSON.stringify({
+      version: 1,
+      bindings: [{
+        expectedContext: EXPECTED_CONTEXT,
+        accountId: 'account-1',
+        sourceLocalProfileId: 'local-profile-1',
+      }],
+    }))
+    const changedProviderAccountId = 'changed-provider-account-private-sentinel'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        expect(JSON.parse(String(init?.body))).toEqual({ providerAccountId: changedProviderAccountId })
+        return new Response(JSON.stringify({ accountIds: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 2 }],
+          readProfileProviderAccountId: async () => changedProviderAccountId,
+        },
+      },
+    )
+
+    const projected = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+
+    expect(projected.status).toBe(200)
+    expect(projected.body.contributions).toMatchObject([{ id: 'account-1' }])
+    expect(projected.body.contributions[0]).not.toHaveProperty('sourceLocalProfileId')
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).toBeUndefined()
+    expect(JSON.stringify(projected.body)).not.toContain(changedProviderAccountId)
+  })
+
+  it('blocks a stale local-share start after reconciliation finds that account already contributed', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const providerAccountId = 'provider-account-private-sentinel'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        return new Response(JSON.stringify({ accountIds: ['account-1'] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 2 }],
+          readProfileProviderAccountId: async () => providerAccountId,
+        },
+      },
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Local', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    })))
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE },
+    })
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/start'))).toBe(false)
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
+  it('fails closed before a local-share start when exact provider matching is unavailable', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const providerAccountId = 'provider-account-unavailable-private-sentinel'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'active', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        return new Response(JSON.stringify({ error: 'provider-account match unavailable' }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({}), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        localProfiles: {
+          listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 2 }],
+          readProfileProviderAccountId: async () => providerAccountId,
+        },
+      },
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Local', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    })))
+
+    expect(result).toMatchObject({
+      status: 502,
+      body: { error: TEAM_AUTHORIZATION_FAILED_CODE },
+    })
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/start'))).toBe(false)
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
+  it('starts only one browser authorization for concurrent requests from different local profiles', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const handoffs = new TeamCredentialHandoffRegistry()
+    let oauthStarts = 0
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview()), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/provider-account/matches')) {
+        return new Response(JSON.stringify({ accountIds: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        oauthStarts += 1
+        const accountId = `account-${oauthStarts}`
+        return new Response(JSON.stringify({
+          account: { ...contribution(), id: accountId, status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: handoffs.create({ teamId: 'team-1', accountId }),
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        const { accountId } = JSON.parse(String(init?.body)) as { accountId: string }
+        return new Response(JSON.stringify({
+          account: { ...contribution(), id: accountId, status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=single-flight' })
+      return await new Promise<never>((_resolve, reject) => {
+        interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        loginProfile,
+        localProfiles: {
+          listProfiles: async () => [
+            { id: 'local-profile-1', label: 'Local 1', createdAt: 1, updatedAt: 2 },
+            { id: 'local-profile-2', label: 'Local 2', createdAt: 3, updatedAt: 4 },
+          ],
+          readProfileProviderAccountId: async profileId => `provider-account-${profileId.at(-1)}`,
+        },
+      },
+    )
+    const start = route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH)
+
+    const results = await Promise.all([
+      response(start.handler, request('POST', withExpectedContext({
+        label: 'Local 1', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+      }))),
+      response(start.handler, request('POST', withExpectedContext({
+        label: 'Local 2', method: 'browser', sourceLocalProfileId: 'local-profile-2',
+      }))),
+    ])
+
+    expect(results.map(result => result.status).sort()).toEqual([201, 409])
+    expect(results.find(result => result.status === 409)?.body).toEqual({
+      error: TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+    })
+    expect(oauthStarts).toBe(1)
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: true,
+    })))).resolves.toMatchObject({ status: 200, body: { account: { status: 'revoked' } } })
+  })
+
+  it('treats an authorizing Team contribution as a durable browser OAuth reservation after Host restart', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({}), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Second browser authorization', method: 'browser',
+    })))
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE },
+    })
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/start'))).toBe(false)
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
+  it('does not restart an authorizing Team contribution when its local OAuth journal was never written', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/reauthorize')) {
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', method: 'browser',
+    })))
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE },
+    })
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/reauthorize'))).toBe(false)
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
+  it('blocks a new browser authorization using only the recovered Host journal reservation', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    credentials.put(BROWSER_OAUTH_PENDING_REF, JSON.stringify({
+      version: 1,
+      operations: [{
+        expectedContext: EXPECTED_CONTEXT,
+        pending: {
+          accountId: 'account-1',
+          method: 'browser',
+          expiresAt: Date.now() + 900_000,
+          discardInitial: true,
+        },
+      }],
+    }))
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({ contributions: [] })), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({}), {
+          status: 201,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Second browser authorization', method: 'browser',
+    })))
+
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE },
+    })
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/start'))).toBe(false)
+  })
+
+  it('does not restart an active browser reauthorization when the same request arrives concurrently', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const handoffs = new TeamCredentialHandoffRegistry()
+    let reauthorizationStarts = 0
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        return new Response(JSON.stringify(overview({
+          contributions: [{ ...contribution(), status: 'reauth_required', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/reauthorize')) {
+        reauthorizationStarts += 1
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: handoffs.create({ teamId: 'team-1', accountId: 'account-1' }),
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'reauth_required', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction): Promise<never> => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=reauthorize-single-flight' })
+      return await new Promise<never>((_resolve, reject) => {
+        interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile },
+    )
+    const reauthorize = route(routes, TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH)
+    const body = withExpectedContext({ accountId: 'account-1', method: 'browser' })
+
+    const results = await Promise.all([
+      response(reauthorize.handler, request('POST', body)),
+      response(reauthorize.handler, request('POST', body)),
+    ])
+
+    expect(results.map(result => result.status).sort()).toEqual([200, 409])
+    expect(results.find(result => result.status === 409)?.body).toEqual({
+      error: TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+    })
+    expect(reauthorizationStarts).toBe(1)
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: false,
+    })))).resolves.toMatchObject({ status: 200, body: { account: { status: 'reauth_required' } } })
+  })
+
   it('retries the exact handoff envelope when the committed completion response is lost', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
@@ -1624,18 +2270,18 @@ describe('local Team management routes', () => {
     const { routes } = setup(
       { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
       credentials,
-      withOverviewPreflight(mutationFetch, overview({
-        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-      })),
+      withOverviewSequence(mutationFetch, [
+        overview(),
+        overview({
+          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        }),
+      ]),
       {
         loginProfile,
         temporaryRootDir,
         localProfiles: {
           listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
-          readProfileCredential: async () => ({
-            type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
-            accountId: 'provider-account-1',
-          }),
+          readProfileProviderAccountId: async () => 'provider-account-1',
         },
       },
     )
@@ -1739,9 +2385,12 @@ describe('local Team management routes', () => {
     const { routes } = setup(
       { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
       credentials,
-      withOverviewPreflight(mutationFetch, overview({
-        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-      })),
+      withOverviewSequence(mutationFetch, [
+        overview(),
+        overview({
+          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        }),
+      ]),
       { loginProfile },
     )
 
@@ -1793,9 +2442,15 @@ describe('local Team management routes', () => {
         accountId: 'provider-account-2',
       })
     }
-    const fetch = withOverviewPreflight(mutationFetch, overview({
-      contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-    }))
+    const fetch = withOverviewSequence(mutationFetch, [
+      overview(),
+      overview({
+        contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+      }),
+      overview({
+        contributions: [{ ...contribution(), status: 'revoked', lastError: undefined }],
+      }),
+    ])
     const { routes } = setup(
       { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
       credentials,
@@ -1806,10 +2461,7 @@ describe('local Team management routes', () => {
         onBackgroundError: error => { backgroundErrors.push(error) },
         localProfiles: {
           listProfiles: async () => [{ id: 'local-profile-1', label: 'Local', createdAt: 1, updatedAt: 1 }],
-          readProfileCredential: async () => ({
-            type: 'oauth', access: 'local-access', refresh: 'local-refresh', expires: Date.now() + 3_600_000,
-            accountId: 'provider-account-1',
-          }),
+          readProfileProviderAccountId: async () => 'provider-account-1',
         },
       },
     )
@@ -1977,10 +2629,10 @@ describe('local Team management routes', () => {
       if (url.endsWith('/overview')) {
         overviewReads += 1
         const current = overviewReads === 1
-          ? overview({ contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }] })
+          ? overview()
           : overview({
               team: { ...team(), id: 'replacement-team' },
-              contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+              contributions: [],
             })
         return new Response(JSON.stringify(current), {
           status: 200, headers: { 'content-type': 'application/json' },

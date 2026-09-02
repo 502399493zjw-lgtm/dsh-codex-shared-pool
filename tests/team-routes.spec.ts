@@ -16,6 +16,7 @@ import {
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
+  TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
   TEAM_CONTRIBUTIONS_PATH,
   TEAM_CONNECTION_TERMINAL_PATH,
   TEAM_CURRENT_KEY_REVOKE_PATH,
@@ -53,6 +54,7 @@ class FakeCredentialBroker implements TeamCredentialBroker {
   readonly started: Array<{ ref: TeamCredentialRef; method: TeamOAuthMethod }> = []
   readonly restarted: Array<{ ref: TeamCredentialRef; method: TeamOAuthMethod }> = []
   readonly completed: Array<{ ref: TeamCredentialRef; envelope: TeamCredentialHandoffEnvelope }> = []
+  readonly matched: Array<{ ref: TeamCredentialRef; providerAccountId: string }> = []
   startOAuth(ref: TeamCredentialRef, method: TeamOAuthMethod = 'device_code'): ReturnType<TeamCredentialBroker['startOAuth']> {
     this.started.push({ ref, method })
     if (method === 'browser') {
@@ -83,6 +85,10 @@ class FakeCredentialBroker implements TeamCredentialBroker {
   }
   cancelOAuth(): Promise<void> { return Promise.resolve() }
   inspectAuthorization(): Promise<{ status: 'active' }> { return Promise.resolve({ status: 'active' }) }
+  matchesProviderAccount(ref: TeamCredentialRef, providerAccountId: string): Promise<boolean> {
+    this.matched.push({ ref, providerAccountId })
+    return Promise.resolve(providerAccountId === 'provider-account-private-sentinel')
+  }
   readUsage(): Promise<{ rateLimits: [] }> { return Promise.resolve({ rateLimits: [] }) }
   forwardResponses(): Promise<Response> { return Promise.resolve(new Response(null, { status: 204 })) }
   revoke(): Promise<void> { return Promise.resolve() }
@@ -625,6 +631,49 @@ describe('Team control-plane routes', () => {
     expect(accounts.body.currentMemberId).toBe(result.body.member && (result.body.member as Record<string, unknown>).id)
     expect(accounts.body.accounts).toMatchObject([{ label: 'Owner Codex', status: 'authorizing' }])
     expect(broker.started).toHaveLength(1)
+  })
+
+  it('returns only owned contribution ids that exactly match a Host-supplied provider account', async () => {
+    const broker = new FakeCredentialBroker()
+    const store = new MemoryTeamStore()
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const owned = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, owned.id, 'active')
+    const revoked = await store.createContributionAccount(owner, 'Revoked Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, revoked.id, 'revoked')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const foreign = await store.createContributionAccount(friend, 'Friend Codex')
+    await store.setContributionAccountStatus(friend.teamId, foreign.id, 'active')
+    const routes = setup(broker, async () => 'bootstrap-secret-1234', store)
+    const match = routes.find(route => route.path === TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH)
+    if (match === undefined) throw new Error('provider-account match route missing')
+    const authorization = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${boot.apiKey}`,
+    }
+
+    const result = await response(match.handler, request('POST', {
+      providerAccountId: 'provider-account-private-sentinel',
+    }, authorization))
+
+    expect(result).toEqual({ status: 200, body: { accountIds: [owned.id] } })
+    expect(broker.matched).toEqual([{
+      ref: { teamId: owner.teamId, accountId: owned.id },
+      providerAccountId: 'provider-account-private-sentinel',
+    }])
+    expect(broker.matched.some(match => match.ref.accountId === revoked.id)).toBe(false)
+    expect(JSON.stringify(result.body)).not.toContain('provider-account-private-sentinel')
+
+    await expect(response(match.handler, request('POST', {
+      providerAccountId: 'provider-account-private-sentinel',
+      access: 'must-not-be-accepted',
+    }, authorization))).resolves.toMatchObject({ status: 400 })
+    expect(broker.matched).toHaveLength(1)
   })
 
   it('reauthorizes an existing contribution without creating a second account', async () => {

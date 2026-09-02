@@ -30,6 +30,8 @@ import type {
 import {
   TEAM_AUTHORIZATION_FAILED_CODE,
   TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+  TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+  TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE,
 } from '../../shared/team-management.ts'
 import { createTeamManagementApi } from './api.ts'
@@ -260,6 +262,8 @@ function errorMessage(
   fallback: string,
   authorizationNetworkUnavailable?: string,
   authorizationFailed?: string,
+  localAccountAlreadyShared?: string,
+  browserAuthorizationAlreadyPending?: string,
 ): string {
   const message = cause instanceof Error ? cause.message : fallback
   if (authorizationNetworkUnavailable !== undefined
@@ -268,6 +272,12 @@ function errorMessage(
   if (authorizationFailed !== undefined
     && message.includes(TEAM_AUTHORIZATION_FAILED_CODE)
   ) return authorizationFailed
+  if (localAccountAlreadyShared !== undefined
+    && message.includes(TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE)
+  ) return localAccountAlreadyShared
+  if (browserAuthorizationAlreadyPending !== undefined
+    && message.includes(TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE)
+  ) return browserAuthorizationAlreadyPending
   return message
 }
 
@@ -1182,11 +1192,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         }
       }
       if (status === 403 || status === 409) await refresh(false)
+      if (cause instanceof Error && (
+        cause.message.includes(TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE)
+        || cause.message.includes(TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE)
+      )) {
+        setPendingLocalAuthorization(undefined)
+      }
       setError(errorMessage(
         cause,
         t('requestFailed'),
         t('authorizationNetworkUnavailable'),
         t('authorizationFailed'),
+        t('localAccountAlreadyShared'),
+        t('browserAuthorizationAlreadyPending'),
       ))
     } finally {
       setBusy(undefined)

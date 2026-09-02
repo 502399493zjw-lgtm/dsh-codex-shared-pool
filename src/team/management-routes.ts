@@ -11,7 +11,10 @@ import type { CredentialInfo, CredentialProvider, CredentialRef } from '@deepsee
 import type { AuthInteraction, AuthPrompt } from '@earendil-works/pi-ai'
 import { loginOpenAICodexProfile } from '../auth.ts'
 import { OpenAICodexCredentialStore } from '../store.ts'
+import type { CodexProfileSummary } from '../store.ts'
 import {
+  TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+  TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH,
@@ -78,6 +81,7 @@ import {
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
   TEAM_CONTRIBUTION_OAUTH_START_PATH,
+  TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
   TEAM_CONTRIBUTION_REVOKE_PATH,
   TEAM_CONTRIBUTION_UPDATE_PATH,
   TEAM_CONTRIBUTIONS_PATH,
@@ -233,8 +237,24 @@ class TeamManagementContextMismatchError extends Error {
   }
 }
 
+class TeamManagementLocalAccountAlreadySharedError extends Error {
+  constructor() {
+    super(TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE)
+    this.name = 'TeamManagementLocalAccountAlreadySharedError'
+  }
+}
+
+class TeamManagementBrowserOAuthAlreadyPendingError extends Error {
+  constructor() {
+    super(TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE)
+    this.name = 'TeamManagementBrowserOAuthAlreadyPendingError'
+  }
+}
+
 function projectedOAuthRemoteError(error: unknown): Error {
   if (error instanceof TeamManagementContextMismatchError) return error
+  if (error instanceof TeamManagementLocalAccountAlreadySharedError) return error
+  if (error instanceof TeamManagementBrowserOAuthAlreadyPendingError) return error
   const message = safeTeamOAuthErrorMessage(error)
   return error instanceof RemoteTeamError
     ? new RemoteTeamError(error.status, message)
@@ -251,7 +271,7 @@ function sameTeamManagementContext(
 }
 
 type Credentials = Pick<CredentialProvider, 'resolve' | 'describe' | 'set' | 'unset'>
-type LocalProfiles = Pick<OpenAICodexCredentialStore, 'listProfiles' | 'readProfileCredential'>
+type LocalProfiles = Pick<OpenAICodexCredentialStore, 'listProfiles' | 'readProfileProviderAccountId'>
 
 type LocalOAuthMethod = 'browser' | 'device_code'
 
@@ -261,6 +281,8 @@ interface LocalBrowserOAuthOperation {
   readonly completion: Promise<void>
   /** Immutable identity verified immediately before the remote OAuth mutation. */
   readonly expectedContext: Readonly<TeamManagementExpectedContext>
+  /** Host-only local identity used to reject concurrent share attempts. */
+  readonly sourceLocalProfileId?: string
   /** Safe metadata projected only while the same contribution is authorizing. */
   readonly pending: TeamManagementPendingBrowserAuthorization
 }
@@ -429,6 +451,8 @@ function safeMessage(error: unknown): string {
 
 function statusFor(error: unknown): number {
   if (error instanceof TeamManagementContextMismatchError) return 409
+  if (error instanceof TeamManagementLocalAccountAlreadySharedError) return 409
+  if (error instanceof TeamManagementBrowserOAuthAlreadyPendingError) return 409
   if (error instanceof RemoteTeamError) {
     if (error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) return error.status
     return 502
@@ -614,6 +638,15 @@ function parseLocalContributionBindingJournal(value: string): LocalContributionB
     return { expectedContext, accountId, sourceLocalProfileId }
   })
   return { version: 1, bindings }
+}
+
+function sameLocalContributionBinding(
+  left: LocalContributionBinding,
+  right: LocalContributionBinding,
+): boolean {
+  return sameTeamManagementContext(left.expectedContext, right.expectedContext)
+    && left.accountId === right.accountId
+    && left.sourceLocalProfileId === right.sourceLocalProfileId
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {
@@ -1297,6 +1330,7 @@ class TeamManagementProxy {
   private readonly invitePreviewSessions = new Map<string, InvitePreviewSession>()
   private browserOAuthJournalTransition: Promise<void> = Promise.resolve()
   private localContributionBindingTransition: Promise<void> = Promise.resolve()
+  private browserOAuthLifecycleTransition: Promise<void> = Promise.resolve()
   private credentialTransition: Promise<void> = Promise.resolve()
 
   constructor(
@@ -1345,24 +1379,75 @@ class TeamManagementProxy {
   }
 
   async overview(explicitKey?: string): Promise<TeamManagementOverview> {
+    const key = explicitKey ?? await this.key()
     let overview = projectOverview(
-      await this.remote(TEAM_OVERVIEW_PATH, explicitKey === undefined ? {} : { key: explicitKey }),
+      await this.remote(TEAM_OVERVIEW_PATH, { key }),
     )
     const actualContext: TeamManagementExpectedContext = {
       serverOrigin: new URL(this.requireEnabled()).origin,
       teamId: overview.team.id,
       currentMemberId: overview.currentMember.id,
     }
+    let localProfileSnapshot: readonly CodexProfileSummary[] | undefined
+    if (this.localProfiles !== undefined) {
+      try {
+        localProfileSnapshot = await this.localProfiles.listProfiles()
+      } catch {
+        // Local/provider details must never enter Browser-visible diagnostics.
+        this.onBackgroundError(new Error('failed to list local profiles for Team account reconciliation'))
+      }
+    }
+    const currentLocalProfileIds = localProfileSnapshot === undefined
+      ? undefined
+      : new Set(localProfileSnapshot.map(profile => profile.id))
     const bindings = await this.localContributionBindings()
-    const retainedBindings = bindings.filter((binding) => {
+    let retainedBindings: readonly LocalContributionBinding[] = bindings.filter((binding) => {
       if (!sameTeamManagementContext(binding.expectedContext, actualContext)) return false
+      if (currentLocalProfileIds !== undefined && !currentLocalProfileIds.has(binding.sourceLocalProfileId)) return false
       const account = overview.contributions.find(candidate => candidate.id === binding.accountId)
       return account !== undefined && account.status !== 'revoked'
     })
     if (retainedBindings.length !== bindings.length) {
-      await this.replaceLocalContributionBindings(retainedBindings).catch((error: unknown) => {
+      await this.pruneLocalContributionBindings(bindings, retainedBindings).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to prune stale local contribution bindings', { cause: error }))
       })
+    }
+    if (localProfileSnapshot !== undefined) {
+      let identitiesValidated = false
+      try {
+        const identityRetainedBindings = await this.validateLocalContributionBindingIdentities(
+          overview,
+          key,
+          retainedBindings,
+        )
+        if (identityRetainedBindings.length !== retainedBindings.length) {
+          await this.pruneLocalContributionBindings(retainedBindings, identityRetainedBindings)
+        }
+        retainedBindings = identityRetainedBindings
+        identitiesValidated = true
+      } catch {
+        // Keep existing bindings on transient uncertainty, but do not infer any new bindings.
+        // Provider identity and remote error details must never enter Browser-visible diagnostics.
+        this.onBackgroundError(new Error('failed to validate a local Team account binding'))
+      }
+      if (identitiesValidated) {
+        await this.reconcileLocalContributionBindings(
+          overview,
+          actualContext,
+          key,
+          retainedBindings,
+          localProfileSnapshot,
+        ).catch(() => {
+          // Provider identity and remote error details must never enter Browser-visible diagnostics.
+          this.onBackgroundError(new Error('failed to reconcile a local Team account binding'))
+        })
+        retainedBindings = (await this.localContributionBindings()).filter((binding) => {
+          if (!sameTeamManagementContext(binding.expectedContext, actualContext)) return false
+          if (currentLocalProfileIds !== undefined && !currentLocalProfileIds.has(binding.sourceLocalProfileId)) return false
+          const account = overview.contributions.find(candidate => candidate.id === binding.accountId)
+          return account !== undefined && account.status !== 'revoked'
+        })
+      }
     }
     const bindingByAccountId = new Map(retainedBindings.map(binding => [binding.accountId, binding]))
     overview = {
@@ -1863,15 +1948,69 @@ class TeamManagementProxy {
     sourceLocalProfileId?: string,
   ): Promise<TeamManagementOAuthResult> {
     try {
-      const key = await this.expectedMutationKey(expectedContext)
-      const validationIntent = await this.resolveLocalAccountValidationIntent(method, sourceLocalProfileId)
-      const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_START_PATH, {
-        method: 'POST', body: { label, method }, key,
-      })
-      const item = record(remote, 'OAuth result')
+      const start = async (): Promise<TeamManagementOAuthResult> => {
+        const { key, overview } = await this.expectedMutationContext(expectedContext)
+        const validationIntent = await this.resolveLocalAccountValidationIntent(method, sourceLocalProfileId)
+        const bindings = validationIntent === undefined ? [] : await this.localContributionBindings()
+        if (validationIntent !== undefined) {
+          if (bindings.some(binding => (
+            binding.sourceLocalProfileId === validationIntent.sourceLocalProfileId
+            && sameTeamManagementContext(binding.expectedContext, expectedContext)
+          )) || [...this.browserOAuth.values()].some(operation => (
+            operation.sourceLocalProfileId === validationIntent.sourceLocalProfileId
+            && sameTeamManagementContext(operation.expectedContext, expectedContext)
+          ))) {
+            throw new TeamManagementLocalAccountAlreadySharedError()
+          }
+        }
+
+        if (method === 'browser' && await this.hasBrowserOAuthReservation(
+          expectedContext,
+          overview.contributions,
+        )) {
+          throw new TeamManagementBrowserOAuthAlreadyPendingError()
+        }
+
+        if (validationIntent !== undefined) {
+          const matchableAccountIds = new Set(overview.contributions
+            .filter(account => account.status !== 'authorizing' && account.status !== 'revoked')
+            .map(account => account.id))
+          const accountIds = matchableAccountIds.size === 0
+            ? []
+            : await this.findProviderAccountMatches(
+                validationIntent.expectedProviderAccountId,
+                key,
+                matchableAccountIds,
+              )
+          if (accountIds.length > 0) {
+            if (accountIds.length === 1) {
+              const [accountId] = accountIds
+              if (accountId !== undefined && !bindings.some(binding => (
+                binding.accountId === accountId
+                && sameTeamManagementContext(binding.expectedContext, expectedContext)
+              ))) {
+                await this.persistLocalContributionBinding({
+                  expectedContext: Object.freeze({ ...expectedContext }),
+                  accountId,
+                  sourceLocalProfileId: validationIntent.sourceLocalProfileId,
+                })
+              }
+            }
+            throw new TeamManagementLocalAccountAlreadySharedError()
+          }
+        }
+
+        const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_START_PATH, {
+          method: 'POST', body: { label, method }, key,
+        })
+        const item = record(remote, 'OAuth result')
+        return method === 'browser'
+          ? await this.beginBrowserOAuth(item, true, key, expectedContext, validationIntent)
+          : this.projectDeviceOAuth(item)
+      }
       return method === 'browser'
-        ? await this.beginBrowserOAuth(item, true, key, expectedContext, validationIntent)
-        : this.projectDeviceOAuth(item)
+        ? await this.withBrowserOAuthLifecycleTransition(start)
+        : await start()
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
     }
@@ -1888,13 +2027,28 @@ class TeamManagementProxy {
     if (!profiles.some(profile => profile.id === sourceLocalProfileId)) {
       throw new Error('selected local Codex account was not found')
     }
-    const credential = await this.localProfiles.readProfileCredential(sourceLocalProfileId)
-    if (credential?.type !== 'oauth') throw new Error('selected local Codex account was not found')
-    const accountId = (credential as typeof credential & { accountId?: unknown }).accountId
-    if (typeof accountId !== 'string' || accountId.trim() === '') {
+    const accountId = await this.localProfiles.readProfileProviderAccountId(sourceLocalProfileId)
+    if (typeof accountId !== 'string' || accountId.length === 0) {
       throw new Error('selected local Codex account has no provider account identity')
     }
     return { expectedProviderAccountId: accountId, sourceLocalProfileId }
+  }
+
+  private async hasBrowserOAuthReservation(
+    expectedContext: TeamManagementExpectedContext,
+    contributions: readonly TeamManagementContributionSummary[],
+    reauthorizationAccountId?: string,
+  ): Promise<boolean> {
+    // The central authorizing row covers the crash window between the remote
+    // mutation and the Host writing its local recovery journal.
+    if (contributions.some(account => account.status === 'authorizing')) return true
+    if ([...this.browserOAuth.values()].some(operation => (
+      sameTeamManagementContext(operation.expectedContext, expectedContext)
+    ))) return true
+    return (await this.pendingBrowserOAuthJournal()).some(operation => (
+      sameTeamManagementContext(operation.expectedContext, expectedContext)
+      && operation.pending.accountId !== reauthorizationAccountId
+    ))
   }
 
   private projectDeviceOAuth(item: Record<string, unknown>): TeamManagementOAuthResult {
@@ -1921,30 +2075,32 @@ class TeamManagementProxy {
     discardInitial = false,
   ): Promise<TeamManagementContributionResult> {
     try {
-      const key = await this.expectedMutationKey(expectedContext)
-      const operation = this.browserOAuth.get(accountId)
-      const ownedOperation = operation !== undefined
-        && sameTeamManagementContext(operation.expectedContext, expectedContext)
-        ? operation
-        : undefined
-      const persistedOperation = (await this.pendingBrowserOAuthJournal()).find(candidate => (
-        candidate.pending.accountId === accountId
-        && sameTeamManagementContext(candidate.expectedContext, expectedContext)
-      ))
-      const effectiveDiscardInitial = ownedOperation?.pending.discardInitial
-        ?? persistedOperation?.pending.discardInitial
-        ?? discardInitial
-      if (ownedOperation !== undefined) {
-        ownedOperation.abort(new Error('OpenAI Codex sign-in cancelled'))
-        await ownedOperation.completion.catch(() => {})
-      }
-      const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
-        method: 'POST', body: { accountId, discardInitial: effectiveDiscardInitial }, key,
-      }), 'OAuth cancellation')
-      const account = projectContribution(item.account)
-      if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
-      await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
-      return { account }
+      return await this.withBrowserOAuthLifecycleTransition(async () => {
+        const key = await this.expectedMutationKey(expectedContext)
+        const operation = this.browserOAuth.get(accountId)
+        const ownedOperation = operation !== undefined
+          && sameTeamManagementContext(operation.expectedContext, expectedContext)
+          ? operation
+          : undefined
+        const persistedOperation = (await this.pendingBrowserOAuthJournal()).find(candidate => (
+          candidate.pending.accountId === accountId
+          && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+        ))
+        const effectiveDiscardInitial = ownedOperation?.pending.discardInitial
+          ?? persistedOperation?.pending.discardInitial
+          ?? discardInitial
+        if (ownedOperation !== undefined) {
+          ownedOperation.abort(new Error('OpenAI Codex sign-in cancelled'))
+          await ownedOperation.completion.catch(() => {})
+        }
+        const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+          method: 'POST', body: { accountId, discardInitial: effectiveDiscardInitial }, key,
+        }), 'OAuth cancellation')
+        const account = projectContribution(item.account)
+        if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+        await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
+        return { account }
+      })
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
     }
@@ -1956,22 +2112,60 @@ class TeamManagementProxy {
     method: LocalOAuthMethod = 'browser',
   ): Promise<TeamManagementOAuthResult> {
     try {
-      const key = await this.expectedMutationKey(expectedContext)
-      const current = this.browserOAuth.get(accountId)
-      if (current !== undefined && sameTeamManagementContext(current.expectedContext, expectedContext)) {
-        current.abort(new Error('OpenAI Codex sign-in restarted'))
-        await current.completion.catch(() => {})
+      const reauthorize = async (): Promise<TeamManagementOAuthResult> => {
+        const { key, overview } = await this.expectedMutationContext(expectedContext)
+        const persistedOperation = method === 'browser'
+          ? (await this.pendingBrowserOAuthJournal()).find(candidate => (
+              candidate.pending.accountId === accountId
+              && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+            ))
+          : undefined
+        const validationIntent = await this.resolveBoundLocalAccountValidationIntent(
+          accountId,
+          expectedContext,
+          method,
+        )
+        if (method === 'browser' && await this.hasBrowserOAuthReservation(
+          expectedContext,
+          overview.contributions,
+          accountId,
+        )) {
+          throw new TeamManagementBrowserOAuthAlreadyPendingError()
+        }
+        const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH, {
+          method: 'POST', body: { accountId, method }, key,
+        })
+        const item = record(remote, 'OAuth result')
+        return method === 'browser'
+          ? await this.beginBrowserOAuth(
+              item,
+              persistedOperation?.pending.discardInitial ?? false,
+              key,
+              expectedContext,
+              validationIntent,
+            )
+          : this.projectDeviceOAuth(item)
       }
-      const remote = await this.remote(TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH, {
-        method: 'POST', body: { accountId, method }, key,
-      })
-      const item = record(remote, 'OAuth result')
       return method === 'browser'
-        ? await this.beginBrowserOAuth(item, false, key, expectedContext)
-        : this.projectDeviceOAuth(item)
+        ? await this.withBrowserOAuthLifecycleTransition(reauthorize)
+        : await reauthorize()
     } catch (error: unknown) {
       throw projectedOAuthRemoteError(error)
     }
+  }
+
+  private async resolveBoundLocalAccountValidationIntent(
+    accountId: string,
+    expectedContext: TeamManagementExpectedContext,
+    method: LocalOAuthMethod,
+  ): Promise<LocalAccountValidationIntent | undefined> {
+    if (method !== 'browser') return undefined
+    const binding = (await this.localContributionBindings()).find(candidate => (
+      candidate.accountId === accountId
+      && sameTeamManagementContext(candidate.expectedContext, expectedContext)
+    ))
+    if (binding === undefined) return undefined
+    return this.resolveLocalAccountValidationIntent('browser', binding.sourceLocalProfileId)
   }
 
   private async beginBrowserOAuth(
@@ -2082,7 +2276,13 @@ class TeamManagementProxy {
         clearTimeout(expirationTimer)
         if (this.browserOAuth.get(account.id)?.completion === completion) this.browserOAuth.delete(account.id)
       })
-    this.browserOAuth.set(account.id, { abort, completion, expectedContext: frozenExpectedContext, pending })
+    this.browserOAuth.set(account.id, {
+      abort,
+      completion,
+      expectedContext: frozenExpectedContext,
+      pending,
+      ...validationIntent === undefined ? {} : { sourceLocalProfileId: validationIntent.sourceLocalProfileId },
+    })
     // Completion stays Host-side after the Browser receives and opens this URL.
     completion.catch(() => {})
     return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: offer.expiresAt }
@@ -2319,6 +2519,101 @@ class TeamManagementProxy {
     }
   }
 
+  private async reconcileLocalContributionBindings(
+    overview: TeamManagementOverview,
+    expectedContext: TeamManagementExpectedContext,
+    key: string,
+    retainedBindings: readonly LocalContributionBinding[],
+    profiles: readonly CodexProfileSummary[],
+  ): Promise<void> {
+    if (this.localProfiles === undefined) return
+    const matchableAccountIds = new Set(overview.contributions
+      .filter(account => account.status !== 'authorizing' && account.status !== 'revoked')
+      .map(account => account.id))
+    const claimedAccountIds = new Set(retainedBindings.map(binding => binding.accountId))
+    const claimedProfileIds = new Set(retainedBindings.map(binding => binding.sourceLocalProfileId))
+    if ([...matchableAccountIds].every(accountId => claimedAccountIds.has(accountId))) return
+
+    const candidates: Array<{ readonly accountId: string; readonly sourceLocalProfileId: string }> = []
+    for (const profile of profiles) {
+      if (claimedProfileIds.has(profile.id)) continue
+      const providerAccountId = await this.localProfiles.readProfileProviderAccountId(profile.id)
+      if (providerAccountId === undefined) continue
+      const accountIds = await this.findProviderAccountMatches(providerAccountId, key, matchableAccountIds)
+      // Never guess when duplicated historical credentials make identity ambiguous.
+      if (accountIds.length !== 1) continue
+      const [accountId] = accountIds
+      if (accountId === undefined || claimedAccountIds.has(accountId)) continue
+      candidates.push({ accountId, sourceLocalProfileId: profile.id })
+    }
+
+    const localMatchCounts = new Map<string, number>()
+    for (const candidate of candidates) {
+      localMatchCounts.set(candidate.accountId, (localMatchCounts.get(candidate.accountId) ?? 0) + 1)
+    }
+    for (const candidate of candidates) {
+      if (localMatchCounts.get(candidate.accountId) !== 1) continue
+      if (claimedAccountIds.has(candidate.accountId) || claimedProfileIds.has(candidate.sourceLocalProfileId)) continue
+      await this.persistLocalContributionBinding({
+        expectedContext: Object.freeze({ ...expectedContext }),
+        accountId: candidate.accountId,
+        sourceLocalProfileId: candidate.sourceLocalProfileId,
+      })
+      claimedAccountIds.add(candidate.accountId)
+      claimedProfileIds.add(candidate.sourceLocalProfileId)
+    }
+  }
+
+  private async validateLocalContributionBindingIdentities(
+    overview: TeamManagementOverview,
+    key: string,
+    bindings: readonly LocalContributionBinding[],
+  ): Promise<readonly LocalContributionBinding[]> {
+    if (this.localProfiles === undefined) return bindings
+    const contributionById = new Map(overview.contributions.map(account => [account.id, account]))
+    const matchableAccountIds = new Set(overview.contributions
+      .filter(account => account.status !== 'authorizing' && account.status !== 'revoked')
+      .map(account => account.id))
+    const retained: LocalContributionBinding[] = []
+    for (const binding of bindings) {
+      const contribution = contributionById.get(binding.accountId)
+      if (contribution?.status === 'authorizing') {
+        retained.push(binding)
+        continue
+      }
+      const providerAccountId = await this.localProfiles.readProfileProviderAccountId(
+        binding.sourceLocalProfileId,
+      )
+      if (providerAccountId === undefined) continue
+      const accountIds = matchableAccountIds.size === 0
+        ? []
+        : await this.findProviderAccountMatches(providerAccountId, key, matchableAccountIds)
+      if (accountIds.includes(binding.accountId)) retained.push(binding)
+    }
+    return retained
+  }
+
+  private async findProviderAccountMatches(
+    providerAccountId: string,
+    key: string,
+    matchableAccountIds: ReadonlySet<string>,
+  ): Promise<readonly string[]> {
+    const result = record(await this.remote(TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH, {
+      method: 'POST',
+      body: { providerAccountId },
+      key,
+    }), 'provider-account matches')
+    exactKeys(result, ['accountIds'])
+    const accountIds = stringArray(result.accountIds, 'accountIds')
+    if (accountIds.length > 256 || new Set(accountIds).size !== accountIds.length) {
+      throw new Error('remote Team returned invalid provider-account matches')
+    }
+    if (accountIds.some(accountId => !matchableAccountIds.has(accountId))) {
+      throw new Error('remote Team returned invalid provider-account matches')
+    }
+    return accountIds
+  }
+
   private async localContributionBindings(): Promise<readonly LocalContributionBinding[]> {
     const resolved = await this.credentials.resolve(this.localContributionBindingsRef())
     if (resolved === undefined) return []
@@ -2331,6 +2626,28 @@ class TeamManagementProxy {
       })
       return []
     }
+  }
+
+  private async pruneLocalContributionBindings(
+    snapshot: readonly LocalContributionBinding[],
+    retained: readonly LocalContributionBinding[],
+  ): Promise<void> {
+    const stale = snapshot.filter(binding => !retained.some(candidate => (
+      sameLocalContributionBinding(candidate, binding)
+    )))
+    if (stale.length === 0) return
+    await this.withLocalContributionBindingTransition(async () => {
+      const current = await this.localContributionBindings()
+      const bindings = current.filter(binding => !stale.some(candidate => (
+        sameLocalContributionBinding(candidate, binding)
+      )))
+      if (bindings.length === current.length) return
+      if (bindings.length === 0) {
+        await this.credentials.unset(this.localContributionBindingsRef())
+        return
+      }
+      await this.credentials.set(this.localContributionBindingsRef(), JSON.stringify({ version: 1, bindings }))
+    })
   }
 
   private async replaceLocalContributionBindings(bindings: readonly LocalContributionBinding[]): Promise<void> {
@@ -2890,6 +3207,18 @@ class TeamManagementProxy {
     }
   }
 
+  private async withBrowserOAuthLifecycleTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.browserOAuthLifecycleTransition
+    let release!: () => void
+    this.browserOAuthLifecycleTransition = new Promise(resolve => { release = resolve })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
   private async withCredentialTransition<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.credentialTransition
     let release!: () => void
@@ -2922,6 +3251,13 @@ class TeamManagementProxy {
     expectedContext: TeamManagementExpectedContext,
     requiredRole?: TeamManagementOverview['viewerRole'],
   ): Promise<string> {
+    return (await this.expectedMutationContext(expectedContext, requiredRole)).key
+  }
+
+  private async expectedMutationContext(
+    expectedContext: TeamManagementExpectedContext,
+    requiredRole?: TeamManagementOverview['viewerRole'],
+  ): Promise<{ readonly key: string; readonly overview: TeamManagementOverview }> {
     const serverOrigin = new URL(this.requireEnabled()).origin
     if (expectedContext.serverOrigin !== serverOrigin) throw new TeamManagementContextMismatchError()
 
@@ -2932,7 +3268,7 @@ class TeamManagementProxy {
       || overview.currentMember.id !== expectedContext.currentMemberId
       || (requiredRole !== undefined && overview.viewerRole !== requiredRole)
     ) throw new TeamManagementContextMismatchError()
-    return key
+    return { key, overview }
   }
 
   /** Do not delete a credential another process or tab has already replaced. */

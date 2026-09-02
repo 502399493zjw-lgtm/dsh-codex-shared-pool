@@ -25,6 +25,7 @@ export const TEAM_KEYS_REVOKE_PATH = `${TEAM_KEYS_PATH}/revoke`
 /** Revoke exactly the API key authenticating this request. */
 export const TEAM_CURRENT_KEY_REVOKE_PATH = `${TEAM_KEYS_PATH}/current/revoke`
 export const TEAM_CONTRIBUTIONS_PATH = `${TEAM_PATH_PREFIX}/contributions`
+export const TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH = `${TEAM_CONTRIBUTIONS_PATH}/provider-account/matches`
 export const TEAM_CONTRIBUTION_OAUTH_START_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/start`
 export const TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/cancel`
 export const TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH = `${TEAM_CONTRIBUTIONS_PATH}/oauth/reauthorize`
