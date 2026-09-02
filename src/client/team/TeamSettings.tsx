@@ -60,6 +60,49 @@ const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
 /** Frozen design reference from the phase-two prototype; it is not a live account balance. */
 const CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS = 5_960_000
 
+type ContributionCapacityReason = NonNullable<TeamManagementContributionSummary['capacity']>['buckets'][number]['reason']
+type AvailabilityDotState = 'done' | 'warning' | 'error'
+
+const CAPACITY_REASON_PRIORITY: readonly Exclude<ContributionCapacityReason, 'ready'>[] = [
+  'provider_unavailable',
+  'runtime_unavailable',
+  'quota_unavailable',
+  'request_cap_reset_unavailable',
+  'shared_concurrency_reached',
+  'weekly_shared_cost_reached',
+  'request_cap_reached',
+  'reserve_reached',
+  'quota_exhausted',
+]
+
+const CAPACITY_REASON_LOCALE_KEYS = {
+  ready: 'capacityReady',
+  provider_unavailable: 'capacityProviderUnavailable',
+  quota_unavailable: 'capacityQuotaUnavailable',
+  quota_exhausted: 'capacityQuotaExhausted',
+  reserve_reached: 'capacityReserveReached',
+  shared_concurrency_reached: 'capacityConcurrencyReached',
+  request_cap_reset_unavailable: 'capacityResetUnavailable',
+  request_cap_reached: 'capacityRequestCapReached',
+  weekly_shared_cost_reached: 'capacityWeeklyLimitReached',
+  runtime_unavailable: 'capacityRuntimeUnavailable',
+} satisfies Record<ContributionCapacityReason, TeamSettingsKey>
+
+function activeContributionCapacityReason(
+  account: TeamManagementContributionSummary,
+): ContributionCapacityReason {
+  const reasons = account.capacity?.buckets.map(bucket => bucket.reason) ?? []
+  if (reasons.includes('ready')) return 'ready'
+  return CAPACITY_REASON_PRIORITY.find(reason => reasons.includes(reason)) ?? 'runtime_unavailable'
+}
+
+function availabilityDotState(reason: ContributionCapacityReason): AvailabilityDotState {
+  if (reason === 'ready') return 'done'
+  return reason === 'provider_unavailable' || reason === 'runtime_unavailable'
+    ? 'error'
+    : 'warning'
+}
+
 export interface TeamSettingsInjected {
   t: (key: TeamSettingsKey, params?: Record<string, unknown>) => string
 }
@@ -1915,12 +1958,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const quotaIsLoading = profile.remainingPercent === undefined
         && localProfilesQuotaLoading
         && !quotaHasError
+      const localConnectionStatus = quotaHasError
+        ? t('capacityQuotaError')
+        : t(profile.inUse ? 'localInUse' : 'localAvailable')
       return <article className={`${styles.accountCard} ${styles.prototypeDetail}`} key={`local:${profile.id}`}>
         <header className={styles.detailHeading}>
           <h2 className={styles.detailTitle}>{profile.label}</h2>
           <span className={styles.connectionStatus}>
-            <StateDot state="done" />
-            {t(profile.inUse ? 'localInUse' : 'localAvailable')}
+            <StateDot state={quotaHasError ? 'error' : 'done'} />
+            {localConnectionStatus}
           </span>
         </header>
         <section className={styles.teamActionPanel} aria-label={t('shareToTeam')}>
@@ -2003,8 +2049,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <header className={styles.detailHeading}>
             <h2 className={styles.detailTitle}>{account.label}</h2>
             <span className={styles.connectionStatus}>
-              <StateDot state="done" />
-              <span className={styles.statusText}>{contributionLabel} · {t('teamAvailable')}</span>
+              <StateDot state="ongoing" />
+              <span className={styles.statusText}>{contributionLabel} · {t('teamShared')}</span>
             </span>
           </header>
           <section className={styles.teamActionPanel} aria-label={t('sharedAccountReadonlyTitle')}>
@@ -2024,15 +2070,22 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         ? t('capacityQuotaUnavailable')
         : `${capacityBucket.remainingPercent}%`
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
+      const activeCapacityReason = account.status === 'active'
+        ? activeContributionCapacityReason(account)
+        : undefined
       const contributionHint = account.status === 'active'
-        ? undefined
+        ? activeCapacityReason === 'ready'
+          ? undefined
+          : t('contributionUnavailableHint')
         : account.status === 'paused'
           ? t('contributionPausedHint')
           : account.status === 'authorizing'
             ? t('contributionAuthorizingHint')
             : t('contributionReauthHint')
       const contributionStatus = account.status === 'active'
-        ? `${t('localSignedIn')} · ${t('teamAvailable')}`
+        ? `${t('localSignedIn')} · ${activeCapacityReason === 'ready'
+          ? t('teamAvailable')
+          : t(CAPACITY_REASON_LOCALE_KEYS[activeCapacityReason ?? 'runtime_unavailable'])}`
         : t(account.status)
       const openProtection = () => {
         setProtectionEdit({
@@ -2052,7 +2105,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <h2 className={styles.detailTitle}>{account.label}</h2>
             </div>
             <div className={styles.connectionStatus}>
-              <StateDot state={account.status === 'active' ? 'done' : account.status === 'authorizing' ? 'ongoing' : account.status === 'paused' ? 'warning' : 'error'} />
+              <StateDot state={account.status === 'active'
+                ? availabilityDotState(activeCapacityReason ?? 'runtime_unavailable')
+                : account.status === 'authorizing'
+                  ? 'ongoing'
+                  : account.status === 'paused'
+                    ? 'warning'
+                    : 'error'} />
               <span className={styles.statusText}>{contributionStatus}</span>
             </div>
           </header>
@@ -2137,6 +2196,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionNavigation = (account: TeamManagementContributionSummary) => {
       const navigationStatus = account.status === 'active' ? t('contributedByMe') : t(account.status)
+      const activeCapacityReason = account.status === 'active'
+        ? activeContributionCapacityReason(account)
+        : undefined
       return (
         <button
           type="button"
@@ -2147,7 +2209,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           onClick={() => { setSelectedAccountId(contributionSelectionKey(account.id)) }}
           key={account.id}
         >
-          <StateDot state={account.status === 'active' ? 'done' : account.status === 'authorizing' ? 'ongoing' : account.status === 'paused' ? 'warning' : 'error'} />
+          <StateDot state={account.status === 'active'
+            ? availabilityDotState(activeCapacityReason ?? 'runtime_unavailable')
+            : account.status === 'authorizing'
+              ? 'ongoing'
+              : account.status === 'paused'
+                ? 'warning'
+                : 'error'} />
           <span className={styles.accountNavCopy}>
             <span className={styles.accountNavLabel}>{accountAliases.get(contributionSelectionKey(account.id))}</span>
             <span className={styles.accountNavOwner}>{account.label}</span>
@@ -2174,7 +2242,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           onClick={() => { setSelectedAccountId(sharedDirectorySelectionKey(account.id)) }}
           key={account.id}
         >
-          <StateDot state="done" />
+          <StateDot state="ongoing" />
           <span className={styles.accountNavCopy}>
             <span className={styles.accountNavLabel}>{accountAliases.get(sharedDirectorySelectionKey(account.id))}</span>
             <span className={styles.accountNavOwner}>{account.label}</span>
@@ -2184,24 +2252,29 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       )
     }
 
-    const renderLocalNavigation = (profile: LocalCodexProfileSummary) => (
-      <button
-        type="button"
-        className={styles.accountNavItem}
-        data-selected={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
-        aria-pressed={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
-        aria-label={`${profile.label} · ${t('localSignedIn')} · ${t('localNotShared')}`}
-        onClick={() => { setSelectedAccountId(localSelectionKey(profile.id)) }}
-        key={profile.id}
-      >
-        <StateDot state="done" />
-        <span className={styles.accountNavCopy}>
-          <span className={styles.accountNavLabel}>{accountAliases.get(localSelectionKey(profile.id))}</span>
-          <span className={styles.accountNavOwner}>{profile.label}</span>
-        </span>
-        <span className={styles.accountNavStatus}>{t('localNotShared')}</span>
-      </button>
-    )
+    const renderLocalNavigation = (profile: LocalCodexProfileSummary) => {
+      const localConnectionStatus = profile.quotaError === undefined
+        ? t('localSignedIn')
+        : t('capacityQuotaError')
+      return (
+        <button
+          type="button"
+          className={styles.accountNavItem}
+          data-selected={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
+          aria-pressed={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
+          aria-label={`${profile.label} · ${localConnectionStatus} · ${t('localNotShared')}`}
+          onClick={() => { setSelectedAccountId(localSelectionKey(profile.id)) }}
+          key={profile.id}
+        >
+          <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} />
+          <span className={styles.accountNavCopy}>
+            <span className={styles.accountNavLabel}>{accountAliases.get(localSelectionKey(profile.id))}</span>
+            <span className={styles.accountNavOwner}>{profile.label}</span>
+          </span>
+          <span className={styles.accountNavStatus}>{t('localNotShared')}</span>
+        </button>
+      )
+    }
 
     const sharedAccountCount = contributionGroups.shared.length + teammateSharedAccounts.length
     const accountCount = listedAccounts.length + teammateSharedAccounts.length + localTeamProfiles.length
