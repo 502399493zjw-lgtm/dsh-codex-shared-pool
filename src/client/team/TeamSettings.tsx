@@ -2193,18 +2193,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
               }}>{t('viewSevenDays')}</Button>
             </header>
-            <p className={styles.compactRecentLine}>
-              <strong>{t('requestCount', { count: last24HoursAggregate?.requestCount ?? '—' })}</strong>
-              <span aria-hidden="true"> · </span>
-              <span>{t('tokenApiEquivalent')}</span>{' '}
-              <strong>{formatUsdMicros(last24HoursAggregate?.estimatedCostUsdMicros)}</strong>
-            </p>
+            {last24HoursAggregate === undefined
+              ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
+              : <p className={styles.compactRecentLine}>
+                  <strong>{t('requestCount', { count: last24HoursAggregate.requestCount })}</strong>
+                  <span aria-hidden="true"> · </span>
+                  <span>{t('tokenApiEquivalent')}</span>{' '}
+                  <strong>{formatUsdMicros(last24HoursAggregate.estimatedCostUsdMicros)}</strong>
+                </p>}
           </section>
-          <footer className={styles.detailFooter}>
-            <Button className={styles.detailFooterButton} variant="ghost" onClick={() => {
-              setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
-            }}>{t('recentRequests')}</Button>
-          </footer>
         </article>
       )
     }
@@ -2928,7 +2925,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             : <div className={styles.recentRequestList}>{requests.map(request => (
               <div className={styles.recentRequest} key={request.id}>
                 <div><strong>{request.model}</strong><span>{formatTime(request.startedAt)}</span></div>
-                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span><span>{formatUsdMicros(request.estimatedCostUsdMicros)}</span></div>
+                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span></div>
               </div>
             ))}</div>
         })()}

@@ -1585,7 +1585,8 @@ describe('Team subscription-pool workspace', () => {
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
     expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
     expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
-      && /2 次请求.*Token API 等价金额.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+      && /2 次请求.*API 价格估算（非实际扣费）.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+    expect(within(account).queryByRole('button', { name: zh.recentRequests })).toBeNull()
     expect(within(actions).getByRole('button', { name: '终止共享' })).toBeDefined()
 
     fireEvent.click(within(weekly).getByRole('button', { name: zh.editProtection }))
@@ -1594,12 +1595,21 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: zh.editProtection })).getByRole('button', { name: zh.cancel }))
 
     fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
-    expect(screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })).toBeDefined()
-
-    fireEvent.click(within(account).getByRole('button', { name: zh.recentRequests }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
     expect(within(recent).getByText('2500 tokens')).toBeDefined()
+    expect(recent.textContent).not.toContain('0.03')
+  })
+
+  it('labels missing recent-day usage as unavailable instead of showing dash totals', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+    const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
+
+    expect(within(recentUsage).getByText('最近 1 天用量暂不可用')).toBeDefined()
+    expect(recentUsage.textContent).not.toContain('— 次请求')
   })
 
   it('uses the approved account directory and selected-account detail workspace', async () => {
