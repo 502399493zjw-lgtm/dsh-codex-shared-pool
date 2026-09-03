@@ -617,6 +617,7 @@
 
 .usageMetric dd {
   margin: 3px 0 0;
+  min-width: 0;
   color: var(--team-ink);
   font-family: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   font-size: 14px;
@@ -624,7 +625,7 @@
   line-height: 21px;
   overflow-wrap: anywhere;
   text-align: right;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .usageMetric:first-child dd {
@@ -634,6 +635,7 @@
   letter-spacing: -0.045em;
   line-height: 1.12;
   text-align: left;
+  white-space: nowrap;
 }
 
 .usageUnavailable {

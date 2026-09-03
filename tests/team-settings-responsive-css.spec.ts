@@ -220,6 +220,8 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:first-child\s+dd\s*\{[^}]*font-size:\s*clamp\(24px,\s*4cqi,\s*32px\);/s)
     expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;[^}]*padding:\s*7px 0;/s)
     expect(css).not.toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:/s)
+    expect(css).toMatch(/\.usageMetric dd\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*normal;/s)
+    expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
 
   it('keeps the prototype compact Team bar and detail rhythm', () => {
