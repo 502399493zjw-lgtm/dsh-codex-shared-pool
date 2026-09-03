@@ -112,7 +112,7 @@ import {
   TEAM_USAGE_PATH,
 } from './types.ts'
 import type { TeamCredentialHandoffOffer } from './oauth-handoff.ts'
-import { sealTeamCredentialHandoff } from './oauth-handoff.ts'
+import { sealTeamCredentialHandoff, TEAM_CREDENTIAL_HANDOFF_TTL_MS } from './oauth-handoff.ts'
 import type {
   TeamContributionCapacityBucketSummary,
   TeamContributionCapacitySummary,
@@ -2233,10 +2233,13 @@ class TeamManagementProxy {
     }
 
     const frozenExpectedContext = Object.freeze({ ...expectedContext })
+    // A remote absolute timestamp is not a safe local timer when the two Hosts have clock skew.
+    // The Team Host remains authoritative and rejects a handoff after its own deadline.
+    const localExpiresAt = this.now() + TEAM_CREDENTIAL_HANDOFF_TTL_MS
     const pending = Object.freeze({
       accountId: account.id,
       method: 'browser',
-      expiresAt: offer.expiresAt,
+      expiresAt: localExpiresAt,
       discardInitial: discardInitialOnFailure,
     } satisfies TeamManagementPendingBrowserAuthorization)
     try {
@@ -2260,7 +2263,7 @@ class TeamManagementProxy {
     }
     const expirationTimer = setTimeout(() => {
       abort(new Error('OpenAI Codex sign-in timed out'), false)
-    }, Math.max(0, offer.expiresAt - this.now()))
+    }, Math.max(0, localExpiresAt - this.now()))
     let resolveAuthorization!: (url: string) => void
     let rejectAuthorization!: (error: unknown) => void
     let authorizationSettled = false
@@ -2325,7 +2328,7 @@ class TeamManagementProxy {
     })
     // Completion stays Host-side after the Browser receives and opens this URL.
     completion.catch(() => {})
-    return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: offer.expiresAt }
+    return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: localExpiresAt }
   }
 
   /** Automatic cleanup is idempotent; retry one transport failure before giving up. */

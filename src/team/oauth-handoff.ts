@@ -14,7 +14,7 @@ import type { KeyObject } from 'node:crypto'
 import type { OAuthCredential } from '@earendil-works/pi-ai'
 import type { TeamCredentialRef } from './credentials.ts'
 
-const DEFAULT_TTL_MS = 10 * 60 * 1_000
+export const TEAM_CREDENTIAL_HANDOFF_TTL_MS = 10 * 60 * 1_000
 const MAX_TTL_MS = 30 * 60 * 1_000
 const MAX_CIPHERTEXT_BYTES = 128 * 1024
 const HANDOFF_VERSION = 1
@@ -70,7 +70,7 @@ export class TeamCredentialHandoffRegistry {
 
   constructor(options: TeamCredentialHandoffRegistryOptions = {}) {
     this.now = options.now ?? Date.now
-    this.ttlMs = boundedInteger(options.ttlMs ?? DEFAULT_TTL_MS, 'handoff ttl', 1_000, MAX_TTL_MS)
+    this.ttlMs = boundedInteger(options.ttlMs ?? TEAM_CREDENTIAL_HANDOFF_TTL_MS, 'handoff ttl', 1_000, MAX_TTL_MS)
   }
 
   create(refInput: TeamCredentialRef): TeamCredentialHandoffOffer {
