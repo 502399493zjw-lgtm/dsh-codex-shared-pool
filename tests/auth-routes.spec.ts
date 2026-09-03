@@ -149,6 +149,8 @@ describe('OpenAI Codex Web routes', () => {
       expect(opened.status).toBe(200)
       expect(opened.headers['content-security-policy']).toContain("default-src 'none'")
       expect(opened.body).toContain(OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH)
+      expect(opened.body).toContain('try{window.opener=null}catch{}')
+      expect(opened.body.indexOf('window.opener=null')).toBeLessThan(opened.body.indexOf('window.location.replace'))
       expect(opened.body).not.toContain('client_id=')
 
       const published = await request(session, 'POST', {

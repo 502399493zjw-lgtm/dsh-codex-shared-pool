@@ -124,3 +124,27 @@ Expected: PASS.
 - [ ] **Step 4: Commit and push the assertion repair**
 
 Commit the two expectation changes separately, push the existing PR branch, and wait for CI plus the independent review conclusion.
+
+### Task 3: Preserve popup opener isolation
+
+**Files:**
+- Modify: `src/auth-routes.ts`
+- Test: `tests/auth-routes.spec.ts`
+
+**Interfaces:**
+- Consumes: the same-origin authorization bridge HTML returned by `authorizationPopup`
+- Produces: a bridge page that clears both `window.opener` and `window.name` before navigating toward the provider
+
+- [x] **Step 1: Add and run the failing security assertion**
+
+Assert that the bridge response body contains `window.opener=null` before its `window.location.replace` call, then run `pnpm exec vitest run tests/auth-routes.spec.ts -t "hands an adopted popup the provider URL and records acknowledgement"` and confirm failure.
+
+- [x] **Step 2: Clear the opener in the bridge document**
+
+```html
+<script nonce="...">try{window.opener=null}catch{}try{window.name=''}catch{}window.location.replace(...)</script>
+```
+
+- [ ] **Step 3: Repeat focused verification and independent review**
+
+Run the three browser/Team test files, both corrected Host cleanup tests, `pnpm run build`, and `pnpm run verify:package`; push the fix and request another change-scoped subagent review.

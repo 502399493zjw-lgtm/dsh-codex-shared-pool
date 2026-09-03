@@ -633,7 +633,7 @@ function popupAttemptFromRequest(req: IncomingMessage): string {
 function authorizationPopup(res: ServerResponse, attemptToken: string): void {
   const nonce = randomBytes(18).toString('base64')
   const sessionUrl = `${OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH}?attempt=${encodeURIComponent(attemptToken)}`
-  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>正在准备安全授权</title></head><body><main><p>正在打开 OpenAI 登录页面…</p></main><script nonce="${nonce}">try{window.name=''}catch{}window.location.replace(${JSON.stringify(sessionUrl)})</script></body></html>`
+  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>正在准备安全授权</title></head><body><main><p>正在打开 OpenAI 登录页面…</p></main><script nonce="${nonce}">try{window.opener=null}catch{}try{window.name=''}catch{}window.location.replace(${JSON.stringify(sessionUrl)})</script></body></html>`
   res.writeHead(200, {
     'content-type': 'text/html; charset=utf-8',
     'content-length': Buffer.byteLength(body),
