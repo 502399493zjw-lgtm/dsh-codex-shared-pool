@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { registerTeamManagementRoutes } from '../src/team/management-routes.ts'
 import type { TeamManagementRouteOptions, TeamManagementRouteSecurity } from '../src/team/management-routes.ts'
 import type { OpenAICodexProfileStore } from '../src/store.ts'
-import { TeamCredentialHandoffRegistry } from '../src/team/oauth-handoff.ts'
+import { TeamCredentialHandoffRegistry, TEAM_CREDENTIAL_HANDOFF_TTL_MS } from '../src/team/oauth-handoff.ts'
 import {
   TEAM_AUTHORIZATION_FAILED_CODE,
   TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
@@ -2396,6 +2396,258 @@ describe('local Team management routes', () => {
     expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(false)
   })
 
+  it('limits transient handoff completion failures to two attempts before cleanup', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-retry-limit-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    const completionBodies: string[] = []
+    const cancellationBodies: string[] = []
+    const backgroundErrors: unknown[] = []
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        completionBodies.push(String(init?.body))
+        throw new TypeError('fetch failed: ECONNRESET')
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellationBodies.push(String(init?.body))
+        return new Response(JSON.stringify({
+          account: {
+            ...contribution(),
+            status: 'revoked',
+            lastError: TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=retry-limit' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      withOverviewSequence(mutationFetch, [
+        overview(),
+        overview({
+          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        }),
+      ]),
+      { loginProfile, temporaryRootDir, onBackgroundError: error => { backgroundErrors.push(error) } },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+
+    await vi.waitFor(() => { expect(backgroundErrors).toHaveLength(1) })
+    expect(backgroundErrors[0]).toMatchObject({ message: TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE })
+    expect(completionBodies).toHaveLength(2)
+    expect(completionBodies[1]).toBe(completionBodies[0])
+    expect(cancellationBodies).toHaveLength(1)
+    expect(JSON.parse(cancellationBodies[0]!)).toEqual({
+      accountId: 'account-1',
+      discardInitial: true,
+      failureCode: TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+    })
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('does not resend the credential handoff after cancellation between transient attempts', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-retry-cancel-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    let resolveFirstCompletion!: (response: Response) => void
+    const firstCompletion = new Promise<Response>((resolve) => { resolveFirstCompletion = resolve })
+    let markFirstCompletionStarted = () => {}
+    const firstCompletionStarted = new Promise<void>((resolve) => { markFirstCompletionStarted = resolve })
+    let loginSignal: AbortSignal | undefined
+    let overviewReads = 0
+    let cancellations = 0
+    const completionBodies: string[] = []
+    const backgroundErrors: unknown[] = []
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        overviewReads += 1
+        return new Response(JSON.stringify(overview({
+          contributions: overviewReads === 1
+            ? []
+            : [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        completionBodies.push(String(init?.body))
+        markFirstCompletionStarted()
+        return await firstCompletion
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellations += 1
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      loginSignal = interaction.signal
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=retry-cancel' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir, onBackgroundError: error => { backgroundErrors.push(error) } },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+    await firstCompletionStarted
+
+    const cancellation = response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: true,
+    })))
+    await vi.waitFor(() => { expect(loginSignal?.aborted).toBe(true) })
+    resolveFirstCompletion(new Response('temporarily unavailable', {
+      status: 503,
+      headers: { 'content-type': 'text/plain' },
+    }))
+
+    await expect(cancellation).resolves.toMatchObject({ status: 200, body: { account: { status: 'revoked' } } })
+    expect(completionBodies).toHaveLength(1)
+    expect(overviewReads).toBe(3)
+    expect(cancellations).toBe(1)
+    expect(backgroundErrors).toEqual([])
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('does not retry a transient Team context read after cancellation', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-context-cancel-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    let rejectPostLoginOverview!: (error: unknown) => void
+    const postLoginOverview = new Promise<Response>((_resolve, reject) => { rejectPostLoginOverview = reject })
+    let markPostLoginOverviewStarted = () => {}
+    const postLoginOverviewStarted = new Promise<void>((resolve) => { markPostLoginOverviewStarted = resolve })
+    let loginSignal: AbortSignal | undefined
+    let overviewReads = 0
+    let handoffCompletions = 0
+    let cancellations = 0
+    const backgroundErrors: unknown[] = []
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        overviewReads += 1
+        if (overviewReads === 2) {
+          markPostLoginOverviewStarted()
+          return await postLoginOverview
+        }
+        return new Response(JSON.stringify(overview({
+          contributions: overviewReads === 1
+            ? []
+            : [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        handoffCompletions += 1
+        throw new Error('credential handoff must not start after cancellation')
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellations += 1
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      loginSignal = interaction.signal
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=context-cancel' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir, onBackgroundError: error => { backgroundErrors.push(error) } },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+    await postLoginOverviewStarted
+
+    const cancellation = response(route(routes, TEAM_MANAGEMENT_OAUTH_CANCEL_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', discardInitial: true,
+    })))
+    await vi.waitFor(() => { expect(loginSignal?.aborted).toBe(true) })
+    rejectPostLoginOverview(new TypeError('temporary Team connection reset'))
+
+    await expect(cancellation).resolves.toMatchObject({ status: 200, body: { account: { status: 'revoked' } } })
+    expect(overviewReads).toBe(3)
+    expect(handoffCompletions).toBe(0)
+    expect(cancellations).toBe(1)
+    expect(backgroundErrors).toEqual([])
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
   it('retries a transient Team context read after browser sign-in before completing the handoff', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
@@ -2595,57 +2847,74 @@ describe('local Team management routes', () => {
     expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
   })
 
-  it('times out browser OAuth at the handoff deadline and removes the initial contribution', async () => {
-    const credentials = new FakeCredentials()
-    credentials.value = 'dsh_team_member-secret-1234567890'
-    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input) => {
-      const url = String(input)
-      if (url.endsWith('/contributions/oauth/start')) {
-        return new Response(JSON.stringify({
-          account: { ...contribution(), status: 'authorizing', lastError: undefined },
-          method: 'browser_handoff',
-          handoff: {
-            version: 1,
-            sessionId: 'timeout-session',
-            serverPublicKey: 'unused-before-timeout',
-            expiresAt: Date.now() + 30,
-          },
-        }), { status: 201, headers: { 'content-type': 'application/json' } })
-      }
-      if (url.endsWith('/contributions/oauth/cancel')) {
-        return new Response(JSON.stringify({
-          account: { ...contribution(), status: 'revoked', lastError: undefined },
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      }
-      throw new Error(`unexpected remote request: ${url}`)
-    })
-    const loginProfile = (interaction: AuthInteraction): Promise<never> => {
-      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=timeout' })
-      return new Promise((_resolve, reject) => {
-        interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
+  it('times out browser OAuth at the local authorization deadline and removes the initial contribution', async () => {
+    vi.useFakeTimers()
+    try {
+      const localNow = 1_800_000_000_000
+      vi.setSystemTime(localNow)
+      const credentials = new FakeCredentials()
+      credentials.value = 'dsh_team_member-secret-1234567890'
+      const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+        const url = String(input)
+        if (url.endsWith('/contributions/oauth/start')) {
+          return new Response(JSON.stringify({
+            account: { ...contribution(), status: 'authorizing', lastError: undefined },
+            method: 'browser_handoff',
+            handoff: {
+              version: 1,
+              sessionId: 'timeout-session',
+              serverPublicKey: 'unused-before-timeout',
+              expiresAt: localNow + 30,
+            },
+          }), { status: 201, headers: { 'content-type': 'application/json' } })
+        }
+        if (url.endsWith('/contributions/oauth/cancel')) {
+          return new Response(JSON.stringify({
+            account: { ...contribution(), status: 'revoked', lastError: undefined },
+          }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        throw new Error(`unexpected remote request: ${url}`)
       })
-    }
-    const { routes } = setup(
-      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
-      credentials,
-      withOverviewSequence(mutationFetch, [
-        overview(),
-        overview({
-          contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
-        }),
-      ]),
-      { loginProfile },
-    )
+      const loginProfile = (interaction: AuthInteraction): Promise<never> => {
+        interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=timeout' })
+        return new Promise((_resolve, reject) => {
+          interaction.signal.addEventListener('abort', () => { reject(interaction.signal.reason) }, { once: true })
+        })
+      }
+      const { routes } = setup(
+        { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+        credentials,
+        withOverviewSequence(mutationFetch, [
+          overview(),
+          overview({
+            contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+          }),
+        ]),
+        { loginProfile },
+      )
 
-    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
-      label: 'Personal Pro', method: 'browser',
-    })))).resolves.toMatchObject({ status: 201 })
+      const started = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+        label: 'Personal Pro', method: 'browser',
+      })))
+      expect(started).toMatchObject({
+        status: 201,
+        body: { expiresAt: localNow + TEAM_CREDENTIAL_HANDOFF_TTL_MS },
+      })
 
-    await vi.waitFor(() => {
+      await vi.advanceTimersByTimeAsync(30)
       expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel')))
-        .toBe(true)
-    })
-    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+        .toBe(false)
+      expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeDefined()
+
+      await vi.advanceTimersByTimeAsync(TEAM_CREDENTIAL_HANDOFF_TTL_MS - 30)
+      await vi.waitFor(() => {
+        expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel')))
+          .toBe(true)
+        expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects a browser OAuth account mismatch and discards the initial remote contribution', async () => {
