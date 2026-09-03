@@ -233,6 +233,13 @@ class RemoteTeamError extends Error {
   }
 }
 
+class RemoteTeamTransportError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RemoteTeamTransportError'
+  }
+}
+
 class TeamManagementContextMismatchError extends Error {
   constructor() {
     super(TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE)
@@ -277,6 +284,13 @@ function rejectsOAuthFailureCodeField(error: unknown): boolean {
     && response !== null
     && !Array.isArray(response)
     && (response as Record<string, unknown>).error === 'request contains an unknown field'
+}
+
+function isRetryableRemoteTeamFailure(error: unknown): boolean {
+  if (error instanceof RemoteTeamError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500
+  }
+  return error instanceof RemoteTeamTransportError
 }
 
 function sameTeamManagementContext(
@@ -471,6 +485,7 @@ function statusFor(error: unknown): number {
   if (error instanceof TeamManagementContextMismatchError) return 409
   if (error instanceof TeamManagementLocalAccountAlreadySharedError) return 409
   if (error instanceof TeamManagementBrowserOAuthAlreadyPendingError) return 409
+  if (error instanceof RemoteTeamTransportError) return 502
   if (error instanceof RemoteTeamError) {
     if (error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) return error.status
     return 502
@@ -2336,13 +2351,7 @@ class TeamManagementProxy {
           return true
         } catch (error: unknown) {
           if (allowLegacyFallback && rejectsOAuthFailureCodeField(error)) return 'legacy_contract'
-          if (
-            error instanceof RemoteTeamError
-            && error.status >= 400
-            && error.status < 500
-            && error.status !== 408
-            && error.status !== 429
-          ) return false
+          if (!isRetryableRemoteTeamFailure(error)) return false
         }
       }
       return false
@@ -2394,7 +2403,7 @@ class TeamManagementProxy {
       if (validationIntent !== undefined && providerAccountId !== validationIntent.expectedProviderAccountId) {
         throw new Error('independently authorized OpenAI account does not match the selected local account')
       }
-      const currentKey = await this.expectedMutationKey(expectedContext)
+      const currentKey = await this.expectedOAuthMutationKey(expectedContext, signal)
       if (signal.aborted) throw abortReason(signal)
       if (validationIntent !== undefined) {
         await this.persistLocalContributionBinding({
@@ -2408,7 +2417,7 @@ class TeamManagementProxy {
         { teamId: account.teamId, accountId: account.id },
         { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
       )
-      await this.completeRemoteOAuthHandoff(account, envelope, currentKey)
+      await this.completeRemoteOAuthHandoff(account, envelope, currentKey, signal)
       await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
       })
@@ -2421,9 +2430,11 @@ class TeamManagementProxy {
     account: TeamManagementContributionSummary,
     envelope: ReturnType<typeof sealTeamCredentialHandoff>,
     key: string,
+    signal: AbortSignal,
   ): Promise<void> {
     let failure: unknown
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (signal.aborted) throw abortReason(signal)
       try {
         const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
           method: 'POST', body: { accountId: account.id, envelope }, key,
@@ -2437,13 +2448,25 @@ class TeamManagementProxy {
         return
       } catch (error: unknown) {
         failure = error
-        if (
-          error instanceof RemoteTeamError
-          && error.status >= 400
-          && error.status < 500
-          && error.status !== 408
-          && error.status !== 429
-        ) break
+        if (!isRetryableRemoteTeamFailure(error)) break
+      }
+    }
+    throw failure
+  }
+
+  /** The credential is already captured, so survive one transient Team read before discarding it. */
+  private async expectedOAuthMutationKey(
+    expectedContext: TeamManagementExpectedContext,
+    signal: AbortSignal,
+  ): Promise<string> {
+    let failure: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (signal.aborted) throw abortReason(signal)
+      try {
+        return await this.expectedMutationKey(expectedContext)
+      } catch (error: unknown) {
+        failure = error
+        if (!isRetryableRemoteTeamFailure(error)) throw error
       }
     }
     throw failure
@@ -3344,7 +3367,7 @@ class TeamManagementProxy {
         ...options.body === undefined ? {} : { body: JSON.stringify(options.body) },
       })
     } catch (error: unknown) {
-      throw new Error(`remote Team unavailable: ${safeMessage(error)}`)
+      throw new RemoteTeamTransportError(`remote Team unavailable: ${safeMessage(error)}`)
     }
     const value = await readRemoteJson(response)
     if (!response.ok) {

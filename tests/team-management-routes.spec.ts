@@ -2301,6 +2301,154 @@ describe('local Team management routes', () => {
     expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(false)
   })
 
+  it('retries a transient Team context read after browser sign-in before completing the handoff', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-context-retry-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const handoffs = new TeamCredentialHandoffRegistry()
+    const offer = handoffs.create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    let overviewReads = 0
+    let handoffCompletions = 0
+    let cancellations = 0
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        overviewReads += 1
+        if (overviewReads === 2) throw new TypeError('temporary Team connection reset')
+        return new Response(JSON.stringify(overview({
+          contributions: overviewReads === 1
+            ? []
+            : [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        handoffCompletions += 1
+        const body = JSON.parse(String(init?.body)) as {
+          accountId: string
+          envelope: Parameters<typeof handoffs.complete>[1]
+        }
+        handoffs.complete({ teamId: 'team-1', accountId: body.accountId }, body.envelope)
+        return new Response(JSON.stringify({
+          account: { ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellations += 1
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=context-retry' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+
+    await vi.waitFor(() => { expect(handoffCompletions).toBe(1) })
+    expect(overviewReads).toBe(3)
+    expect(cancellations).toBe(0)
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
+  it('does not retry a terminal handoff response after browser sign-in', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-terminal-handoff-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    let overviewReads = 0
+    let handoffCompletions = 0
+    let cancellations = 0
+    const backgroundErrors: unknown[] = []
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) {
+        overviewReads += 1
+        return new Response(JSON.stringify(overview({
+          contributions: overviewReads === 1
+            ? []
+            : [{ ...contribution(), status: 'authorizing', lastError: undefined }],
+        })), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: offer,
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        handoffCompletions += 1
+        return new Response(JSON.stringify({ error: 'handoff expired' }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellations += 1
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: TEAM_AUTHORIZATION_FAILED_CODE },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}`)
+    })
+    const loginProfile = async (interaction: AuthInteraction, store: OpenAICodexProfileStore) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=terminal-handoff' })
+      await loginGate
+      return store.addProfile('Captured OAuth', {
+        type: 'oauth', access: 'provider-access-secret', refresh: 'provider-refresh-secret',
+        expires: Date.now() + 3_600_000, accountId: 'provider-account-1',
+      })
+    }
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      { loginProfile, temporaryRootDir, onBackgroundError: error => { backgroundErrors.push(error) } },
+    )
+
+    await expect(response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))).resolves.toMatchObject({ status: 201 })
+    releaseLogin()
+
+    await vi.waitFor(() => { expect(backgroundErrors).toHaveLength(1) })
+    expect(backgroundErrors[0]).toMatchObject({ message: TEAM_AUTHORIZATION_FAILED_CODE })
+    expect(handoffCompletions).toBe(1)
+    expect(cancellations).toBe(1)
+    expect(await readdir(temporaryRootDir)).toEqual([])
+  })
+
   it('preserves the local profile binding when cancellation races with an active completion', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
@@ -2615,7 +2763,7 @@ describe('local Team management routes', () => {
       .toBe(false)
   })
 
-  it('revalidates Team context immediately before completing a browser OAuth handoff', async () => {
+  it('stops after a retried Team context read detects that the Team changed', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
     const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-handoff-context-test-'))
@@ -2630,6 +2778,7 @@ describe('local Team management routes', () => {
       const url = String(input)
       if (url.endsWith('/overview')) {
         overviewReads += 1
+        if (overviewReads === 2) throw new TypeError('temporary Team connection reset')
         const current = overviewReads === 1
           ? overview()
           : overview({
@@ -2682,6 +2831,7 @@ describe('local Team management routes', () => {
 
     releaseLogin()
     await vi.waitFor(() => { expect(backgroundErrors).toHaveLength(1) })
+    expect(overviewReads).toBe(3)
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(true)
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)))
       .toBe(false)
