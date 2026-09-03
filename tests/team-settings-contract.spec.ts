@@ -12,6 +12,7 @@ import {
   groupTeamContributions,
   localProfilesAvailableForTeam,
   parseContributionProtectionDraft,
+  parseWeeklySharingLimitDraft,
 } from '../src/client/team/team-settings-contract.ts'
 import { en, zh } from '../src/client/team/locales.ts'
 
@@ -119,6 +120,22 @@ describe('Team Settings member-management contract', () => {
 })
 
 describe('Team Settings contribution-protection contract', () => {
+  it('parses the focused weekly-limit editor without overwriting hidden protection settings', () => {
+    expect(parseWeeklySharingLimitDraft({ weeklyLimitUsd: '25' })).toEqual({
+      ok: true,
+      patch: { weeklySharedEstimatedApiCostLimitMicros: 25_000_000 },
+    })
+    expect(parseWeeklySharingLimitDraft({ weeklyLimitUsd: '' })).toEqual({
+      ok: true,
+      patch: { weeklySharedEstimatedApiCostLimitMicros: null },
+    })
+  })
+
+  it.each(['0', '0.001', '10000.01', 'Infinity'])('rejects focused weekly USD limit %j before submission', weeklyLimitUsd => {
+    expect(parseWeeklySharingLimitDraft({ weeklyLimitUsd }))
+      .toEqual({ ok: false, field: 'weeklyLimitUsd' })
+  })
+
   it('parses the complete upper-bound protection settings accepted by the Host', () => {
     expect(parseContributionProtectionDraft({
       reserve: '99',

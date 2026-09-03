@@ -49,7 +49,7 @@ import {
   canTransferTeamOwnership,
   groupTeamContributions,
   localProfilesAvailableForTeam,
-  parseContributionProtectionDraft,
+  parseWeeklySharingLimitDraft,
 } from './team-settings-contract.ts'
 import styles from './TeamSettings.module.css'
 
@@ -232,10 +232,7 @@ type TeamWorkspaceView = 'usage' | 'members' | 'invitations'
 
 interface ContributionProtectionEdit {
   readonly account: TeamManagementContributionSummary
-  readonly reserve: string
-  readonly requestCap: string
   readonly weeklyLimitUsd: string
-  readonly models: string
 }
 
 type PendingTeamInvite = Extract<TeamManagementOverview, { readonly viewerRole: 'owner' }>['invites'][number]
@@ -2068,6 +2065,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionAccount = (account: TeamManagementContributionSummary) => {
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
+      const weeklyUsed = formatUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
@@ -2091,12 +2089,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const openProtection = () => {
         setProtectionEdit({
           account,
-          reserve: String(account.personalReservePercent),
-          requestCap: account.maxSharedRequestsPerWindow === null ? '' : String(account.maxSharedRequestsPerWindow),
           weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
             ? ''
             : String(account.weeklySharedEstimatedApiCostLimitMicros / 1_000_000),
-          models: account.allowedModels.join(', '),
         })
       }
       return (
@@ -2146,9 +2141,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
                 <dd className={styles.weeklyAmount}>
-                  <span className={styles.weeklyLimitValue}>{account.weeklySharedEstimatedApiCostLimitMicros == null
-                    ? t('limitNoLimit')
-                    : t('limitAmount', { amount: weeklyLimit })}</span>
+                  <span className={styles.weeklyLimitValue}>{weeklyUsed} / {weeklyLimit}</span>
                   <button type="button" className={styles.inlineLimitButton} aria-label={t('editSharingLimit')} title={t('editSharingLimit')} disabled={busy !== undefined} onClick={openProtection}>
                     {t('edit')}
                   </button>
@@ -2844,15 +2837,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setProtectionEdit(undefined) }}>{t('cancel')}</Button>
             <Button size="sm" variant="primary" disabled={busy !== undefined} aria-busy={busy?.startsWith('protection-') === true} onClick={() => {
               if (protectionEdit === undefined) return
-              const result = parseContributionProtectionDraft(protectionEdit)
+              const result = parseWeeklySharingLimitDraft(protectionEdit)
               if (!result.ok) {
-                setError(t(result.field === 'reserve'
-                  ? 'reserveValidation'
-                  : result.field === 'requestCap'
-                    ? 'requestCapValidation'
-                    : result.field === 'weeklyLimitUsd'
-                      ? 'weeklyLimitValidation'
-                      : 'allowedModelsValidation'))
+                setError(t('weeklyLimitValidation'))
                 return
               }
               void run(`protection-${protectionEdit.account.id}`, async () => {
@@ -2874,19 +2861,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <label className={styles.label} htmlFor="team-account-weekly-limit">{t('weeklyLimitLabel')}</label>
               <Input id="team-account-weekly-limit" value={protectionEdit.weeklyLimitUsd} placeholder={t('weeklyLimitPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, weeklyLimitUsd: event.target.value }) }} />
               <span className={styles.hint}>{t('weeklyLimitHint')}</span>
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-reserve">{t('reserveLabel')}</label>
-              <Input id="team-account-reserve" value={protectionEdit.reserve} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, reserve: event.target.value }) }} />
-              <span className={styles.hint}>{t('reserveHint')}</span>
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-request-cap">{t('requestCapLabel')}</label>
-              <Input id="team-account-request-cap" value={protectionEdit.requestCap} placeholder={t('requestCapPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, requestCap: event.target.value }) }} />
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-models">{t('allowedModelsLabel')}</label>
-              <Input id="team-account-models" value={protectionEdit.models} placeholder={t('allowedModelsPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, models: event.target.value }) }} />
             </div>
           </div>
         )}
