@@ -451,8 +451,9 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(trigger)
     const settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
-    expect(within(settings).getByText(zh.workspaceKicker)).toBeDefined()
-    expect(within(settings).getByRole('heading', { name: zh.workspaceTitle })).toBeDefined()
+    expect(within(settings).queryByText(zh.workspaceKicker)).toBeNull()
+    expect(within(settings).getByRole('heading', { name: zh.teamSettingsTitle })).toBeDefined()
+    expect(within(settings).queryByRole('heading', { name: zh.workspaceTitle })).toBeNull()
     expect(within(settings).queryByText(zh.workspaceBreadcrumb)).toBeNull()
     expect(within(settings).getByRole('heading', { name: overviewState.team.name })).toBeDefined()
     expect(within(settings).getByRole('navigation', { name: zh.workspaceNavigation })).toBeDefined()
@@ -460,7 +461,15 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByRole('button', { name: zh.accountsNavigation })).toBeNull()
     expect(within(settings).queryByRole('region', { name: zh.accountsNavigation })).toBeNull()
 
-    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+    const back = within(settings).getByRole('button', { name: zh.backToTeam })
+    expect(back.closest('aside')).not.toBeNull()
+    expect(back.textContent?.trim()).toBe('←')
+    expect(back.getAttribute('title')).toBe(zh.backToTeam)
+    const refresh = within(settings).getByRole('button', { name: zh.refresh })
+    expect(refresh.textContent?.trim()).toBe('')
+    expect(refresh.getAttribute('title')).toBe(zh.refresh)
+
+    fireEvent.click(back)
     expect(await screen.findByRole('region', { name: '团队面板' })).toBeDefined()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: zh.teamSettings }))
     expect(screen.getByRole('button', { name: zh.addAccount })).toBeDefined()
@@ -2880,7 +2889,11 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('usage')
     const mineUsage = within(within(settings).getByRole('region', { name: '用量' }))
       .getByRole('group', { name: zh.myTeamUsage })
-    expect(within(mineUsage).getByText(state)).toBeDefined()
+    if (state === zh.usageStateZero) {
+      expect(within(mineUsage).queryByText(state)).toBeNull()
+    } else {
+      expect(within(mineUsage).getByText(state)).toBeDefined()
+    }
     if (amount === tokens) {
       expect(within(mineUsage).getAllByText(amount)).toHaveLength(2)
     } else {
