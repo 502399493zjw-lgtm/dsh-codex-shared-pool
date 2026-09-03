@@ -83,7 +83,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   writeClipboard: vi.fn().mockResolvedValue(true),
 }))
 
-import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
+import { formatWeeklyUsdMicros, TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
 import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
@@ -144,6 +144,14 @@ function expectedContext(currentMemberId = 'member-me') {
     currentMemberId,
   }
 }
+
+it('keeps compact weekly amounts in dollar-sign form for Chinese UI', () => {
+  const previousLanguage = document.documentElement.lang
+  document.documentElement.lang = 'zh-CN'
+  expect(formatWeeklyUsdMicros(157_500)).toBe('$0.16')
+  expect(formatWeeklyUsdMicros(null)).toBe('—')
+  document.documentElement.lang = previousLanguage
+})
 
 function confirmingDissolution() {
   return { state: 'confirming' as const, teamName: '周末造物局', requestedAt: NOW }

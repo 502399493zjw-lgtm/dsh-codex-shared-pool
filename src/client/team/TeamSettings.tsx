@@ -327,6 +327,14 @@ function formatUsdMicros(value: string | number | null | undefined): string {
     .format(micros / 1_000_000)
 }
 
+export function formatWeeklyUsdMicros(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  const micros = typeof value === 'number' ? value : Number(value)
+  const amount = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .format(micros / 1_000_000)
+  return `$${amount}`
+}
+
 function documentAllowsInviteSecret(): boolean {
   return typeof document !== 'undefined' && document.visibilityState !== 'hidden'
 }
@@ -2065,7 +2073,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionAccount = (account: TeamManagementContributionSummary) => {
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
-      const weeklyUsed = formatUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
+      const weeklyUsed = formatWeeklyUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
@@ -2074,7 +2082,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         : `${capacityBucket.remainingPercent}%`
       const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
         ? '∞'
-        : formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
+        : formatWeeklyUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const contributionHint = account.status === 'active'
         ? undefined
