@@ -61,6 +61,7 @@ const TEAM_INVITE_TOKEN_PATTERN = /^dsh_invite_[A-Za-z0-9_-]{16,}$/u
 const LOCAL_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
 const LOCAL_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
 const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
+const DEFAULT_PERSONAL_RESERVE_PERCENT = 20
 /** Frozen design reference from the phase-two prototype; it is not a live account balance. */
 const CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS = 5_960_000
 
@@ -727,6 +728,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       || pendingLocalAuthorization.authorizationContext === teamAuthorizationContext)
     ? pendingLocalAuthorization
     : undefined
+  const activePendingLocalProfile = activePendingLocalAuthorization === undefined
+    ? undefined
+    : localProfiles.find(profile => profile.id === activePendingLocalAuthorization.id)
   const activeInviteDraft = inviteDraft !== undefined
     && (authorizationSnapshotPending || inviteDraft.authorizationContext === ownerAuthorizationContext)
     ? inviteDraft
@@ -2071,6 +2075,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const remainingCapacity = capacityBucket?.remainingPercent === undefined
         ? t('capacityQuotaUnavailable')
         : `${capacityBucket.remainingPercent}%`
+      const weeklyUsed = formatUsdMicros(currentWeekAggregate?.estimatedCostUsdMicros)
+      const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
+        ? '∞'
+        : formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
+      const weeklyUsageRatio = account.weeklySharedEstimatedApiCostLimitMicros == null
+        || currentWeekAggregate?.estimatedCostUsdMicros === undefined
+        ? undefined
+        : Math.min(100, Math.max(0, Number(currentWeekAggregate.estimatedCostUsdMicros) / account.weeklySharedEstimatedApiCostLimitMicros * 100))
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const contributionHint = account.status === 'active'
         ? undefined
@@ -2140,11 +2152,25 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
                 <dd className={styles.weeklyAmount}>
-                  <strong>{t('usedAmount', { amount: formatUsdMicros(currentWeekAggregate?.estimatedCostUsdMicros) })}</strong>
-                  <span aria-hidden="true">/</span>
-                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>{account.weeklySharedEstimatedApiCostLimitMicros == null
-                    ? t('sharedLimitNoLimit')
-                    : t('sharedLimitAmount', { amount: formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros) })}</button>
+                  <span
+                    className={styles.weeklyQuotaVisual}
+                    role="img"
+                    aria-label={`${t('usedAmount', { amount: weeklyUsed })}; ${account.weeklySharedEstimatedApiCostLimitMicros == null
+                      ? t('sharedLimitNoLimit')
+                      : t('sharedLimitAmount', { amount: weeklyLimit })}`}
+                  >
+                    <span className={styles.weeklyQuotaTrack} data-unlimited={weeklyUsageRatio === undefined ? 'true' : undefined} aria-hidden="true">
+                      {weeklyUsageRatio === undefined ? null : <span style={{ width: `${weeklyUsageRatio}%` }} />}
+                    </span>
+                    <span className={styles.weeklyQuotaNumbers} aria-hidden="true">
+                      <strong>{weeklyUsed}</strong><span>/</span><span>{weeklyLimit}</span>
+                    </span>
+                  </span>
+                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} title={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>
+                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                      <path d="M3 11.75V13h1.25l7.36-7.36-1.25-1.25L3 11.75Zm9.58-7.08a.88.88 0 0 0 0-1.25l-1-1a.88.88 0 0 0-1.25 0l-.78.78 2.25 2.25.78-.78Z" fill="currentColor" />
+                    </svg>
+                  </button>
                 </dd>
               </div>
               <div>
@@ -2750,6 +2776,29 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       >
         <div className={styles.localAuthorizationConfirmation}>
           <p>{t('localAuthorizationConfirmBody', { team: team.name })}</p>
+          <section className={styles.sharingQuotaConfirmation} role="region" aria-label={t('sharingQuotaConfirmation')}>
+            <div className={styles.sharingQuotaMeter} aria-hidden="true">
+              <span style={{ width: `${activePendingLocalProfile?.remainingPercent ?? 0}%` }} />
+              <i style={{ left: `${DEFAULT_PERSONAL_RESERVE_PERCENT}%` }} />
+            </div>
+            <dl className={styles.sharingQuotaFacts}>
+              <div>
+                <dt>{t('sharingQuotaCurrent')}</dt>
+                <dd>{activePendingLocalProfile?.remainingPercent === undefined
+                  ? t('sharingQuotaUnavailable')
+                  : `${activePendingLocalProfile.remainingPercent}%`}</dd>
+              </div>
+              <div>
+                <dt>{t('sharingQuotaReserve')}</dt>
+                <dd>{DEFAULT_PERSONAL_RESERVE_PERCENT}%</dd>
+              </div>
+              <div>
+                <dt>{t('sharingQuotaWeeklyLimit')}</dt>
+                <dd>{t('sharingQuotaNoWeeklyLimit')}</dd>
+              </div>
+            </dl>
+            <p className={styles.sharingQuotaHint}>{t('sharingQuotaConfirmationHint', { reserve: DEFAULT_PERSONAL_RESERVE_PERCENT })}</p>
+          </section>
           <p className={styles.localAuthorizationSafety}>
             <strong>{t('localCredentialBoundary')}</strong> {t('localAuthorizationConfirmSafety')}
           </p>
