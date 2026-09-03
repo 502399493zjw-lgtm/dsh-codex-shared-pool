@@ -1460,6 +1460,71 @@
   font-weight: 680;
 }
 
+.sharingQuotaConfirmation {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--team-line);
+  border-radius: 10px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--team-blue) 3%, transparent);
+}
+
+.sharingQuotaMeter {
+  position: relative;
+  overflow: hidden;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--team-muted) 16%, transparent);
+}
+
+.sharingQuotaMeter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--team-green);
+}
+
+.sharingQuotaMeter > i {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--team-ink);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--team-layer) 82%, transparent);
+}
+
+.sharingQuotaFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.sharingQuotaFacts > div {
+  min-width: 0;
+}
+
+.sharingQuotaFacts dt {
+  color: var(--team-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.sharingQuotaFacts dd {
+  margin: 2px 0 0;
+  color: var(--team-ink);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  line-height: 20px;
+}
+
+.localAuthorizationConfirmation .sharingQuotaHint {
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .banner {
   display: flex;
   align-items: flex-start;
@@ -1938,8 +2003,8 @@
 .weeklyAmount {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .inlineEdit {
@@ -2206,18 +2271,28 @@
 }
 
 .inlineLimitButton {
-  min-height: 0;
-  border: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--team-line);
+  border-radius: 7px;
   padding: 0;
-  background: transparent;
+  background: var(--team-layer);
   color: var(--team-muted);
   cursor: pointer;
-  font: inherit;
-  text-align: inherit;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
 .inlineLimitButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--team-blue) 45%, var(--team-line));
+  background: color-mix(in srgb, var(--team-blue) 7%, var(--team-layer));
   color: var(--team-blue);
+}
+
+.inlineLimitButton:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .inlineLimitButton:focus-visible,
@@ -2229,6 +2304,45 @@
 .inlineLimitButton:disabled {
   cursor: not-allowed;
   opacity: .55;
+}
+
+.weeklyQuotaVisual {
+  display: grid;
+  grid-template-columns: 64px auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.weeklyQuotaTrack {
+  display: block;
+  overflow: hidden;
+  width: 64px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--team-muted) 16%, transparent);
+}
+
+.weeklyQuotaTrack > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--team-blue);
+}
+
+.weeklyQuotaTrack[data-unlimited='true'] {
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--team-blue) 28%, transparent) 0 5px, transparent 5px 9px);
+}
+
+.weeklyQuotaNumbers {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.weeklyQuotaNumbers strong {
+  color: var(--team-ink);
 }
 
 .estimateLabel {

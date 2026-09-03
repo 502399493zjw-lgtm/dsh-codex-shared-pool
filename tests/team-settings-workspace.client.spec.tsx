@@ -1329,6 +1329,22 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('confirms the quota being shared before starting local-account authorization', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    const quota = within(dialog).getByRole('region', { name: zh.sharingQuotaConfirmation })
+    expect(within(quota).getByText('68%')).toBeDefined()
+    expect(within(quota).getByText('20%')).toBeDefined()
+    expect(within(quota).getByText(zh.sharingQuotaNoWeeklyLimit)).toBeDefined()
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+  })
+
   it('shows an immediate saving state while sharing limits are being updated', async () => {
     let resolveUpdate!: (value: { account: typeof mine }) => void
     managementApi.updateContribution.mockImplementationOnce(() => new Promise(resolve => {
@@ -1512,9 +1528,12 @@ describe('Team subscription-pool workspace', () => {
 
     expect(weekly.querySelectorAll('dl > div')).toHaveLength(3)
     expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
-    expect(within(weekly).getByText((_, element) => element?.tagName === 'DD'
-      && /已用.*0\.16.*\/.*共享上限.*1\.00/u.test(element.textContent ?? ''))).toBeDefined()
-    expect(within(weekly).getByRole('button', { name: zh.editProtection })).toBeDefined()
+    const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
+      && /\$0\.16.*\/.*\$1\.00/u.test(element.textContent ?? ''))
+    expect(weeklyAmount.textContent).not.toMatch(/已用|共享上限/u)
+    const editLimit = within(weekly).getByRole('button', { name: zh.editProtection })
+    expect(editLimit.textContent).toBe('')
+    expect(editLimit.querySelector('svg')).not.toBeNull()
     expect(within(weekly).getByText(zh.weeklyCapacityReference)).toBeDefined()
     expect(within(weekly).getByLabelText(zh.amountEstimateHelpLabel)).toBeDefined()
     expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
