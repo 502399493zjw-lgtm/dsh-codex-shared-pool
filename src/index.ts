@@ -89,13 +89,7 @@ import {
 export { OpenAICodexService } from './service.ts'
 export type { OpenAICodexServiceOptions } from './service.ts'
 
-export {
-  loginOpenAICodex,
-  loginOpenAICodexLocalProfile,
-  loginOpenAICodexProfile,
-  logoutOpenAICodex,
-  openAICodexAuthStatus,
-} from './auth.ts'
+export { loginOpenAICodex, loginOpenAICodexProfile, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 export type { OpenAICodexAuthStatus } from './auth.ts'
 export {
   OpenAICodexCredentialStore,

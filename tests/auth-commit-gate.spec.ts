@@ -6,20 +6,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OpenAICodexCredentialStore } from '../src/store.ts'
 import type { OpenAICodexProfileStore } from '../src/store.ts'
 
-const model = vi.hoisted(() => ({
-  createModels: vi.fn(({ credentials }: { credentials: {
-    modify(providerId: string, fn: (current: undefined) => Promise<unknown>): Promise<unknown>
-  } }) => ({
-    setProvider: vi.fn(),
-    login: vi.fn(async () => credentials.modify('openai-codex', async () => ({
-      type: 'oauth',
-      access: 'captured-access-token',
-      refresh: 'captured-refresh-token',
-      expires: 4_102_444_800_000,
-      accountId: 'account-1',
-    }))),
-  })),
-}))
+const model = vi.hoisted(() => {
+  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const accessToken = (name: string): string => [
+    encode({ alg: 'none' }),
+    encode({ 'https://api.openai.com/profile': { name } }),
+    'signature',
+  ].join('.')
+  const capturedAccessToken = accessToken('New account name')
+  return {
+    capturedAccessToken,
+    existingAccessToken: accessToken('Old account name'),
+    createModels: vi.fn(({ credentials }: { credentials: {
+      modify(providerId: string, fn: (current: undefined) => Promise<unknown>): Promise<unknown>
+    } }) => ({
+      setProvider: vi.fn(),
+      login: vi.fn(async () => credentials.modify('openai-codex', async () => ({
+        type: 'oauth',
+        access: capturedAccessToken,
+        refresh: 'captured-refresh-token',
+        expires: 4_102_444_800_000,
+        accountId: 'account-1',
+      }))),
+    })),
+  }
+})
 
 vi.mock('@earendil-works/pi-ai', () => ({
   createModels: model.createModels,
@@ -65,7 +76,7 @@ describe('OpenAI Codex OAuth commit gate', () => {
     const store = new OpenAICodexCredentialStore(join(root, 'profiles.json'))
     const existing = await store.addProfile('Existing label', {
       type: 'oauth',
-      access: 'old-access-token',
+      access: model.existingAccessToken,
       refresh: 'old-refresh-token',
       expires: 1,
       accountId: 'account-1',
@@ -81,16 +92,16 @@ describe('OpenAI Codex OAuth commit gate', () => {
 
     await expect(loginOpenAICodexLocalProfile(interaction, store)).resolves.toMatchObject({
       id: existing.id,
-      label: 'Existing label',
+      label: 'New account name',
       createdAt: existing.createdAt,
     })
 
     expect(await store.listProfiles()).toEqual([
-      expect.objectContaining({ id: existing.id, label: 'Existing label', createdAt: existing.createdAt }),
+      expect.objectContaining({ id: existing.id, label: 'New account name', createdAt: existing.createdAt }),
       other,
     ])
     await expect(store.forProfile(existing.id).read('openai-codex')).resolves.toMatchObject({
-      access: 'captured-access-token',
+      access: model.capturedAccessToken,
       refresh: 'captured-refresh-token',
       accountId: 'account-1',
     })

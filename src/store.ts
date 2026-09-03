@@ -454,7 +454,8 @@ export class OpenAICodexCredentialStore implements OpenAICodexProfileStore {
 
   /**
    * Add one local OAuth account, or refresh the credential for its existing profile.
-   * Existing profile identity, label, order, creation time, and Session bindings stay intact.
+   * Existing profile identity, order, creation time, and Session bindings stay intact.
+   * Its visible provider name continues to follow the refreshed OAuth credential.
    * @param labelInput - Human-facing label used only when a new profile is created.
    * @param credentialInput - OAuth credential retained only by the Host.
    * @returns Secret-free summary of the added or refreshed profile.
