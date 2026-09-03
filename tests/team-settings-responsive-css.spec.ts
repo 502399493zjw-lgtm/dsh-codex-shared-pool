@@ -91,7 +91,7 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.workspaceTitle\s*\{[^}]*font-size:\s*18px;[^}]*line-height:\s*24px;/s)
     expect(css).toMatch(/\.workspaceNavigation button\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*19px;/s)
     expect(css).toMatch(
-      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*height:\s*auto;[^}]*grid-template-columns:\s*1fr;[^}]*overflow:\s*visible;/,
     )
     expect(css).toMatch(
       /\.accountWorkspace\s*\{[^}]*min-height:\s*640px;[^}]*grid-template-columns:\s*minmax\(260px,\s*\.82fr\)\s+minmax\(0,\s*1\.45fr\);/s,
@@ -234,8 +234,9 @@ describe('Team Settings responsive container contract', () => {
 
   it('stacks owner usage groups only when the settings slot is genuinely narrow', () => {
     expect(css).toMatch(
-      /@container team-settings \(max-width: 520px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 620px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
     )
+    expect(css).toMatch(/\.usageCard \+ \.usageCard\s*\{[^}]*border-top:\s*1px solid var\(--team-line\);[^}]*border-left:\s*0;[^}]*padding:\s*16px;/s)
   })
 
   it('keeps the invitation entry action on one line', () => {

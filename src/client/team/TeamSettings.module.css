@@ -2806,6 +2806,16 @@
     padding-left: 0;
   }
 
+  .usageCards[data-owner='true'] {
+    grid-template-columns: 1fr;
+  }
+
+  .usageCard + .usageCard {
+    border-top: 1px solid var(--team-line);
+    border-left: 0;
+    padding: 16px;
+  }
+
 }
 
 @container team-settings (max-width: 640px) {
@@ -2824,21 +2834,14 @@
     border-bottom: 1px solid var(--team-panel-line-strong);
   }
 
-  .usageCards[data-owner='true'] {
-    grid-template-columns: 1fr;
-  }
-
-  .usageCard + .usageCard {
-    border-top: 1px solid var(--team-line);
-    border-left: 0;
-    padding-left: 0;
-  }
 }
 
 @container team-settings (max-width: 460px) {
   .workspaceShell {
     min-width: 0;
+    height: auto;
     grid-template-columns: 1fr;
+    overflow: visible;
     border-right: 0;
     border-left: 0;
     border-radius: 0;
