@@ -4,7 +4,7 @@
  */
 
 import { createModels } from '@earendil-works/pi-ai'
-import type { AuthInteraction, Credential, CredentialInfo, CredentialStore } from '@earendil-works/pi-ai'
+import type { AuthInteraction, Credential, CredentialInfo, CredentialStore, OAuthCredential } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER, openAICodexAccountName } from './store.ts'
 import type { CodexProfileSummary, OpenAICodexProfileStore } from './store.ts'
@@ -22,6 +22,16 @@ export interface OpenAICodexLoginOptions {
   beforeCommit?(): void
 }
 
+async function captureOpenAICodexCredential(interaction: AuthInteraction): Promise<OAuthCredential> {
+  const captured = new CapturedCredentialStore()
+  const models = createModels({ credentials: captured })
+  models.setProvider(openaiCodexProvider())
+  await models.login(OPENAI_CODEX_PROVIDER, 'oauth', interaction)
+  const credential = await captured.read(OPENAI_CODEX_PROVIDER)
+  if (credential?.type !== 'oauth') throw new Error('openai-codex: OAuth completed without a credential')
+  return credential
+}
+
 /**
  * Complete provider-native OAuth and persist the resulting credential.
  * @param interaction - terminal or UI callbacks for the provider flow.
@@ -32,12 +42,7 @@ export async function loginOpenAICodex(
   store: OpenAICodexCredentialStore = new OpenAICodexCredentialStore(),
   options: OpenAICodexLoginOptions = {},
 ): Promise<void> {
-  const captured = new CapturedCredentialStore()
-  const models = createModels({ credentials: captured })
-  models.setProvider(openaiCodexProvider())
-  await models.login(OPENAI_CODEX_PROVIDER, 'oauth', interaction)
-  const credential = await captured.read(OPENAI_CODEX_PROVIDER)
-  if (credential?.type !== 'oauth') throw new Error('openai-codex: OAuth completed without a credential')
+  const credential = await captureOpenAICodexCredential(interaction)
   options.beforeCommit?.()
   await store.modify(OPENAI_CODEX_PROVIDER, async () => credential)
 }
@@ -86,15 +91,27 @@ export async function loginOpenAICodexProfile(
   store: OpenAICodexProfileStore = new OpenAICodexCredentialStore(),
   options: OpenAICodexLoginOptions = {},
 ): Promise<CodexProfileSummary> {
-  const captured = new CapturedCredentialStore()
-  const models = createModels({ credentials: captured })
-  models.setProvider(openaiCodexProvider())
-  await models.login(OPENAI_CODEX_PROVIDER, 'oauth', interaction)
-  const credential = await captured.read(OPENAI_CODEX_PROVIDER)
-  if (credential?.type !== 'oauth') throw new Error('openai-codex: OAuth completed without a credential')
-  const oauthCredential = credential
+  const oauthCredential = await captureOpenAICodexCredential(interaction)
   options.beforeCommit?.()
   return store.addProfile(openAICodexAccountName(oauthCredential) ?? 'Codex account', oauthCredential)
+}
+
+/**
+ * Complete OAuth for the local profile pool, refreshing an existing account in place.
+ * Team-owned stores continue to use `loginOpenAICodexProfile` and reject duplicates.
+ *
+ * @param interaction - Provider authentication prompts and notifications.
+ * @param store - Local file-backed profile store that receives the credential.
+ * @returns Secret-free summary of the added or refreshed profile.
+ */
+export async function loginOpenAICodexLocalProfile(
+  interaction: AuthInteraction,
+  store: OpenAICodexCredentialStore = new OpenAICodexCredentialStore(),
+  options: OpenAICodexLoginOptions = {},
+): Promise<CodexProfileSummary> {
+  const oauthCredential = await captureOpenAICodexCredential(interaction)
+  options.beforeCommit?.()
+  return store.addOrRefreshProfile(openAICodexAccountName(oauthCredential) ?? 'Codex account', oauthCredential)
 }
 
 /**

@@ -9,7 +9,7 @@ interface LoginAttemptOptions {
 
 const auth = vi.hoisted(() => ({
   loginOpenAICodex: vi.fn(),
-  loginOpenAICodexProfile: vi.fn(),
+  loginOpenAICodexLocalProfile: vi.fn(),
   logoutOpenAICodex: vi.fn(),
   openAICodexAuthStatus: vi.fn(),
 }))
@@ -33,7 +33,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   })
 
   it('cancels a browser login whose provider prompt remains pending', async () => {
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
       await interaction.prompt({
         type: 'manual_code',
@@ -67,7 +67,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
       createdAt: 1,
       updatedAt: 1,
     }))
-    auth.loginOpenAICodexProfile.mockImplementation(async (
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (
       interaction: AuthInteraction,
       _store: OpenAICodexCredentialStore,
       options: LoginAttemptOptions,
@@ -104,7 +104,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
       await commitFinished
       return { id: 'profile-1', label: 'Profile 1', createdAt: 1, updatedAt: 1 }
     })
-    auth.loginOpenAICodexProfile.mockImplementation(async (
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (
       interaction: AuthInteraction,
       _store: OpenAICodexCredentialStore,
       options: LoginAttemptOptions,
@@ -136,7 +136,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   it('expires a pending attempt, aborts the provider, and exposes only a typed failure reason', async () => {
     vi.useFakeTimers()
     let providerSignal: AbortSignal | undefined
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       providerSignal = interaction.signal
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize?code=secret-code' })
       await new Promise<void>((_resolve, reject) => {
@@ -178,7 +178,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   })
 
   it('does not project a raw Host error into browser status', async () => {
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
       throw new Error('callback failed code=secret-code at /private/host/auth.json')
     })
