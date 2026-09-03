@@ -2149,7 +2149,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   <span className={styles.weeklyLimitValue}>{account.weeklySharedEstimatedApiCostLimitMicros == null
                     ? t('limitNoLimit')
                     : t('limitAmount', { amount: weeklyLimit })}</span>
-                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} title={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>
+                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editSharingLimit')} title={t('editSharingLimit')} disabled={busy !== undefined} onClick={openProtection}>
                     {t('edit')}
                   </button>
                 </dd>

@@ -1314,7 +1314,8 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    expect(within(account).getByText(zh.limitNoLimit)).toBeDefined()
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
     fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
@@ -1398,7 +1399,7 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
     fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
@@ -1576,7 +1577,7 @@ describe('Team subscription-pool workspace', () => {
       && /上限.*\$1\.00.*编辑/u.test(element.textContent ?? ''))
     expect(weeklyAmount.textContent).not.toMatch(/\$0\.16|已用|共享上限|\//u)
     expect(within(weekly).queryByRole('img')).toBeNull()
-    const editLimit = within(weekly).getByRole('button', { name: zh.editProtection })
+    const editLimit = within(weekly).getByRole('button', { name: zh.editSharingLimit })
     expect(editLimit.textContent).toBe(zh.edit)
     expect(editLimit.querySelector('svg')).toBeNull()
     expect(within(weekly).getByText(zh.weeklyCapacityReference)).toBeDefined()
@@ -1589,7 +1590,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).queryByRole('button', { name: zh.recentRequests })).toBeNull()
     expect(within(actions).getByRole('button', { name: '终止共享' })).toBeDefined()
 
-    fireEvent.click(within(weekly).getByRole('button', { name: zh.editProtection }))
+    fireEvent.click(within(weekly).getByRole('button', { name: zh.editSharingLimit }))
     expect((within(screen.getByRole('dialog', { name: zh.editProtection }))
       .getByLabelText(zh.weeklyLimitLabel) as HTMLInputElement).value).toBe('1')
     fireEvent.click(within(screen.getByRole('dialog', { name: zh.editProtection })).getByRole('button', { name: zh.cancel }))
