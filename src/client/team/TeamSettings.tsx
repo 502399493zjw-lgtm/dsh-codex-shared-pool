@@ -2385,8 +2385,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
           <aside className={styles.workspaceRail} aria-label={t('workspaceNavigation')}>
             <div className={styles.workspaceBrand}>
-              <p className={styles.workspaceKicker}>{t('workspaceKicker')}</p>
-              <h2 className={styles.workspaceTitle}>{t('workspaceTitle')}</h2>
+              <h2 className={styles.workspaceTitle}>{t('teamSettingsTitle')}</h2>
             </div>
             <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
               <button type="button" aria-current={workspaceView === 'usage' ? 'page' : undefined} onClick={() => {
@@ -2410,24 +2409,26 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 }}>{t('invitationsTitle')}</button>
               ) : null}
             </nav>
+            <button
+              type="button"
+              className={styles.workspaceBack}
+              ref={workspaceBackRef}
+              aria-label={t('backToTeam')}
+              title={t('backToTeam')}
+              onClick={() => {
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+                restoreTeamSettingsTriggerFocus.current = true
+                setTeamSettingsOpen(false)
+              }}
+            >
+              <span aria-hidden="true">←</span>
+            </button>
           </aside>
           <div className={styles.workspaceMain}>
             <header className={styles.workspaceHeader}>
               <div className={styles.workspaceHeaderCopy}>
-                <button
-                  type="button"
-                  className={styles.workspaceBack}
-                  ref={workspaceBackRef}
-                  onClick={() => {
-                    setTeamMenuOpen(false)
-                    setMemberMenuId(undefined)
-                    setInviteRevealRequest(undefined)
-                    restoreTeamSettingsTriggerFocus.current = true
-                    setTeamSettingsOpen(false)
-                  }}
-                >
-                  <span aria-hidden="true">←</span> {t('backToTeam')}
-                </button>
                 <div className={styles.workspaceIdentity}>
                   <h2 className={styles.workspaceTeamName}>{team.name}</h2>
                   <div className={styles.workspaceMeta}>
@@ -3379,9 +3380,16 @@ function TeamUsageSection({ loading, projection, unavailable, onRefresh, t }: {
           <p className={styles.hint}>{t('usageWindow24h')}</p>
         </div>
         {projection === undefined || unavailable ? null : (
-          <Button size="sm" variant="ghost" icon={<IconRefreshOutline16 />} disabled={loading} onClick={onRefresh}>
-            {t('refresh')}
-          </Button>
+          <Button
+            className={styles.usageRefresh}
+            size="sm"
+            variant="ghost"
+            icon={<IconRefreshOutline16 />}
+            aria-label={t('refresh')}
+            title={t('refresh')}
+            disabled={loading}
+            onClick={onRefresh}
+          />
         )}
       </div>
 
@@ -3411,7 +3419,7 @@ function TeamUsageCard({ id, title, aggregate, t }: {
   t: TeamSettingsInjected['t']
 }) {
   const usage = createTeamUsageViewModel(aggregate)
-  const showStatus = usage.state !== 'complete'
+  const showStatus = usage.state !== 'complete' && usage.state !== 'zero'
   const showCoverage = usage.state !== 'complete' && usage.state !== 'zero'
 
   return (

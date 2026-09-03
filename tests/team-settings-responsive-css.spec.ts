@@ -19,6 +19,10 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('caps the plugin page to the visible settings content width', () => {
+    expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*calc\(100vw - 320px\),\s*960px\);/s)
+  })
+
   it('bounds the subscription-pool settings shell with stable viewport gutters', () => {
     expect(subscriptionPoolSource).toMatch(/data-dsh-codex-subscription-pool/)
     expect(subscriptionPoolCss).toMatch(
@@ -43,7 +47,7 @@ describe('Team Settings responsive container contract', () => {
 
   it('caps both local and Team panels and lets their master-detail layouts collapse safely', () => {
     expect(subscriptionPoolCss).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;/s)
-    expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
+    expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*calc\(100vw - 320px\),\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
     expect(localSettingsSource).toMatch(/maxWidth:\s*960,\s*containerType:\s*'inline-size'/)
     expect(localSettingsSource).toMatch(
       /@container \(max-width:\s*520px\)\s*\{[\s\S]*?\.dsh-codex-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
@@ -81,6 +85,11 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(
       /\.workspaceShell\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(132px,\s*152px\)\s+minmax\(0,\s*1fr\);/s,
     )
+    expect(css).toMatch(/\.workspaceShell\s*\{[^}]*height:\s*clamp\(500px,\s*58vh,\s*580px\);/s)
+    expect(css).toMatch(/\.workspaceMain\s*\{[^}]*overflow-y:\s*auto;/s)
+    expect(css).toMatch(/\.workspaceBack\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;[^}]*margin:\s*auto 0 0;[^}]*border:\s*0;/s)
+    expect(css).toMatch(/\.workspaceTitle\s*\{[^}]*font-size:\s*18px;[^}]*line-height:\s*24px;/s)
+    expect(css).toMatch(/\.workspaceNavigation button\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*19px;/s)
     expect(css).toMatch(
       /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*grid-template-columns:\s*1fr;/,
     )
@@ -204,9 +213,13 @@ describe('Team Settings responsive container contract', () => {
   })
 
   it('keeps the prototype usage hierarchy instead of equal metric tiles', () => {
-    expect(css).toMatch(/\.usageCards\s*\{[^}]*border-top:\s*1px solid var\(--team-line-strong\);[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
+    expect(css).toMatch(/\.usageRefresh\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*padding:\s*0;/s)
+    expect(css).toMatch(/\.usageHeading\s*\{[^}]*font-size:\s*19px;[^}]*line-height:\s*26px;/s)
+    expect(css).toMatch(/\.usageCards\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-radius:\s*10px;[^}]*overflow:\s*hidden;/s)
+    expect(css).toMatch(/\.usageCard\s*\{[^}]*padding:\s*16px;[^}]*background:\s*color-mix\(/s)
     expect(css).toMatch(/\.usageMetric:first-child\s+dd\s*\{[^}]*font-size:\s*clamp\(24px,\s*4cqi,\s*32px\);/s)
-    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/s)
+    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;[^}]*padding:\s*7px 0;/s)
+    expect(css).not.toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:/s)
   })
 
   it('keeps the prototype compact Team bar and detail rhythm', () => {
