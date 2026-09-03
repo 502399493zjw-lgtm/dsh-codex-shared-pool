@@ -75,6 +75,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 
 import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
 // Keep fixture expirations deterministic and safely ahead of the wall clock.
 const NOW = Date.UTC(2030, 7, 21, 12)
@@ -773,6 +774,43 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('shows a safe localized error when browser authorization finishes without activating the account', async () => {
+    const authorizing = { ...mine, id: 'oauth-failed', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: authorizing.label } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+
+    overviewState = {
+      ...overviewState,
+      contributions: overviewState.contributions.map((account: any) => account.id === authorizing.id
+        ? { ...account, status: 'revoked' as const, lastError: TEAM_AUTHORIZATION_FAILED_CODE }
+        : account),
+    }
+    const settings = await openTeamSettings('usage')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    expect(await screen.findByText(zh.authorizationFailed)).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(document.body.textContent).not.toContain(TEAM_AUTHORIZATION_FAILED_CODE)
+  })
+
   it('captures the return selection before a slow browser authorization request begins', async () => {
     const authorizing = { ...mine, id: 'oauth-new', label: '朋友 Pro', status: 'authorizing' as const }
     let resolveOAuth!: (value: any) => void
@@ -1090,6 +1128,39 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('shows a safe error when a rehydrated browser authorization fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-existing', label: '朋友 Pro', status: 'authorizing' as const }
+    overviewState = {
+      ...overviewState,
+      contributions: [...overviewState.contributions, authorizing],
+      pendingBrowserAuthorization: {
+        accountId: authorizing.id,
+        method: 'browser',
+        expiresAt: NOW + 600_000,
+        discardInitial: true,
+      },
+    }
+
+    render(<TeamSettings t={translate} embedded />)
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(within(waiting).getByRole('button', { name: zh.cancelAuthorization })).toBeDefined()
+
+    const { pendingBrowserAuthorization: _pendingBrowserAuthorization, ...nextOverview } = overviewState
+    overviewState = {
+      ...nextOverview,
+      contributions: nextOverview.contributions.map((account: any) => account.id === authorizing.id
+        ? { ...account, status: 'revoked' as const, lastError: TEAM_AUTHORIZATION_FAILED_CODE }
+        : account),
+    }
+    const settings = await openTeamSettings('usage')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    expect(await screen.findByText(zh.authorizationFailed)).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(document.body.textContent).not.toContain(TEAM_AUTHORIZATION_FAILED_CODE)
+  })
+
   it('shows a safe action-oriented message when Team authorization cannot reach OpenAI', async () => {
     overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
     managementApi.startOAuth.mockRejectedValueOnce(
@@ -1120,7 +1191,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    expect(await screen.findByText('暂时无法启动 OpenAI 授权，请重试。')).toBeDefined()
+    expect(await screen.findByText('OpenAI 授权未能完成，未添加账号。请重试。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_authorization_failed')
   })
 

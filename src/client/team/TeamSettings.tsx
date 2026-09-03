@@ -281,6 +281,15 @@ function errorMessage(
   return message
 }
 
+function browserAuthorizationFailureMessage(
+  failureCode: string | undefined,
+  t: TeamSettingsInjected['t'],
+): string {
+  if (failureCode === TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE) return t('authorizationNetworkUnavailable')
+  if (failureCode === TEAM_AUTHORIZATION_FAILED_CODE) return t('authorizationFailed')
+  return t('browserAuthorizationEnded')
+}
+
 function errorStatus(cause: unknown): number | undefined {
   if (typeof cause !== 'object' || cause === null || !('status' in cause)) return undefined
   return typeof cause.status === 'number' ? cause.status : undefined
@@ -584,6 +593,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const oauthExpectedContext = useRef<TeamManagementExpectedContext | undefined>(undefined)
   const oauthPresentedAfterRequestId = useRef(0)
   const pendingBrowserAuthorizationActive = useRef(false)
+  const recoveredBrowserAuthorization = useRef<ActiveBrowserAuthorization | undefined>(undefined)
   const oauthOperationEpoch = useRef(0)
   const mounted = useRef(true)
 
@@ -598,6 +608,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     oauthReturnSelection.current = undefined
     oauthExpectedContext.current = undefined
     oauthPresentedAfterRequestId.current = 0
+    recoveredBrowserAuthorization.current = undefined
     setOAuth(undefined)
     setOAuthDiscardInitial(false)
     setOAuthNavigationBlocked(false)
@@ -616,6 +627,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       oauthExpectedContext.current = undefined
       oauthPresentedAfterRequestId.current = 0
       pendingBrowserAuthorizationActive.current = false
+      recoveredBrowserAuthorization.current = undefined
       oauthPopup.current?.close()
       oauthPopup.current = null
     }
@@ -1146,8 +1158,38 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       setSelectedAccountId(returnSelection)
     }
     clearOAuthPresentation()
-    if (account === undefined) setError(t('browserAuthorizationEnded'))
+    if (account?.status !== 'active') {
+      setError(browserAuthorizationFailureMessage(account?.lastError, t))
+    }
   }, [clearOAuthPresentation, oauth, overview, overviewSnapshotRequestId, status, t])
+
+  useEffect(() => {
+    if (oauth !== undefined || overview === undefined || oauthTransitionLocked.current) return
+    const actualContext = createTeamExpectedContext(status, overview)
+    if (projectedBrowserAuthorization !== undefined) {
+      if (actualContext !== undefined) {
+        recoveredBrowserAuthorization.current = {
+          ...projectedBrowserAuthorization,
+          expectedContext: actualContext,
+        }
+      }
+      return
+    }
+    const recovered = recoveredBrowserAuthorization.current
+    if (recovered === undefined) return
+    const account = overview.contributions.find(item => item.id === recovered.accountId)
+    if (account?.status === 'authorizing') return
+    recoveredBrowserAuthorization.current = undefined
+    if (!isSameTeamExpectedContext(recovered.expectedContext, actualContext)) {
+      setTeamContextChanged(true)
+      return
+    }
+    if (account?.status === 'active') {
+      setSelectedAccountId(contributionSelectionKey(account.id))
+      return
+    }
+    setError(browserAuthorizationFailureMessage(account?.lastError, t))
+  }, [oauth, overview, projectedBrowserAuthorization, status, t])
 
   useEffect(() => {
     if (overview === undefined) return

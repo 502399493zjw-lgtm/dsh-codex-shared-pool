@@ -1809,9 +1809,31 @@ describe('Team control plane', () => {
     const started = await service.startContributionOAuth(owner, 'Owner Codex', 'browser')
 
     await expect(service.cancelContributionOAuth(owner, started.account.id, { discardInitial: true }))
-      .resolves.toMatchObject({ id: started.account.id, status: 'revoked' })
+      .resolves.toMatchObject({
+        id: started.account.id,
+        status: 'revoked',
+        lastError: 'authorization cancelled',
+      })
     expect(broker.cancelled).toEqual([{ teamId: owner.teamId, accountId: started.account.id }])
     expect(broker.revoked).toEqual([{ teamId: owner.teamId, accountId: started.account.id }])
+  })
+
+  it('preserves an automatic browser authorization failure when discarding its placeholder', async () => {
+    const broker = new FakeCredentialBroker()
+    const service = new TeamService({ store: new MemoryTeamStore(), broker })
+    const boot = await service.store.bootstrap('Friends', 'Owner')
+    const owner = await service.store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const started = await service.startContributionOAuth(owner, 'Owner Codex', 'browser')
+
+    await expect(service.cancelContributionOAuth(owner, started.account.id, {
+      discardInitial: true,
+      failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
+    })).resolves.toMatchObject({
+      id: started.account.id,
+      status: 'revoked',
+      lastError: TEAM_AUTHORIZATION_FAILED_CODE,
+    })
   })
 
   it('projects a provider region failure as a stable authorization network error', async () => {
