@@ -453,6 +453,36 @@ export class OpenAICodexCredentialStore implements OpenAICodexProfileStore {
   }
 
   /**
+   * Add one local OAuth account, or refresh the credential for its existing profile.
+   * Existing profile identity, label, order, creation time, and Session bindings stay intact.
+   * @param labelInput - Human-facing label used only when a new profile is created.
+   * @param credentialInput - OAuth credential retained only by the Host.
+   * @returns Secret-free summary of the added or refreshed profile.
+   */
+  async addOrRefreshProfile(labelInput: string, credentialInput: OAuthCredential): Promise<CodexProfileSummary> {
+    const label = normalizeLabel(labelInput)
+    const credential = parseCredential(credentialInput, this.filename)
+    return this.transaction((document) => {
+      const existing = document.profiles.find(profile => profile.credential.accountId === credential.accountId)
+      if (existing !== undefined) {
+        existing.credential = credential
+        existing.updatedAt = Date.now()
+        return this.summary(existing)
+      }
+      const now = Date.now()
+      const profile: StoredProfile = {
+        id: randomUUID(),
+        label,
+        credential,
+        createdAt: now,
+        updatedAt: now,
+      }
+      document.profiles.push(profile)
+      return this.summary(profile)
+    })
+  }
+
+  /**
    * Make one profile the first candidate for every allocation decision.
    * @param profileId - Profile to move to the front of the stored order.
    */

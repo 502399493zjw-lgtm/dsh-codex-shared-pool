@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import type { AuthEvent, AuthPrompt } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { loginOpenAICodex, loginOpenAICodexProfile, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
+import { loginOpenAICodex, loginOpenAICodexLocalProfile, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OutboundNetwork } from './network.ts'
 import type { OpenAICodexCredentialStore } from './store.ts'
 import type { CodexProfileSummary } from './store.ts'
@@ -333,7 +333,7 @@ export class OpenAICodexWebAuth {
       notify: (event) => { this.onEvent(attempt, event) },
     } satisfies Parameters<typeof loginOpenAICodex>[0]
     const login = addProfile
-      ? loginOpenAICodexProfile(interaction, this.store, {
+      ? loginOpenAICodexLocalProfile(interaction, this.store, {
           beforeCommit: () => { this.beginCommit(attempt) },
         }).then(() => undefined)
       : loginOpenAICodex(interaction, this.store, {

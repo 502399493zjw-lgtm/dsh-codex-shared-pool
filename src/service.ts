@@ -2,7 +2,7 @@
 
 import type { AuthInteraction } from '@earendil-works/pi-ai'
 import type { Context } from '@deepseek-ai/cordis'
-import { loginOpenAICodex, loginOpenAICodexProfile, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
+import { loginOpenAICodex, loginOpenAICodexLocalProfile, logoutOpenAICodex, openAICodexAuthStatus } from './auth.ts'
 import type { OpenAICodexAuthStatus } from './auth.ts'
 import { OpenAICodexCredentialStore } from './store.ts'
 import type { CodexProfileSummary } from './store.ts'
@@ -55,9 +55,9 @@ export class OpenAICodexService {
     return loginOpenAICodex(interaction, this.credentials)
   }
 
-  /** Add an isolated OAuth login without overwriting an existing profile. */
+  /** Add an isolated OAuth login, refreshing the same local account in place. */
   loginProfile(interaction: AuthInteraction): Promise<CodexProfileSummary> {
-    return loginOpenAICodexProfile(interaction, this.credentials)
+    return loginOpenAICodexLocalProfile(interaction, this.credentials)
   }
 
   /** Remove this plugin's credential without touching Codex CLI/Desktop. */
