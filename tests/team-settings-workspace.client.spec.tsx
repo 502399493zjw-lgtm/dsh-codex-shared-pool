@@ -1329,17 +1329,61 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
-  it('confirms the quota being shared before starting local-account authorization', async () => {
+  it('keeps an open sharing confirmation in sync with the slower quota refresh', async () => {
+    let resolveQuota!: (value: Response) => void
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (input === '/plugins/dsh-openai-codex/profiles/directory') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            profiles: [{
+              id: 'local-a',
+              label: '本机账号 A',
+              createdAt: 1,
+              updatedAt: 1,
+              inUse: true,
+            }],
+          }),
+        } as Response)
+      }
+      if (input === '/plugins/dsh-openai-codex/profiles') {
+        return new Promise(resolve => { resolveQuota = resolve })
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+
     render(<TeamSettings t={translate} embedded />)
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
-    fireEvent.click(within(panel).getByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(await within(panel).findByRole('button', { name: /本机账号 A · 本机已登录/u }))
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
 
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
 
     const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
     const quota = within(dialog).getByRole('region', { name: zh.sharingQuotaConfirmation })
+    expect(within(quota).getByText(zh.sharingQuotaUnavailable)).toBeDefined()
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveQuota({
+        ok: true,
+        json: async () => ({
+          status: 'ready',
+          profiles: [{
+            id: 'local-a',
+            label: '本机账号 A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            inUse: true,
+          }],
+        }),
+      } as Response)
+    })
+
     expect(within(quota).getByText('68%')).toBeDefined()
+    expect(within(quota).queryByText(zh.sharingQuotaUnavailable)).toBeNull()
     expect(within(quota).getByText('20%')).toBeDefined()
     expect(within(quota).getByText(zh.sharingQuotaNoWeeklyLimit)).toBeDefined()
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
@@ -1531,6 +1575,7 @@ describe('Team subscription-pool workspace', () => {
     const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
       && /\$0\.16.*\/.*\$1\.00/u.test(element.textContent ?? ''))
     expect(weeklyAmount.textContent).not.toMatch(/已用|共享上限/u)
+    expect(within(weekly).getByRole('img', { name: /已用.*\$0\.16.*共享上限.*\$1\.00/u })).toBeDefined()
     const editLimit = within(weekly).getByRole('button', { name: zh.editProtection })
     expect(editLimit.textContent).toBe('')
     expect(editLimit.querySelector('svg')).not.toBeNull()

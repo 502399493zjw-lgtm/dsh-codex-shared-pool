@@ -131,7 +131,6 @@ interface RecentUsageTarget {
 interface PendingLocalAuthorization {
   readonly id: string
   readonly label: string
-  readonly remainingPercent?: number
   readonly authorizationContext: string
   readonly expectedContext: TeamManagementExpectedContext
 }
@@ -729,6 +728,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       || pendingLocalAuthorization.authorizationContext === teamAuthorizationContext)
     ? pendingLocalAuthorization
     : undefined
+  const activePendingLocalProfile = activePendingLocalAuthorization === undefined
+    ? undefined
+    : localProfiles.find(profile => profile.id === activePendingLocalAuthorization.id)
   const activeInviteDraft = inviteDraft !== undefined
     && (authorizationSnapshotPending || inviteDraft.authorizationContext === ownerAuthorizationContext)
     ? inviteDraft
@@ -1985,7 +1987,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               setPendingLocalAuthorization({
                 id: profile.id,
                 label: profile.label,
-                ...(profile.remainingPercent === undefined ? {} : { remainingPercent: profile.remainingPercent }),
                 authorizationContext: teamAuthorizationContext,
                 expectedContext: teamExpectedContext,
               })
@@ -2153,6 +2154,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 <dd className={styles.weeklyAmount}>
                   <span
                     className={styles.weeklyQuotaVisual}
+                    role="img"
                     aria-label={`${t('usedAmount', { amount: weeklyUsed })}; ${account.weeklySharedEstimatedApiCostLimitMicros == null
                       ? t('sharedLimitNoLimit')
                       : t('sharedLimitAmount', { amount: weeklyLimit })}`}
@@ -2776,15 +2778,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <p>{t('localAuthorizationConfirmBody', { team: team.name })}</p>
           <section className={styles.sharingQuotaConfirmation} role="region" aria-label={t('sharingQuotaConfirmation')}>
             <div className={styles.sharingQuotaMeter} aria-hidden="true">
-              <span style={{ width: `${activePendingLocalAuthorization?.remainingPercent ?? 0}%` }} />
+              <span style={{ width: `${activePendingLocalProfile?.remainingPercent ?? 0}%` }} />
               <i style={{ left: `${DEFAULT_PERSONAL_RESERVE_PERCENT}%` }} />
             </div>
             <dl className={styles.sharingQuotaFacts}>
               <div>
                 <dt>{t('sharingQuotaCurrent')}</dt>
-                <dd>{activePendingLocalAuthorization?.remainingPercent === undefined
+                <dd>{activePendingLocalProfile?.remainingPercent === undefined
                   ? t('sharingQuotaUnavailable')
-                  : `${activePendingLocalAuthorization.remainingPercent}%`}</dd>
+                  : `${activePendingLocalProfile.remainingPercent}%`}</dd>
               </div>
               <div>
                 <dt>{t('sharingQuotaReserve')}</dt>
