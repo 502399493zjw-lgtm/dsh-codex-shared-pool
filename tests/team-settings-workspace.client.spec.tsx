@@ -1128,6 +1128,39 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('shows a safe error when a rehydrated browser authorization fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-existing', label: '朋友 Pro', status: 'authorizing' as const }
+    overviewState = {
+      ...overviewState,
+      contributions: [...overviewState.contributions, authorizing],
+      pendingBrowserAuthorization: {
+        accountId: authorizing.id,
+        method: 'browser',
+        expiresAt: NOW + 600_000,
+        discardInitial: true,
+      },
+    }
+
+    render(<TeamSettings t={translate} embedded />)
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(within(waiting).getByRole('button', { name: zh.cancelAuthorization })).toBeDefined()
+
+    const { pendingBrowserAuthorization: _pendingBrowserAuthorization, ...nextOverview } = overviewState
+    overviewState = {
+      ...nextOverview,
+      contributions: nextOverview.contributions.map((account: any) => account.id === authorizing.id
+        ? { ...account, status: 'revoked' as const, lastError: TEAM_AUTHORIZATION_FAILED_CODE }
+        : account),
+    }
+    const settings = await openTeamSettings('usage')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    expect(await screen.findByText(zh.authorizationFailed)).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(document.body.textContent).not.toContain(TEAM_AUTHORIZATION_FAILED_CODE)
+  })
+
   it('shows a safe action-oriented message when Team authorization cannot reach OpenAI', async () => {
     overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
     managementApi.startOAuth.mockRejectedValueOnce(
@@ -1158,7 +1191,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    expect(await screen.findByText('暂时无法启动 OpenAI 授权，请重试。')).toBeDefined()
+    expect(await screen.findByText('OpenAI 授权未能完成，未添加账号。请重试。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_authorization_failed')
   })
 
