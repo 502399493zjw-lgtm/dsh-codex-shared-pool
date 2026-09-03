@@ -281,6 +281,15 @@ function errorMessage(
   return message
 }
 
+function browserAuthorizationFailureMessage(
+  failureCode: string | undefined,
+  t: TeamSettingsInjected['t'],
+): string {
+  if (failureCode === TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE) return t('authorizationNetworkUnavailable')
+  if (failureCode === TEAM_AUTHORIZATION_FAILED_CODE) return t('authorizationFailed')
+  return t('browserAuthorizationEnded')
+}
+
 function errorStatus(cause: unknown): number | undefined {
   if (typeof cause !== 'object' || cause === null || !('status' in cause)) return undefined
   return typeof cause.status === 'number' ? cause.status : undefined
@@ -1146,7 +1155,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       setSelectedAccountId(returnSelection)
     }
     clearOAuthPresentation()
-    if (account === undefined) setError(t('browserAuthorizationEnded'))
+    if (account?.status !== 'active') {
+      setError(browserAuthorizationFailureMessage(account?.lastError, t))
+    }
   }, [clearOAuthPresentation, oauth, overview, overviewSnapshotRequestId, status, t])
 
   useEffect(() => {

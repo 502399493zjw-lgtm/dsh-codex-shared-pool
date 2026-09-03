@@ -80,6 +80,7 @@ import {
 import { registerTeamRoutes } from './team/routes.ts'
 import { registerTeamGatewayRoute } from './team/gateway.ts'
 import { registerTeamManagementRoutes } from './team/management-routes.ts'
+import { safeTeamErrorMessage } from './team/safe-message.ts'
 import {
   createTeamServiceFromConfig,
   resolveTeamBootstrapToken,
@@ -446,8 +447,12 @@ export function apply(ctx: Context, config: Config): void {
     registerOpenAICodexAuthRoutes(webCtx, credentials, imageTools, network, routingEvents)
   })
   ctx.inject(['webServer', 'credentials'], (teamClientCtx) => {
+    const teamClientLogger = teamClientCtx.logger('dsh-codex-shared-pool:team-client')
     registerTeamManagementRoutes(teamClientCtx, config.teamClient ?? {}, teamClientCtx.credentials, {
       localProfiles: credentials,
+      onBackgroundError: error => {
+        teamClientLogger.warn('%s', safeTeamErrorMessage(error))
+      },
     })
   })
   if (config.team?.enabled === true) {

@@ -2486,7 +2486,9 @@ describe('local Team management routes', () => {
       'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
     )
     expect(mutationFetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({
-      accountId: 'account-1', discardInitial: true,
+      accountId: 'account-1',
+      discardInitial: true,
+      failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
     }))
     expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)))
       .toBe(false)
@@ -2683,6 +2685,58 @@ describe('local Team management routes', () => {
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(true)
     expect(fetch.mock.calls.some(([input]) => String(input).endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)))
       .toBe(false)
+    expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
+  })
+
+  it('falls back to legacy cleanup when an older Team Host rejects the safe failure field', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const cancellationBodies: string[] = []
+    const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/contributions/oauth/start')) {
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'authorizing', lastError: undefined },
+          method: 'browser_handoff',
+          handoff: { version: 2 },
+        }), { status: 201, headers: { 'content-type': 'application/json' } })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        cancellationBodies.push(String(init?.body))
+        if (cancellationBodies.length === 1) {
+          return new Response(JSON.stringify({ error: 'request contains an unknown field' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (cancellationBodies.length === 2) throw new TypeError('temporary legacy cleanup connection reset')
+        return new Response(JSON.stringify({
+          account: { ...contribution(), status: 'revoked', lastError: 'authorization cancelled' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
+    })
+    const fetch = withOverviewSequence(mutationFetch, [overview()])
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+    )
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Personal Pro', method: 'browser',
+    })))
+
+    expect(result.status).toBeGreaterThanOrEqual(400)
+    expect(cancellationBodies).toEqual([
+      JSON.stringify({
+        accountId: 'account-1',
+        discardInitial: true,
+        failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
+      }),
+      JSON.stringify({ accountId: 'account-1', discardInitial: true }),
+      JSON.stringify({ accountId: 'account-1', discardInitial: true }),
+    ])
     expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
   })
 

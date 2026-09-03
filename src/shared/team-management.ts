@@ -21,6 +21,9 @@ import type {
 export const TEAM_MANAGEMENT_PATH_PREFIX = '/plugins/dsh-codex-shared-pool/team-client'
 export const TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE = 'team_authorization_network_unavailable'
 export const TEAM_AUTHORIZATION_FAILED_CODE = 'team_authorization_failed'
+export type TeamAuthorizationFailureCode =
+  | typeof TEAM_AUTHORIZATION_FAILED_CODE
+  | typeof TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
 export const TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE = 'team_local_account_already_shared'
 export const TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE = 'team_browser_authorization_already_pending'
 export const TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE = 'Team connection changed; refresh before trying again'

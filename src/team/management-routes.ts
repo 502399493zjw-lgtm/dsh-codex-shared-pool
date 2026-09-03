@@ -14,6 +14,8 @@ import { OpenAICodexCredentialStore } from '../store.ts'
 import type { CodexProfileSummary } from '../store.ts'
 import {
   TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
   TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
@@ -50,6 +52,7 @@ import {
 } from '../shared/team-management.ts'
 import type {
   TeamManagementConnectionResult,
+  TeamAuthorizationFailureCode,
   TeamConnectionTerminalClearResult,
   TeamConnectionTerminalView,
   TeamManagementDepartureResult,
@@ -259,6 +262,21 @@ function projectedOAuthRemoteError(error: unknown): Error {
   return error instanceof RemoteTeamError
     ? new RemoteTeamError(error.status, message)
     : new Error(message)
+}
+
+function projectedBrowserOAuthFailureCode(error: unknown): TeamAuthorizationFailureCode {
+  return safeTeamOAuthErrorMessage(error) === TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
+    ? TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
+    : TEAM_AUTHORIZATION_FAILED_CODE
+}
+
+function rejectsOAuthFailureCodeField(error: unknown): boolean {
+  if (!(error instanceof RemoteTeamError) || error.status !== 400) return false
+  const response = error.responseBody
+  return typeof response === 'object'
+    && response !== null
+    && !Array.isArray(response)
+    && (response as Record<string, unknown>).error === 'request contains an unknown field'
 }
 
 function sameTeamManagementContext(
@@ -2189,9 +2207,13 @@ class TeamManagementProxy {
       }
       if (offer.version !== 1) throw new Error('remote Team returned an unsupported OAuth handoff version')
     } catch (error: unknown) {
-      if (discardInitialOnFailure) {
-        await this.cancelRemoteOAuthBestEffort(account.id, true, key, expectedContext)
-      }
+      await this.cancelRemoteOAuthBestEffort(
+        account.id,
+        discardInitialOnFailure,
+        key,
+        expectedContext,
+        projectedBrowserOAuthFailureCode(error),
+      )
       throw error
     }
 
@@ -2210,6 +2232,7 @@ class TeamManagementProxy {
         discardInitialOnFailure,
         key,
         frozenExpectedContext,
+        projectedBrowserOAuthFailureCode(error),
       )
       throw error
     }
@@ -2262,11 +2285,13 @@ class TeamManagementProxy {
       .catch(async (error: unknown) => {
         if (!authorizationSettled) rejectAuthorization(error)
         if (!suppressAutomaticCleanup) {
+          const failureCode = projectedBrowserOAuthFailureCode(error)
           await this.cancelRemoteOAuthBestEffort(
             account.id,
             discardInitialOnFailure,
             key,
             frozenExpectedContext,
+            failureCode,
           )
           this.onBackgroundError(projectedOAuthRemoteError(error))
         }
@@ -2294,27 +2319,40 @@ class TeamManagementProxy {
     discardInitial: boolean,
     key: string,
     expectedContext: TeamManagementExpectedContext,
+    failureCode?: TeamAuthorizationFailureCode,
   ): Promise<boolean> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
-          method: 'POST', body: { accountId, discardInitial }, key,
-        }), 'OAuth cancellation')
-        const account = projectContribution(item.account)
-        if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
-        await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
-        return true
-      } catch (error: unknown) {
-        if (
-          error instanceof RemoteTeamError
-          && error.status >= 400
-          && error.status < 500
-          && error.status !== 408
-          && error.status !== 429
-        ) return false
+    const cancel = async (
+      body: Record<string, unknown>,
+      allowLegacyFallback: boolean,
+    ): Promise<boolean | 'legacy_contract'> => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+            method: 'POST', body, key,
+          }), 'OAuth cancellation')
+          const account = projectContribution(item.account)
+          if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+          await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
+          return true
+        } catch (error: unknown) {
+          if (allowLegacyFallback && rejectsOAuthFailureCodeField(error)) return 'legacy_contract'
+          if (
+            error instanceof RemoteTeamError
+            && error.status >= 400
+            && error.status < 500
+            && error.status !== 408
+            && error.status !== 429
+          ) return false
+        }
       }
+      return false
     }
-    return false
+
+    if (failureCode !== undefined) {
+      const extended = await cancel({ accountId, discardInitial, failureCode }, true)
+      if (extended !== 'legacy_contract') return extended
+    }
+    return await cancel({ accountId, discardInitial }, false) === true
   }
 
   private async clearOAuthRecoveryAfterFinalAccount(
