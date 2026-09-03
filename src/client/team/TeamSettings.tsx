@@ -2068,21 +2068,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionAccount = (account: TeamManagementContributionSummary) => {
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
-      const currentWeekAggregate = accountUsage?.currentUtcWeek?.aggregate
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
       const remainingCapacity = capacityBucket?.remainingPercent === undefined
         ? t('capacityQuotaUnavailable')
         : `${capacityBucket.remainingPercent}%`
-      const weeklyUsed = formatUsdMicros(currentWeekAggregate?.estimatedCostUsdMicros)
       const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
         ? '∞'
         : formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
-      const weeklyUsageRatio = account.weeklySharedEstimatedApiCostLimitMicros == null
-        || currentWeekAggregate?.estimatedCostUsdMicros === undefined
-        ? undefined
-        : Math.min(100, Math.max(0, Number(currentWeekAggregate.estimatedCostUsdMicros) / account.weeklySharedEstimatedApiCostLimitMicros * 100))
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const contributionHint = account.status === 'active'
         ? undefined
@@ -2152,24 +2146,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
                 <dd className={styles.weeklyAmount}>
-                  <span
-                    className={styles.weeklyQuotaVisual}
-                    role="img"
-                    aria-label={`${t('usedAmount', { amount: weeklyUsed })}; ${account.weeklySharedEstimatedApiCostLimitMicros == null
-                      ? t('sharedLimitNoLimit')
-                      : t('sharedLimitAmount', { amount: weeklyLimit })}`}
-                  >
-                    <span className={styles.weeklyQuotaTrack} data-unlimited={weeklyUsageRatio === undefined ? 'true' : undefined} aria-hidden="true">
-                      {weeklyUsageRatio === undefined ? null : <span style={{ width: `${weeklyUsageRatio}%` }} />}
-                    </span>
-                    <span className={styles.weeklyQuotaNumbers} aria-hidden="true">
-                      <strong>{weeklyUsed}</strong><span>/</span><span>{weeklyLimit}</span>
-                    </span>
-                  </span>
-                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} title={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>
-                    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                      <path d="M3 11.75V13h1.25l7.36-7.36-1.25-1.25L3 11.75Zm9.58-7.08a.88.88 0 0 0 0-1.25l-1-1a.88.88 0 0 0-1.25 0l-.78.78 2.25 2.25.78-.78Z" fill="currentColor" />
-                    </svg>
+                  <span className={styles.weeklyLimitValue}>{account.weeklySharedEstimatedApiCostLimitMicros == null
+                    ? t('limitNoLimit')
+                    : t('limitAmount', { amount: weeklyLimit })}</span>
+                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editSharingLimit')} title={t('editSharingLimit')} disabled={busy !== undefined} onClick={openProtection}>
+                    {t('edit')}
                   </button>
                 </dd>
               </div>
