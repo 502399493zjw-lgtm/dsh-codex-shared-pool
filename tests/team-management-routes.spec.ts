@@ -2294,7 +2294,32 @@ describe('local Team management routes', () => {
     })))).resolves.toMatchObject({ status: 200, body: { account: { status: 'reauth_required' } } })
   })
 
-  it('retries the exact handoff envelope when the committed completion response is lost', async () => {
+  it.each([
+    {
+      failure: 'the committed response body stream is interrupted',
+      firstResponse: () => {
+        let pulls = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode('{"account":'))
+              return
+            }
+            controller.error(new Error('connection reset while reading the committed response'))
+          },
+        }, { highWaterMark: 0 })
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    },
+    {
+      failure: 'a gateway replaces the response with a non-JSON 503',
+      firstResponse: () => new Response('temporarily unavailable', {
+        status: 503,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    },
+  ])('retries the exact handoff envelope when $failure', async ({ firstResponse }) => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
     const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-retry-test-'))
@@ -2322,7 +2347,7 @@ describe('local Team management routes', () => {
           envelope: Parameters<typeof handoffs.complete>[1]
         }
         handoffs.completeReplaySafe({ teamId: 'team-1', accountId: body.accountId }, body.envelope)
-        if (completionBodies.length === 1) throw new Error('connection reset after commit')
+        if (completionBodies.length === 1) return firstResponse()
         return new Response(JSON.stringify({
           account: { ...contribution(), label: 'Captured OAuth', status: 'active', lastError: undefined },
         }), { status: 200, headers: { 'content-type': 'application/json' } })

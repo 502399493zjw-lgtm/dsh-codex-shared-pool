@@ -3372,7 +3372,14 @@ class TeamManagementProxy {
     } catch (error: unknown) {
       throw new RemoteTeamTransportError(`remote Team unavailable: ${safeMessage(error)}`)
     }
-    const value = await readRemoteJson(response)
+    let value: unknown
+    try {
+      value = await readRemoteJson(response)
+    } catch (error: unknown) {
+      // An HTTP failure remains classifiable by status even when a proxy replaces or truncates its body.
+      if (response.ok) throw error
+      value = undefined
+    }
     if (!response.ok) {
       if (
         response.status === 401
@@ -3405,7 +3412,9 @@ async function readRemoteJson(response: Response): Promise<unknown> {
   let bytes = 0
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await reader.read().catch((error: unknown) => {
+        throw new RemoteTeamTransportError(`remote Team response interrupted: ${safeMessage(error)}`)
+      })
       if (done) break
       bytes += value.byteLength
       if (bytes > MAX_REMOTE_BODY_BYTES) throw new Error('remote Team response is too large')
