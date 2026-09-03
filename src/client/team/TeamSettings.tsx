@@ -40,6 +40,10 @@ import type { TeamSettingsKey } from './locales.ts'
 import { createTeamUsageViewModel } from './team-usage-view-model.ts'
 import type { TeamUsageAggregateInput, TeamUsageState } from './team-usage-view-model.ts'
 import {
+  openAuthorizationPopupBridge,
+  type AuthorizationPopupController,
+} from '../authorization-popup.ts'
+import {
   canMemberLeaveTeam,
   canRemoveTeamMember,
   canTransferTeamOwnership,
@@ -585,7 +589,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const ownerAuthorizationContextRef = useRef<string | undefined>(undefined)
   const memberAuthorizationContextRef = useRef<string | undefined>(undefined)
   const teamSettingsReturnFocus = useRef<string | undefined>(undefined)
-  const oauthPopup = useRef<Window | null>(null)
+  const oauthPopup = useRef<AuthorizationPopupController | null>(null)
   const oauthStartLocked = useRef(false)
   const oauthTransitionLocked = useRef(false)
   const oauthPresentationActive = useRef(false)
@@ -1275,23 +1279,21 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     const epoch = ++oauthOperationEpoch.current
     oauthReturnSelection.current = selectedAccountId
     oauthExpectedContext.current = expectedContext
-    let pendingPopup: Window | null = null
+    let pendingPopup: AuthorizationPopupController | null = null
     if (method === 'browser') {
       try {
-        pendingPopup = window.open('about:blank', '_blank')
-        if (pendingPopup !== null) {
-          pendingPopup.opener = null
-          oauthPopup.current?.close()
-          oauthPopup.current = pendingPopup
-        }
+        pendingPopup = openAuthorizationPopupBridge()
       } catch {
-        pendingPopup?.close()
-        if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+        pendingPopup = null
+      }
+      if (pendingPopup === null) {
         oauthStartLocked.current = false
         clearOAuthPresentation()
         if (isCurrentOAuthOperation(epoch)) setError(t('browserPopupOpenFailed'))
         return Promise.resolve()
       }
+      oauthPopup.current?.close()
+      oauthPopup.current = pendingPopup
     }
 
     return run(busyName, async () => {
@@ -1306,16 +1308,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         onPresented?.()
 
         if (challenge.method === 'browser') {
-          if (pendingPopup === null) {
+          const navigated = pendingPopup !== null && await pendingPopup.navigate(challenge.authorizationUrl)
+          if (!isCurrentOAuthOperation(epoch)) {
+            pendingPopup?.close()
+            return
+          }
+          if (!navigated) {
+            pendingPopup?.close()
+            if (oauthPopup.current === pendingPopup) oauthPopup.current = null
             setOAuthNavigationBlocked(true)
-          } else {
-            try {
-              pendingPopup.location.replace(challenge.authorizationUrl)
-            } catch {
-              pendingPopup.close()
-              if (oauthPopup.current === pendingPopup) oauthPopup.current = null
-              setOAuthNavigationBlocked(true)
-            }
+          } else if (pendingPopup?.window === null && oauthPopup.current === pendingPopup) {
+            // The Codex in-app browser adopted the authorization tab. The Host
+            // acknowledged navigation, so the provider flow no longer depends
+            // on a WindowProxy owned by this settings view.
+            oauthPopup.current = null
           }
         } else {
           pendingPopup?.close()

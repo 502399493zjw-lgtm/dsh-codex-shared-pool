@@ -3055,7 +3055,7 @@ describe('local Team management routes', () => {
       'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
     )
     expect(mutationFetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({
-      accountId: 'account-1', discardInitial: true,
+      accountId: 'account-1', discardInitial: true, failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
     }))
     expect(await readdir(temporaryRootDir)).toEqual([])
   })
@@ -3315,7 +3315,7 @@ describe('local Team management routes', () => {
       'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
     )
     expect(mutationFetch.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({
-      accountId: 'account-1', discardInitial: true,
+      accountId: 'account-1', discardInitial: true, failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
     }))
     expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined()
     expect(await readdir(temporaryRootDir)).toEqual([])

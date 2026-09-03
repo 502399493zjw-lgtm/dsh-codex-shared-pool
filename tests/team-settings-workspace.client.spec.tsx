@@ -36,8 +36,18 @@ const { managementApi } = vi.hoisted(() => ({
   },
 }))
 
+const { authorizationPopupBridge } = vi.hoisted(() => ({
+  authorizationPopupBridge: {
+    open: vi.fn(),
+  },
+}))
+
 vi.mock('../src/client/team/api.ts', () => ({
   createTeamManagementApi: () => managementApi,
+}))
+
+vi.mock('../src/client/authorization-popup.ts', () => ({
+  openAuthorizationPopupBridge: authorizationPopupBridge.open,
 }))
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -234,6 +244,18 @@ beforeEach(() => {
     close: oauthPopupClose,
     opener: null,
   } as unknown as Window)
+  authorizationPopupBridge.open.mockImplementation(() => {
+    const popup = window.open('about:blank', '_blank')
+    if (popup === null) return null
+    return {
+      window: popup,
+      navigate: vi.fn(async (authorizationUrl: string) => {
+        popup.location.replace(authorizationUrl)
+        return true
+      }),
+      close: () => { popup.close() },
+    }
+  })
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({
@@ -539,14 +561,59 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
   })
 
-  it('closes a blank popup if the browser rejects opener isolation', async () => {
+  it('continues Team authorization when the in-app browser adopts the popup', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
     const close = vi.fn()
-    const popup = { location: { replace: vi.fn() }, close } as unknown as Window
-    Object.defineProperty(popup, 'opener', {
-      configurable: true,
-      set: () => { throw new Error('opener assignment blocked') },
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close })
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      const account = { ...mine, id: 'oauth-adopted', label: '朋友 Pro', status: 'authorizing' as const }
+      overviewState = { ...overviewState, contributions: [...overviewState.contributions, account] }
+      return {
+        account,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
     })
-    vi.mocked(window.open).mockReturnValueOnce(popup)
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const dialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(dialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
+
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+    expect(navigate).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    expect(screen.queryByText(zh.browserPopupBlocked)).toBeNull()
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('reports a blocked Team authorization navigation and closes its popup controller', async () => {
+    const navigate = vi.fn().mockResolvedValue(false)
+    const close = vi.fn()
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: window, navigate, close })
+    managementApi.startOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-blocked', label: '朋友 Pro', status: 'authorizing' },
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: NOW + 600_000,
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const dialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(dialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
+
+    expect(await screen.findByText(zh.browserPopupBlocked)).toBeDefined()
+    expect(navigate).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start Team authorization when the popup bridge cannot be initialized', async () => {
+    authorizationPopupBridge.open.mockReturnValueOnce(null)
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
 
@@ -555,9 +622,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
     fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
 
-    await waitFor(() => { expect(close).toHaveBeenCalled() })
+    await waitFor(() => { expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined() })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
-    expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined()
   })
 
   it('confirms before separately authorizing a signed-in local Codex account for the Team', async () => {
