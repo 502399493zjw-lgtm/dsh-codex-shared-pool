@@ -91,3 +91,36 @@ Expected: PASS.
 - [ ] **Step 6: Deliver through the repository workflow**
 
 Review the diff for secrets and unrelated changes, commit only the plan, Team settings change, and focused test, push `codex/fix-team-oauth-callback`, open a draft pull request against `main`, then request an independent change-scoped subagent review. Resolve blocking findings and repeat the focused checks before reporting the pull request for user merge approval.
+
+### Task 2: Repair inherited OAuth failure-code assertions
+
+**Files:**
+- Modify: `tests/team-management-routes.spec.ts`
+
+**Interfaces:**
+- Consumes: PR #27 cancellation body `{ accountId, discardInitial, failureCode }`
+- Produces: regression expectations aligned with `TEAM_AUTHORIZATION_FAILED_CODE`
+
+- [x] **Step 1: Confirm the inherited failure on `main`**
+
+Compare PR CI with the CI run for `main@fc6c3f8`; both must fail only because two cancellation-body assertions omit `failureCode`.
+
+- [x] **Step 2: Correct the two stale expectations**
+
+```ts
+expect(cancelRequest.body).toBe(JSON.stringify({
+  accountId: 'account-1',
+  discardInitial: true,
+  failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
+}))
+```
+
+- [x] **Step 3: Run only the two inherited failing tests**
+
+Run: `pnpm exec vitest run tests/team-management-routes.spec.ts -t "discards the initial contribution when the provider emits an unsafe browser authorization URL|discards the initial browser OAuth contribution when the local routes are disposed"`
+
+Expected: PASS.
+
+- [ ] **Step 4: Commit and push the assertion repair**
+
+Commit the two expectation changes separately, push the existing PR branch, and wait for CI plus the independent review conclusion.
