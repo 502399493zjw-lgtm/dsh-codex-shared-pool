@@ -32,7 +32,7 @@ Task-specific instructions override this default workflow. In a designated multi
 
 ## Shared environments
 
-The agent may install into, start, or restart the shared DSH instance on port 3181 without separate user confirmation when needed to deploy or verify an in-scope task. Warn before restarting a service that may hold in-memory state, preserve its configuration and rollback path, and report the result. Installing into or restarting port 3197 or any other shared instance still requires explicit task authorization. When multiple worktrees are active, deployment and real OAuth or visual acceptance testing belong to the designated integration task.
+The agent may install into, start, or restart the shared DSH instance on port 3181 without separate user confirmation when needed to deploy or verify an in-scope task. Warn before restarting a service that may hold in-memory state, preserve its configuration and rollback path, and report the result. Installing into, starting, or restarting port 3197 or any other shared instance still requires explicit task authorization. When multiple worktrees are active, deployment and real OAuth or visual acceptance testing belong to the designated integration task.
 
 ## Handoff
 
