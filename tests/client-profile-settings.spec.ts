@@ -25,6 +25,14 @@ describe('OpenAI Codex profile settings contract', () => {
     expect(source).toContain('className="dsh-codex-add-account-label"')
   })
 
+  it('keeps medium-width account panels in two columns and stacks only narrow containers', async () => {
+    const source = await readFile(new URL('../src/client/OpenAICodexSettings.tsx', import.meta.url), 'utf8')
+    expect(source).toContain('@container (max-width: 460px)')
+    expect(source).not.toContain('@container (max-width: 620px)')
+    expect(source).not.toContain('@media (max-width: 760px)')
+    expect(source).toContain('grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.45fr)')
+  })
+
   it('normalizes a profile label within the Host storage boundary', () => {
     expect(parseProfileLabelDraft('  Work Pro  ')).toEqual({
       ok: true,
