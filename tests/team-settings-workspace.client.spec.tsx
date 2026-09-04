@@ -2995,7 +2995,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).getByRole('button', { name: zh.revokeInvite }).hasAttribute('disabled')).toBe(false)
   })
 
-  it('creates labeled invitations and exposes Owner removal without legacy role controls', async () => {
+  it('creates invitations without asking for a purpose and exposes Owner removal without legacy role controls', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await openTeamSettings('members')
 
@@ -3006,10 +3006,11 @@ describe('Team subscription-pool workspace', () => {
     expect(zh.createInvite).toBe('生成邀请码')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
+    expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
+    expect(within(inviteDialog).getByLabelText(zh.inviteExpiry)).toBeDefined()
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
-      expect(managementApi.createInvite).toHaveBeenCalledWith('周末协作', 7 * 86_400_000, expectedContext())
+      expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
     })
 
     const tokenDialog = await screen.findByRole('dialog', { name: zh.inviteCreated })
@@ -3039,7 +3040,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await screen.findByText(CREATED_INVITE_TOKEN)
 
@@ -3057,7 +3057,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
 
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
@@ -3079,7 +3078,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.cancel }))
 
@@ -3101,7 +3099,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await screen.findByText(CREATED_INVITE_TOKEN)
 
@@ -3133,7 +3130,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
 
     await waitFor(() => { expect(managementApi.overview).toHaveBeenCalledTimes(2) })
@@ -3717,8 +3713,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(inviteTrigger)
 
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    const inviteLabel = within(inviteDialog).getByLabelText(zh.inviteLabel)
-    await waitFor(() => { expect(document.activeElement).toBe(inviteLabel) })
+    const inviteExpiry = within(inviteDialog).getByLabelText(zh.inviteExpiry)
+    await waitFor(() => { expect(document.activeElement).toBe(inviteExpiry) })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.cancel }))
 
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })

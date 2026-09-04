@@ -249,4 +249,10 @@ describe('Team Settings responsive container contract', () => {
       /\.usageHeader\s*>\s*button\s*\{[^}]*white-space:\s*nowrap;/s,
     )
   })
+
+  it('gives the invite expiry control a visible frame', () => {
+    expect(css).toMatch(
+      /\.select\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);/s,
+    )
+  })
 })
