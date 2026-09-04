@@ -1672,7 +1672,7 @@
 .select {
   width: 100%;
   min-height: 44px;
-  border: 1px solid var(--team-line);
+  border: 1px solid var(--team-line-strong);
   border-radius: 8px;
   padding: 7px 34px 7px 10px;
   background: var(--team-layer);

@@ -75,7 +75,6 @@ export interface TeamSettingsProps extends Partial<TeamSettingsInjected> {
 }
 
 interface InviteDraft {
-  readonly label: string
   readonly expiresInMs: number
   readonly authorizationContext: string
 }
@@ -2624,7 +2623,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   inviteCreationPresentationId.current += 1
                   teamSettingsReturnFocus.current = 'invite'
                   setInviteDraft({
-                    label: '',
                     expiresInMs: 7 * 86_400_000,
                     authorizationContext: ownerAuthorizationContext,
                   })
@@ -3045,13 +3043,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         footer={(
           <div className={styles.modalActions}>
             <Button variant="ghost" onClick={closeInviteDraft}>{t('cancel')}</Button>
-            <Button variant="primary" disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active' || activeInviteDraft?.label.trim() === ''} onClick={() => { if (activeInviteDraft !== undefined && ownerAuthorizationContext !== undefined && team.status === 'active') void run('invite', async () => {
+            <Button variant="primary" disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active'} onClick={() => { if (activeInviteDraft !== undefined && ownerAuthorizationContext !== undefined && team.status === 'active') void run('invite', async () => {
               const authorizationContext = activeInviteDraft.authorizationContext
               if (ownerAuthorizationContextRef.current !== authorizationContext) return
               const expectedContext = ownerExpectedContextRef.current
               if (expectedContext === undefined) return
               const presentationId = ++inviteCreationPresentationId.current
-              const result = await api.createInvite(activeInviteDraft.label.trim(), activeInviteDraft.expiresInMs, expectedContext)
+              const result = await api.createInvite(t('inviteFriend'), activeInviteDraft.expiresInMs, expectedContext)
               if (inviteCreationPresentationId.current !== presentationId) {
                 await refresh(false)
                 return
@@ -3075,13 +3073,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         {activeInviteDraft === undefined ? null : (
           <div className={styles.modalBody}>
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
-            <Field label={t('inviteLabel')} hint={t('inviteLabelHint')}>
-              <Input aria-label={t('inviteLabel')} data-team-dialog-focus="invite" value={activeInviteDraft.label} maxLength={120} placeholder={t('inviteLabelPlaceholder')} onChange={event => {
-                setInviteDraft({ ...activeInviteDraft, label: event.target.value })
-              }} />
-            </Field>
             <Field label={t('inviteExpiry')}>
-              <select aria-label={t('inviteExpiry')} className={styles.select} value={activeInviteDraft.expiresInMs} onChange={event => {
+              <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
                 setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
               }}>
                 <option value={86_400_000}>{t('inviteOneDay')}</option>
