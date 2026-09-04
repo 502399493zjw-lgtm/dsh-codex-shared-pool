@@ -125,7 +125,9 @@ const mine = {
   id: 'mine-active', teamId: 'team-1', ownerMemberId: 'member-me', label: '个人 Pro', status: 'active',
   personalReservePercent: 20, maxSharedRequestsPerWindow: null,
   maxSharedConcurrency: 1, allowedModels: [], createdAt: 1, updatedAt: 1,
-  capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74 }] },
+  capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74,
+    subscription: { planType: 'pro', weeklyEstimatedUsd: 2100, weeklyRemainingEstimatedUsd: 1554 },
+  }] },
 } as const
 const paused = { ...mine, id: 'mine-paused', label: '备用账号', status: 'paused' as const }
 const friend = {
@@ -269,7 +271,7 @@ beforeEach(() => {
     json: async () => ({
       status: 'ready',
       profiles: [
-        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] }, inUse: true },
+        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: { planType: 'plus', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] }, inUse: true },
         { id: 'local-b', label: '本机账号 B', createdAt: 2, updatedAt: 2, usage: {}, inUse: false },
         { id: 'local-c', label: '本机账号 C', createdAt: 3, updatedAt: 3, usage: {}, inUse: false },
       ],
@@ -1590,7 +1592,7 @@ describe('Team subscription-pool workspace', () => {
     const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
     const actions = within(account).getByRole('group', { name: zh.accountActions })
 
-    expect(weekly.querySelectorAll('dl > div')).toHaveLength(3)
+    expect(weekly.querySelectorAll('dl > div')).toHaveLength(2)
     expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
     const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
       && /\$0\.16\s*\/\s*\$1\.00\s*编辑/u.test(element.textContent ?? ''))
@@ -1599,8 +1601,9 @@ describe('Team subscription-pool workspace', () => {
     const editLimit = within(weekly).getByRole('button', { name: zh.editSharingLimit })
     expect(editLimit.textContent).toBe(zh.edit)
     expect(editLimit.querySelector('svg')).toBeNull()
-    expect(within(weekly).getByText(zh.weeklyCapacityReference)).toBeDefined()
-    expect(within(weekly).getByLabelText(zh.amountEstimateHelpLabel)).toBeDefined()
+    expect(within(weekly).getByText('Pro 20x')).toBeDefined()
+    expect(within(weekly).getByText('US$1,554.00 / US$2,100.00')).toBeDefined()
+    expect(within(weekly).queryByLabelText(zh.amountEstimateHelpLabel)).toBeNull()
     expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
     expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
@@ -1717,6 +1720,8 @@ describe('Team subscription-pool workspace', () => {
     expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
     expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
+    expect(within(details).getByText('Plus')).toBeDefined()
+    expect(within(details).getByText('US$68.00 / US$100.00')).toBeDefined()
     expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
   })

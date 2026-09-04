@@ -4,6 +4,7 @@ import { createModels, ModelsError } from '@earendil-works/pi-ai'
 import type { CredentialStore } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
+import { normalizeCodexPlan } from './shared/subscription.ts'
 import { OpenAICodexAuthenticationError } from './openai-codex-authentication-error.ts'
 import type {
   OpenAICodexCredits,
@@ -168,7 +169,9 @@ export function parseOpenAICodexUsage(value: unknown, observedAt = Date.now()): 
   }
   const credits = parseCredits(value['credits'])
   const individualLimit = parseIndividualLimit(value['spend_control'])
+  const planType = normalizeCodexPlan(value['plan_type'])
   return {
+    ...planType === undefined ? {} : { planType },
     rateLimits: limits,
     ...credits === undefined ? {} : { credits },
     ...individualLimit === undefined ? {} : { individualLimit },

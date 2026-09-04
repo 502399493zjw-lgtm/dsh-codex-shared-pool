@@ -871,6 +871,7 @@ describe('local Team management routes', () => {
         remainingPercent: 72,
         resetAt: 10_000,
         sharedRequestsUsed: 5,
+        subscription: { planType: 'plus', weeklyEstimatedUsd: 999999, weeklyRemainingEstimatedUsd: 72, access_token: 'must-not-cross' },
         access_token: 'must-not-cross',
       }],
       refreshToken: 'must-not-cross',
@@ -894,6 +895,7 @@ describe('local Team management routes', () => {
       sharedInFlight: 1,
       buckets: [{
         id: 'codex', reason: 'request_cap_reached', remainingPercent: 72, resetAt: 10_000, sharedRequestsUsed: 5,
+        subscription: { planType: 'plus', weeklyEstimatedUsd: 100, weeklyRemainingEstimatedUsd: 72 },
       }],
     })
     expect(contributions).toHaveLength(1)

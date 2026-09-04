@@ -75,6 +75,7 @@ async function authenticatedStore(expires = Date.now() + 3_600_000): Promise<Ope
 describe('OpenAI Codex usage', () => {
   it('projects rolling percentages and exact provider-supported balances', () => {
     expect(parseOpenAICodexUsage(payload())).toEqual({
+      planType: 'business',
       rateLimits: [
         {
           id: 'codex',

@@ -2,6 +2,7 @@
 
 import { openAICodexQuotaBucket } from '../account-allocation.ts'
 import type { OpenAICodexUsage } from '../usage.ts'
+import { subscriptionFromUsage } from '../shared/subscription.ts'
 import type { TeamCredentialBroker, TeamCredentialRef } from './credentials.ts'
 import type { TeamQuotaSnapshot } from './routing.ts'
 
@@ -44,8 +45,10 @@ export function projectTeamQuota(usage: OpenAICodexUsage, model: string): TeamQu
   const resetAt = capWindows.length > 0 && capResets.length === capWindows.length
     ? Math.max(...capResets)
     : undefined
+  const subscription = subscriptionFromUsage(usage)
   return {
     healthy: true,
+    ...subscription === undefined ? {} : { subscription },
     ...remainingPercent === undefined ? {} : { remainingPercent },
     ...resetAt === undefined ? {} : { resetAt },
   }

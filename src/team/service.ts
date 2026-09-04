@@ -714,6 +714,7 @@ export class TeamService {
       const remainingPercent = validCapacityPercent(quota.remainingPercent)
       const bucket: TeamContributionCapacityBucketSummary = {
         id,
+        ...quota.subscription === undefined ? {} : { subscription: quota.subscription },
         reason: capacityReason(account, quota.healthy, remainingPercent, resetAt, inspection),
         ...remainingPercent === undefined ? {} : { remainingPercent },
         ...resetAt === undefined ? {} : { resetAt },

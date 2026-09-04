@@ -1,6 +1,7 @@
 /** Local same-origin Team management proxy. Raw Team keys remain Host-only. */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { parseSubscription } from '../shared/subscription.ts'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -867,6 +868,7 @@ function projectCapacity(value: unknown): TeamContributionCapacitySummary {
 
 function projectCapacityBucket(value: unknown): TeamContributionCapacityBucketSummary {
   const item = record(value, 'capacity bucket')
+  const subscription = parseSubscription(item.subscription)
   const id = stringField(item, 'id')
   if (id !== 'codex' && id !== 'codex_spark') throw new Error('remote Team returned an invalid capacity bucket id')
   const reason = stringField(item, 'reason')
@@ -886,6 +888,7 @@ function projectCapacityBucket(value: unknown): TeamContributionCapacityBucketSu
   return {
     id,
     reason: reason as TeamContributionCapacityBucketSummary['reason'],
+    ...subscription === undefined ? {} : { subscription },
     ...remainingPercent === undefined ? {} : { remainingPercent },
     ...resetAt === undefined ? {} : { resetAt },
     ...sharedRequestsUsed === undefined ? {} : { sharedRequestsUsed },
