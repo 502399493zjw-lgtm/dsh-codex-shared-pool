@@ -358,6 +358,7 @@ describe('remote Team credential broker boundary', () => {
     await waitFor(() => onStatusChange.mock.calls.length === 1)
     expect(onStatusChange).toHaveBeenCalledWith(ref.teamId, ref.accountId, 'active', undefined, 'authorizing')
     await expect(remote.readUsage(ref)).resolves.toEqual({
+      planType: 'plus',
       rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 75, windowSeconds: 18_000 }] }],
     })
 
@@ -538,6 +539,7 @@ function fakeBroker(overrides: Partial<TeamCredentialBroker> = {}): TeamCredenti
     inspectAuthorization: vi.fn(async () => ({ status: 'active' as const })),
     matchesProviderAccount: vi.fn(async () => false),
     readUsage: vi.fn(async () => ({
+      planType: 'plus',
       rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 75, windowSeconds: 18_000 }] }],
     })),
     forwardResponses: vi.fn(async () => new Response(null, { status: 204 })),

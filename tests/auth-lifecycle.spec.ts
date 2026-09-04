@@ -2,6 +2,7 @@ import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
 import { LocalRoutingEventLedger } from '../src/local-routing-events.ts'
+import { OpenAICodexAuthenticationError } from '../src/openai-codex-authentication-error.ts'
 
 interface LoginAttemptOptions {
   beforeCommit(): void
@@ -9,7 +10,7 @@ interface LoginAttemptOptions {
 
 const auth = vi.hoisted(() => ({
   loginOpenAICodex: vi.fn(),
-  loginOpenAICodexProfile: vi.fn(),
+  loginOpenAICodexLocalProfile: vi.fn(),
   logoutOpenAICodex: vi.fn(),
   openAICodexAuthStatus: vi.fn(),
 }))
@@ -33,7 +34,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   })
 
   it('cancels a browser login whose provider prompt remains pending', async () => {
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
       await interaction.prompt({
         type: 'manual_code',
@@ -67,7 +68,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
       createdAt: 1,
       updatedAt: 1,
     }))
-    auth.loginOpenAICodexProfile.mockImplementation(async (
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (
       interaction: AuthInteraction,
       _store: OpenAICodexCredentialStore,
       options: LoginAttemptOptions,
@@ -104,7 +105,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
       await commitFinished
       return { id: 'profile-1', label: 'Profile 1', createdAt: 1, updatedAt: 1 }
     })
-    auth.loginOpenAICodexProfile.mockImplementation(async (
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (
       interaction: AuthInteraction,
       _store: OpenAICodexCredentialStore,
       options: LoginAttemptOptions,
@@ -136,7 +137,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   it('expires a pending attempt, aborts the provider, and exposes only a typed failure reason', async () => {
     vi.useFakeTimers()
     let providerSignal: AbortSignal | undefined
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       providerSignal = interaction.signal
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize?code=secret-code' })
       await new Promise<void>((_resolve, reject) => {
@@ -178,7 +179,7 @@ describe('OpenAI Codex Web auth lifecycle', () => {
   })
 
   it('does not project a raw Host error into browser status', async () => {
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
       throw new Error('callback failed code=secret-code at /private/host/auth.json')
     })
@@ -218,10 +219,48 @@ describe('OpenAI Codex Web auth lifecycle', () => {
     expect(status).toEqual({
       status: 'ready',
       profiles: [
-        { ...profiles[0], usage: { rateLimits: [] }, inUse: true },
-        { ...profiles[1], usage: { rateLimits: [] }, inUse: false },
+        { ...profiles[0], usage: { rateLimits: [] }, inUse: true, connectionStatus: 'connected' },
+        { ...profiles[1], usage: { rateLimits: [] }, inUse: false, connectionStatus: 'connected' },
       ],
     })
     expect(JSON.stringify(ledger.list())).not.toContain('profile-b')
+  })
+
+  it('separates reauthorization failures from ordinary quota telemetry failures', async () => {
+    const { OpenAICodexWebAuth } = await import('../src/auth-routes.ts')
+    const profiles = [
+      { id: 'profile-auth', label: 'Renew me', createdAt: 1, updatedAt: 2 },
+      { id: 'profile-quota', label: 'Quota unavailable', createdAt: 1, updatedAt: 1 },
+    ]
+    const store = {
+      listProfiles: () => Promise.resolve(profiles),
+      forProfile: (profileId: string) => ({ profileId }),
+    } as unknown as OpenAICodexCredentialStore
+    usage.readOpenAICodexRateLimits.mockImplementation(async (profileStore: { profileId: string }) => {
+      if (profileStore.profileId === 'profile-auth') {
+        throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+      }
+      throw new Error('OpenAI Codex usage request failed with HTTP 503')
+    })
+
+    await expect(new OpenAICodexWebAuth(store).profilesStatus()).resolves.toEqual({
+      status: 'ready',
+      profiles: [
+        {
+          ...profiles[0],
+          usage: { rateLimits: [] },
+          inUse: false,
+          connectionStatus: 'reauth-required',
+          quotaError: 'OpenAI Codex sign-in needs to be renewed',
+        },
+        {
+          ...profiles[1],
+          usage: { rateLimits: [] },
+          inUse: false,
+          connectionStatus: 'connected',
+          quotaError: 'OpenAI Codex usage request failed with HTTP 503',
+        },
+      ],
+    })
   })
 })

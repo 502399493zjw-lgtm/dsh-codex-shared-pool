@@ -49,6 +49,7 @@ import {
 import { TeamService } from '../src/team/service.ts'
 import type { TeamCredentialBroker, TeamCredentialRef } from '../src/team/credentials.ts'
 import type { TeamCredentialHandoffEnvelope } from '../src/team/oauth-handoff.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
 class FakeCredentialBroker implements TeamCredentialBroker {
   readonly started: Array<{ ref: TeamCredentialRef; method: TeamOAuthMethod }> = []
@@ -705,6 +706,7 @@ describe('Team control-plane routes', () => {
 
   it('supports browser handoff start, completion, and initial-account discard without exposing credentials', async () => {
     const broker = new FakeCredentialBroker()
+    const cancelOAuth = vi.spyOn(broker, 'cancelOAuth')
     const routes = setup(broker)
     const bootstrap = routes.find(route => route.path === TEAM_BOOTSTRAP_PATH)
     const start = routes.find(route => route.path === TEAM_CONTRIBUTION_OAUTH_START_PATH)
@@ -740,11 +742,30 @@ describe('Team control-plane routes', () => {
 
     const second = await response(start.handler, request('POST', { label: 'Discard me', method: 'browser' }, authorization))
     const secondAccount = second.body.account as Record<string, unknown>
+    const rejectedUnsafeFailure = await response(cancel.handler, request('POST', {
+      accountId: secondAccount.id,
+      discardInitial: true,
+      failureCode: 'raw provider error must not cross the Team boundary',
+    }, authorization))
+    expect(rejectedUnsafeFailure).toMatchObject({ status: 400 })
+    expect(JSON.stringify(rejectedUnsafeFailure.body)).not.toContain('raw provider error')
+    expect(cancelOAuth).not.toHaveBeenCalled()
+
     const discarded = await response(cancel.handler, request('POST', {
       accountId: secondAccount.id,
       discardInitial: true,
+      failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
     }, authorization))
-    expect(discarded).toMatchObject({ status: 200, body: { account: { id: secondAccount.id, status: 'revoked' } } })
+    expect(discarded).toMatchObject({
+      status: 200,
+      body: {
+        account: {
+          id: secondAccount.id,
+          status: 'revoked',
+          lastError: TEAM_AUTHORIZATION_FAILED_CODE,
+        },
+      },
+    })
   })
 
   it('exposes only role-shaped aggregate usage to an authenticated owner or member', async () => {

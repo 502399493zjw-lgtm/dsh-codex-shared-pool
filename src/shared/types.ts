@@ -58,6 +58,7 @@ export interface OpenAICodexIndividualLimit {
 
 /** Secret-free quota projection returned to the browser. */
 export interface OpenAICodexUsage {
+  readonly planType?: import('./subscription.ts').CodexPlanType
   /** Rate-limit buckets returned by the provider. */
   readonly rateLimits: readonly OpenAICodexRateLimit[]
   /** Optional prepaid-credit projection. */
@@ -65,6 +66,9 @@ export interface OpenAICodexUsage {
   /** Optional workspace member spend-limit projection. */
   readonly individualLimit?: OpenAICodexIndividualLimit
 }
+
+/** Browser-safe authentication health for one stored Codex profile. */
+export type OpenAICodexConnectionStatus = 'connected' | 'reauth-required'
 
 /** Fixed, secret-free reasons an OAuth attempt can fail in the Host. */
 export type OpenAICodexAuthorizationFailure =

@@ -1,6 +1,8 @@
 /** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SubscriptionEstimate, subscriptionEstimateLabels } from './SubscriptionEstimate.tsx'
+import { subscriptionFromUsage } from '../shared/subscription.ts'
 import type { CSSProperties } from 'react'
 import {
   Button,
@@ -20,6 +22,7 @@ import type {
   LocalRoutingStatus,
   OpenAICodexAuthorizationFailure,
   OpenAICodexCancelLoginResult,
+  OpenAICodexConnectionStatus,
   OpenAICodexLoginChallenge,
   OpenAICodexProfilesStatus,
   OpenAICodexUsage,
@@ -40,8 +43,10 @@ import {
   renameOpenAICodexProfile,
 } from './profile-management.ts'
 import { observeCodexQuotaProfiles } from './quota/invalidation.ts'
+import { withDeadline } from '../with-deadline.ts'
 
 const STATUS_PATH = '/plugins/dsh-openai-codex/profiles'
+const DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
 const LOGIN_PATH = '/plugins/dsh-openai-codex/profiles/login'
 const CANCEL_LOGIN_PATH = '/plugins/dsh-openai-codex/profiles/login/cancel'
 const PRIORITY_PATH = '/plugins/dsh-openai-codex/profiles/priority'
@@ -65,11 +70,20 @@ interface AccountProfile {
   createdAt: number
   updatedAt: number
   usage: OpenAICodexUsage
+  connectionStatus?: OpenAICodexConnectionStatus
+  quotaLoading?: boolean
   inUse?: boolean
   quotaError?: string
 }
 
 type RemoteAccountStatus = OpenAICodexProfilesStatus<AccountProfile>
+type DirectoryStatus = OpenAICodexProfilesStatus<Pick<AccountProfile, 'id' | 'label' | 'createdAt' | 'updatedAt' | 'inUse'>>
+
+function ConnectionDot({ status }: { status: OpenAICodexConnectionStatus | undefined }) {
+  return status === undefined
+    ? <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--dsw-alias-label-tertiary)', display: 'inline-block' }} />
+    : <StateDot state={status === 'reauth-required' ? 'error' : 'done'} size={9} />
+}
 
 interface OutboundNetworkStatus {
   enabled: boolean
@@ -221,15 +235,17 @@ function QuotaBar({
   )
 }
 
-function UsageLimits({ usage, quotaError, t }: {
+function UsageLimits({ usage, quotaError, loading = false, t }: {
   usage: OpenAICodexUsage
   quotaError?: string
+  loading?: boolean
   t: OpenAICodexSettingsInjected['t']
 }) {
   const hasData = usage.rateLimits.length > 0 || usage.credits !== undefined || usage.individualLimit !== undefined
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
+      <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} />
       {usage.rateLimits.map(limit => (
         <div key={limit.id} style={quotaGroupStyle}>
           <h4 style={quotaTitleStyle}>{limit.name ?? limit.id}</h4>
@@ -262,17 +278,18 @@ function UsageLimits({ usage, quotaError, t }: {
             : usage.credits.balance === undefined ? t('available') : usage.credits.balance}</span>
         </div>
       )}
-      {!hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
+      {!loading && !hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
       {quotaError === undefined ? null : <p style={errorStyle}>{t('quotaUnavailable')}</p>}
     </div>
   )
 }
 
-async function jsonRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+async function jsonRequest<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: { accept: 'application/json', ...body === undefined ? {} : { 'content-type': 'application/json' } },
     credentials: 'same-origin',
+    ...signal === undefined ? {} : { signal },
     ...body === undefined ? {} : { body: JSON.stringify(body) },
   })
   const value: unknown = await response.json().catch(() => undefined)
@@ -325,14 +342,54 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
   const loginOperationRef = useRef<object | undefined>(undefined)
   const quotaProfilesRevisionRef = useRef<string | undefined>(undefined)
   const latestRoutingEventIdRef = useRef<string | null | undefined>(undefined)
+  const refreshControllerRef = useRef<AbortController | undefined>(undefined)
 
   const refresh = useCallback(async () => {
+    refreshControllerRef.current?.abort()
+    const controller = new AbortController()
+    refreshControllerRef.current = controller
     try {
-      const next = await jsonRequest<RemoteAccountStatus>(STATUS_PATH)
+      const next = await withDeadline(signal => jsonRequest<DirectoryStatus>(DIRECTORY_PATH, 'GET', undefined, signal), 5_000, controller.signal)
+      if (controller.signal.aborted) return
+      if (next.status === 'ready') {
+        setStatus(previous => ({ status: 'ready', profiles: next.profiles.map(profile => {
+          const old = previous.status === 'ready' ? previous.profiles.find(item => item.id === profile.id) : undefined
+          return { ...old, ...profile, usage: old?.usage ?? { rateLimits: [] }, quotaLoading: true }
+        }) }))
+        if (next.profiles.length > 0) {
+          void withDeadline(signal => jsonRequest<RemoteAccountStatus>(STATUS_PATH, 'GET', undefined, signal), 20_000, controller.signal)
+            .then(quota => {
+              if (controller.signal.aborted) return
+              if (quota.status !== 'ready') throw new Error('Quota unavailable')
+              setStatus(current => current.status !== 'ready' ? current : ({
+                status: 'ready',
+                profiles: current.profiles.map(profile => {
+                  const result = quota.profiles.find(item => item.id === profile.id)
+                  const { connectionStatus: _health, quotaError: _error, ...metadata } = profile
+                  return result === undefined
+                    ? { ...profile, quotaLoading: false, quotaError: t('quotaUnavailable') }
+                    : { ...metadata, usage: result.usage,
+                        ...result.connectionStatus === undefined ? {} : { connectionStatus: result.connectionStatus },
+                        ...result.quotaError === undefined ? {} : { quotaError: result.quotaError }, quotaLoading: false }
+                }),
+              }))
+            }).catch(() => {
+              if (controller.signal.aborted) return
+              setStatus(current => current.status !== 'ready' ? current : ({
+                status: 'ready', profiles: current.profiles.map(profile => ({
+                  ...profile, quotaLoading: false, quotaError: t('quotaUnavailable'),
+                })),
+              }))
+            })
+        }
+        return next
+      }
       setStatus(next.status === 'error'
         ? { status: 'error', message: authorizationFailureMessage(next.reason, t) }
         : next)
+      return next
     } catch (error: unknown) {
+      if (controller.signal.aborted) return
       setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
     }
   }, [t])
@@ -375,7 +432,10 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     }
   }, [refresh, stopPopupWatch, t])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    void refresh()
+    return () => { refreshControllerRef.current?.abort() }
+  }, [refresh])
   useEffect(() => () => {
     const loginWasActive = loginOperationRef.current !== undefined
     loginOperationRef.current = undefined
@@ -529,11 +589,10 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     setPriorityError(undefined)
     try {
       await jsonRequest<{ ok: true }>(PRIORITY_PATH, 'POST', { profileId })
-      const nextStatus = await jsonRequest<AccountStatus>(STATUS_PATH)
-      if (nextStatus.status !== 'ready' || nextStatus.profiles[0]?.id !== profileId) {
+      const nextStatus = await refresh()
+      if (nextStatus?.status !== 'ready' || nextStatus.profiles[0]?.id !== profileId) {
         throw new Error(t('profilePriorityFailed'))
       }
-      setStatus(nextStatus)
     } catch {
       setPriorityError(t('profilePriorityFailed'))
     } finally {
@@ -551,7 +610,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     setDialogError(undefined)
     try {
       await renameOpenAICodexProfile(jsonRequest, profile.id, parsed.label)
-      setStatus(await jsonRequest<AccountStatus>(STATUS_PATH))
+      await refresh()
       setDialog(undefined)
       setRenameLabel('')
     } catch (error: unknown) {
@@ -759,7 +818,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                   setPriorityError(undefined)
                 }}
               >
-                <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} size={9} />
+                <ConnectionDot status={profile.connectionStatus} />
                 <span className="dsh-codex-profile-identity">
                   <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
                   <span className="dsh-codex-profile-name">{profile.label}</span>
@@ -780,7 +839,8 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                 <strong style={{ color: 'var(--dsw-alias-label-primary)' }}>{label}</strong>
               </div>
               {status.status === 'error'
-                ? <p style={{ ...errorStyle, marginTop: 6 }}>{status.message}</p>
+                ? <><p style={{ ...errorStyle, marginTop: 6 }}>{status.message}</p>
+                    <Button variant="outline" size="sm" onClick={() => { setStatus({ status: 'loading' }); void refresh() }}>{t('retry')}</Button></>
                 : status.status === 'ready'
                   ? <p style={{ ...bodyStyle, marginTop: 6 }}>{signInNotice ?? t('emptyAccountHint')}</p>
                   : status.status === 'signing-in'
@@ -804,12 +864,16 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
               <h3 className="dsh-codex-detail-title">{selectedProfile.label}</h3>
               <span
                 className="dsh-codex-account-status"
-                data-state={selectedProfile.quotaError === undefined ? 'done' : 'error'}
+                data-state={selectedProfile.connectionStatus === undefined ? 'idle' : selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'}
                 role="status"
-                {...selectedProfile.quotaError === undefined ? {} : { title: selectedProfile.quotaError }}
+                {...selectedProfile.connectionStatus === 'reauth-required' && selectedProfile.quotaError !== undefined
+                  ? { title: selectedProfile.quotaError }
+                  : {}}
               >
-                <StateDot state={selectedProfile.quotaError === undefined ? 'done' : 'error'} size={9} />
-                {selectedProfile.quotaError === undefined ? t('accountConnected') : t('accountConnectionUnavailable')}
+                <ConnectionDot status={selectedProfile.connectionStatus} />
+                {selectedProfile.connectionStatus === undefined ? t('accountConnectionUnknown') : selectedProfile.connectionStatus === 'reauth-required'
+                  ? t('accountConnectionUnavailable')
+                  : t('accountConnected')}
               </span>
             </div>
             <div className="dsh-codex-default">
@@ -825,7 +889,9 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
               {priorityError === undefined ? null : <p role="alert">{priorityError}</p>}
             </div>
             <div className="dsh-codex-quota">
+              {selectedProfile.quotaLoading ? <p style={bodyStyle}>{t('loadingQuota')}</p> : null}
               <UsageLimits
+                loading={selectedProfile.quotaLoading ?? false}
                 usage={selectedProfile.usage}
                 {...selectedProfile.quotaError === undefined ? {} : { quotaError: selectedProfile.quotaError }}
                 t={t}

@@ -36,8 +36,18 @@ const { managementApi } = vi.hoisted(() => ({
   },
 }))
 
+const { authorizationPopupBridge } = vi.hoisted(() => ({
+  authorizationPopupBridge: {
+    open: vi.fn(),
+  },
+}))
+
 vi.mock('../src/client/team/api.ts', () => ({
   createTeamManagementApi: () => managementApi,
+}))
+
+vi.mock('../src/client/authorization-popup.ts', () => ({
+  openAuthorizationPopupBridge: authorizationPopupBridge.open,
 }))
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -73,8 +83,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   writeClipboard: vi.fn().mockResolvedValue(true),
 }))
 
-import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
+import { formatWeeklyUsdMicros, TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
+import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
 // Keep fixture expirations deterministic and safely ahead of the wall clock.
 const NOW = Date.UTC(2030, 7, 21, 12)
@@ -114,7 +125,9 @@ const mine = {
   id: 'mine-active', teamId: 'team-1', ownerMemberId: 'member-me', label: '个人 Pro', status: 'active',
   personalReservePercent: 20, maxSharedRequestsPerWindow: null,
   maxSharedConcurrency: 1, allowedModels: [], createdAt: 1, updatedAt: 1,
-  capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74 }] },
+  capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74,
+    subscription: { planType: 'pro', weeklyEstimatedUsd: 2100 },
+  }] },
 } as const
 const paused = { ...mine, id: 'mine-paused', label: '备用账号', status: 'paused' as const }
 const friend = {
@@ -133,6 +146,14 @@ function expectedContext(currentMemberId = 'member-me') {
     currentMemberId,
   }
 }
+
+it('keeps compact weekly amounts in dollar-sign form for Chinese UI', () => {
+  const previousLanguage = document.documentElement.lang
+  document.documentElement.lang = 'zh-CN'
+  expect(formatWeeklyUsdMicros(157_500)).toBe('$0.16')
+  expect(formatWeeklyUsdMicros(null)).toBe('—')
+  document.documentElement.lang = previousLanguage
+})
 
 function confirmingDissolution() {
   return { state: 'confirming' as const, teamName: '周末造物局', requestedAt: NOW }
@@ -233,12 +254,24 @@ beforeEach(() => {
     close: oauthPopupClose,
     opener: null,
   } as unknown as Window)
+  authorizationPopupBridge.open.mockImplementation(() => {
+    const popup = window.open('about:blank', '_blank')
+    if (popup === null) return null
+    return {
+      window: popup,
+      navigate: vi.fn(async (authorizationUrl: string) => {
+        popup.location.replace(authorizationUrl)
+        return true
+      }),
+      close: () => { popup.close() },
+    }
+  })
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({
       status: 'ready',
       profiles: [
-        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] }, inUse: true },
+        { id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1, usage: { planType: 'plus', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] }, inUse: true },
         { id: 'local-b', label: '本机账号 B', createdAt: 2, updatedAt: 2, usage: {}, inUse: false },
         { id: 'local-c', label: '本机账号 C', createdAt: 3, updatedAt: 3, usage: {}, inUse: false },
       ],
@@ -418,6 +451,21 @@ async function submitDissolution() {
 }
 
 describe('Team subscription-pool workspace', () => {
+  it('shows subscription metadata for Spark-only accounts without Spark quota telemetry', async () => {
+    overviewState.contributions = [{
+      ...mine,
+      allowedModels: ['gpt-5.3-codex-spark'],
+      capacity: { sharedInFlight: 0, buckets: [{
+        id: 'codex_spark', reason: 'quota_unavailable',
+        subscription: mine.capacity.buckets[0].subscription,
+      }] },
+    }] as typeof overviewState.contributions
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /个人 Pro/u }))
+    expect(await screen.findByText('Pro 20x')).toBeDefined()
+    expect(screen.getByText('US$2,100.00')).toBeDefined()
+  })
+
   it('opens management only from the Team panel', async () => {
     render(<TeamSettings t={translate} embedded />)
 
@@ -428,8 +476,9 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(trigger)
     const settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
-    expect(within(settings).getByText(zh.workspaceKicker)).toBeDefined()
-    expect(within(settings).getByRole('heading', { name: zh.workspaceTitle })).toBeDefined()
+    expect(within(settings).queryByText(zh.workspaceKicker)).toBeNull()
+    expect(within(settings).getByRole('heading', { name: zh.teamSettingsTitle })).toBeDefined()
+    expect(within(settings).queryByRole('heading', { name: zh.workspaceTitle })).toBeNull()
     expect(within(settings).queryByText(zh.workspaceBreadcrumb)).toBeNull()
     expect(within(settings).getByRole('heading', { name: overviewState.team.name })).toBeDefined()
     expect(within(settings).getByRole('navigation', { name: zh.workspaceNavigation })).toBeDefined()
@@ -437,7 +486,15 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByRole('button', { name: zh.accountsNavigation })).toBeNull()
     expect(within(settings).queryByRole('region', { name: zh.accountsNavigation })).toBeNull()
 
-    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+    const back = within(settings).getByRole('button', { name: zh.backToTeam })
+    expect(back.closest('aside')).not.toBeNull()
+    expect(back.textContent?.trim()).toBe('←')
+    expect(back.getAttribute('title')).toBe(zh.backToTeam)
+    const refresh = within(settings).getByRole('button', { name: zh.refresh })
+    expect(refresh.textContent?.trim()).toBe('')
+    expect(refresh.getAttribute('title')).toBe(zh.refresh)
+
+    fireEvent.click(back)
     expect(await screen.findByRole('region', { name: '团队面板' })).toBeDefined()
     expect(document.activeElement).toBe(screen.getByRole('button', { name: zh.teamSettings }))
     expect(screen.getByRole('button', { name: zh.addAccount })).toBeDefined()
@@ -538,14 +595,59 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('dialog', { name: zh.deviceTitle })).toBeNull()
   })
 
-  it('closes a blank popup if the browser rejects opener isolation', async () => {
+  it('continues Team authorization when the in-app browser adopts the popup', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
     const close = vi.fn()
-    const popup = { location: { replace: vi.fn() }, close } as unknown as Window
-    Object.defineProperty(popup, 'opener', {
-      configurable: true,
-      set: () => { throw new Error('opener assignment blocked') },
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close })
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      const account = { ...mine, id: 'oauth-adopted', label: '朋友 Pro', status: 'authorizing' as const }
+      overviewState = { ...overviewState, contributions: [...overviewState.contributions, account] }
+      return {
+        account,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
     })
-    vi.mocked(window.open).mockReturnValueOnce(popup)
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const dialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(dialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
+
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+    expect(navigate).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    expect(screen.queryByText(zh.browserPopupBlocked)).toBeNull()
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it('reports a blocked Team authorization navigation and closes its popup controller', async () => {
+    const navigate = vi.fn().mockResolvedValue(false)
+    const close = vi.fn()
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: window, navigate, close })
+    managementApi.startOAuth.mockResolvedValueOnce({
+      account: { ...mine, id: 'oauth-blocked', label: '朋友 Pro', status: 'authorizing' },
+      method: 'browser',
+      authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+      expiresAt: NOW + 600_000,
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: zh.addAccount }))
+    const dialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(dialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.startAuthorization }))
+
+    expect(await screen.findByText(zh.browserPopupBlocked)).toBeDefined()
+    expect(navigate).toHaveBeenCalledWith('https://auth.openai.com/oauth/authorize?client_id=codex_cli')
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not start Team authorization when the popup bridge cannot be initialized', async () => {
+    authorizationPopupBridge.open.mockReturnValueOnce(null)
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
 
@@ -554,9 +656,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: '朋友 Pro' } })
     fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
 
-    await waitFor(() => { expect(close).toHaveBeenCalled() })
+    await waitFor(() => { expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined() })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
-    expect(screen.getByText(zh.browserPopupOpenFailed)).toBeDefined()
   })
 
   it('confirms before separately authorizing a signed-in local Codex account for the Team', async () => {
@@ -771,6 +872,43 @@ describe('Team subscription-pool workspace', () => {
       expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
       expect(screen.getByRole('heading', { name: '朋友 Pro' })).toBeDefined()
     })
+  })
+
+  it('shows a safe localized error when browser authorization finishes without activating the account', async () => {
+    const authorizing = { ...mine, id: 'oauth-failed', label: '朋友 Pro', status: 'authorizing' as const }
+    managementApi.startOAuth.mockImplementationOnce(async () => {
+      overviewState = {
+        ...overviewState,
+        contributions: [...overviewState.contributions, authorizing],
+      }
+      return {
+        account: authorizing,
+        method: 'browser',
+        authorizationUrl: 'https://auth.openai.com/oauth/authorize?client_id=codex_cli',
+        expiresAt: NOW + 600_000,
+      }
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: zh.addAccount }))
+    const addDialog = screen.getByRole('dialog', { name: zh.addAccountTitle })
+    fireEvent.change(within(addDialog).getByLabelText(zh.accountLabel), { target: { value: authorizing.label } })
+    fireEvent.click(within(addDialog).getByRole('button', { name: zh.startAuthorization }))
+    expect(await screen.findByRole('region', { name: '等待浏览器授权' })).toBeDefined()
+
+    overviewState = {
+      ...overviewState,
+      contributions: overviewState.contributions.map((account: any) => account.id === authorizing.id
+        ? { ...account, status: 'revoked' as const, lastError: TEAM_AUTHORIZATION_FAILED_CODE }
+        : account),
+    }
+    const settings = await openTeamSettings('usage')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    expect(await screen.findByText(zh.authorizationFailed)).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(document.body.textContent).not.toContain(TEAM_AUTHORIZATION_FAILED_CODE)
   })
 
   it('captures the return selection before a slow browser authorization request begins', async () => {
@@ -1090,6 +1228,39 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('shows a safe error when a rehydrated browser authorization fails', async () => {
+    const authorizing = { ...mine, id: 'oauth-existing', label: '朋友 Pro', status: 'authorizing' as const }
+    overviewState = {
+      ...overviewState,
+      contributions: [...overviewState.contributions, authorizing],
+      pendingBrowserAuthorization: {
+        accountId: authorizing.id,
+        method: 'browser',
+        expiresAt: NOW + 600_000,
+        discardInitial: true,
+      },
+    }
+
+    render(<TeamSettings t={translate} embedded />)
+    const waiting = await screen.findByRole('region', { name: '等待浏览器授权' })
+    expect(within(waiting).getByRole('button', { name: zh.cancelAuthorization })).toBeDefined()
+
+    const { pendingBrowserAuthorization: _pendingBrowserAuthorization, ...nextOverview } = overviewState
+    overviewState = {
+      ...nextOverview,
+      contributions: nextOverview.contributions.map((account: any) => account.id === authorizing.id
+        ? { ...account, status: 'revoked' as const, lastError: TEAM_AUTHORIZATION_FAILED_CODE }
+        : account),
+    }
+    const settings = await openTeamSettings('usage')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
+    fireEvent.click(within(settings).getByRole('button', { name: zh.backToTeam }))
+
+    expect(await screen.findByText(zh.authorizationFailed)).toBeDefined()
+    expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
+    expect(document.body.textContent).not.toContain(TEAM_AUTHORIZATION_FAILED_CODE)
+  })
+
   it('shows a safe action-oriented message when Team authorization cannot reach OpenAI', async () => {
     overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
     managementApi.startOAuth.mockRejectedValueOnce(
@@ -1120,7 +1291,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    expect(await screen.findByText('暂时无法启动 OpenAI 授权，请重试。')).toBeDefined()
+    expect(await screen.findByText('OpenAI 授权未能完成，未添加账号。请重试。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_authorization_failed')
   })
 
@@ -1177,19 +1348,82 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    expect(within(account).getByText((_, element) => element?.tagName === 'DD'
+      && /—\s*\/\s*∞\s*编辑/u.test(element.textContent ?? ''))).toBeDefined()
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
-    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    expect(within(dialog).getByLabelText(zh.weeklyLimitLabel)).toBeDefined()
+    expect(within(dialog).queryByLabelText(zh.reserveLabel)).toBeNull()
+    expect(within(dialog).queryByLabelText(zh.requestCapLabel)).toBeNull()
+    expect(within(dialog).queryByLabelText(zh.allowedModelsLabel)).toBeNull()
+    fireEvent.change(within(dialog).getByLabelText(zh.weeklyLimitLabel), { target: { value: '25' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
 
     await waitFor(() => {
       expect(managementApi.updateContribution).toHaveBeenCalledWith('mine-active', {
-        personalReservePercent: 30,
-        maxSharedRequestsPerWindow: null,
-        weeklySharedEstimatedApiCostLimitMicros: null,
-        allowedModels: [],
+        weeklySharedEstimatedApiCostLimitMicros: 25_000_000,
       }, expectedContext())
     })
+  })
+
+  it('keeps an open sharing confirmation in sync with the slower quota refresh', async () => {
+    let resolveQuota!: (value: Response) => void
+    vi.mocked(fetch).mockImplementation((input) => {
+      if (input === '/plugins/dsh-openai-codex/profiles/directory') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            profiles: [{
+              id: 'local-a',
+              label: '本机账号 A',
+              createdAt: 1,
+              updatedAt: 1,
+              inUse: true,
+            }],
+          }),
+        } as Response)
+      }
+      if (input === '/plugins/dsh-openai-codex/profiles') {
+        return new Promise(resolve => { resolveQuota = resolve })
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`)
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(await within(panel).findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+
+    fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
+
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    const quota = within(dialog).getByRole('region', { name: zh.sharingQuotaConfirmation })
+    expect(within(quota).getByText(zh.sharingQuotaUnavailable)).toBeDefined()
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveQuota({
+        ok: true,
+        json: async () => ({
+          status: 'ready',
+          profiles: [{
+            id: 'local-a',
+            label: '本机账号 A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            inUse: true,
+          }],
+        }),
+      } as Response)
+    })
+
+    expect(within(quota).getByText('68%')).toBeDefined()
+    expect(within(quota).queryByText(zh.sharingQuotaUnavailable)).toBeNull()
+    expect(within(quota).getByText('20%')).toBeDefined()
+    expect(within(quota).getByText(zh.sharingQuotaNoWeeklyLimit)).toBeDefined()
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
   })
 
   it('shows an immediate saving state while sharing limits are being updated', async () => {
@@ -1201,16 +1435,16 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
 
-    fireEvent.click(within(account).getByRole('button', { name: zh.editProtection }))
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
-    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    fireEvent.change(within(dialog).getByLabelText(zh.weeklyLimitLabel), { target: { value: '25' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
 
     const saving = await within(dialog).findByRole('button', { name: zh.savingContribution })
     expect(saving).toHaveProperty('disabled', true)
     expect(saving.getAttribute('aria-busy')).toBe('true')
 
-    resolveUpdate({ account: { ...mine, personalReservePercent: 30 } })
+    resolveUpdate({ account: { ...mine, weeklySharedEstimatedApiCostLimitMicros: 25_000_000 } })
     await waitFor(() => { expect(screen.queryByRole('dialog', { name: zh.editProtection })).toBeNull() })
   })
 
@@ -1353,19 +1587,28 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
-  it('shows an explicit warning in the selected shared account when Team usage is unavailable', async () => {
+  it('keeps unavailable usage inline without an account warning or retry button', async () => {
     managementApi.usage.mockRejectedValueOnce(new Error('upstream-usage-secret'))
 
     render(<TeamSettings t={translate} embedded />)
 
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
-    const warning = await within(account).findByRole('alert')
+    expect(await within(account).findByText(zh.recentUsageUnavailable)).toBeDefined()
 
-    expect(within(warning).getByText(zh.usageUnavailableTitle)).toBeDefined()
-    expect(within(warning).getByRole('button', { name: zh.retry })).toBeDefined()
-    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+    expect(within(account).queryByRole('alert')).toBeNull()
+    expect(within(account).queryByText(zh.usageUnavailableTitle)).toBeNull()
+    expect(within(account).queryByRole('button', { name: zh.retry })).toBeNull()
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('获取失败')
     expect(account.textContent).not.toContain('upstream-usage-secret')
+
+    const usageSettings = await openTeamSettings('usage')
+    const usage = within(usageSettings).getByRole('region', { name: '用量' })
+    fireEvent.click(within(usage).getByRole('button', { name: zh.retry }))
+    expect(await within(usage).findByRole('group', { name: zh.myTeamUsage })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '返回 Team' }))
+    const restoredAccount = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
+    expect(within(restoredAccount).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
 
   it('matches the approved weekly-sharing and recent-day account detail', async () => {
@@ -1427,32 +1670,48 @@ describe('Team subscription-pool workspace', () => {
     const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
     const actions = within(account).getByRole('group', { name: zh.accountActions })
 
-    expect(weekly.querySelectorAll('dl > div')).toHaveLength(3)
+    expect(weekly.querySelectorAll('dl > div')).toHaveLength(2)
     expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
-    expect(within(weekly).getByText((_, element) => element?.tagName === 'DD'
-      && /已用.*0\.16.*\/.*共享上限.*1\.00/u.test(element.textContent ?? ''))).toBeDefined()
-    expect(within(weekly).getByRole('button', { name: zh.editProtection })).toBeDefined()
-    expect(within(weekly).getByText(zh.weeklyCapacityReference)).toBeDefined()
-    expect(within(weekly).getByLabelText(zh.amountEstimateHelpLabel)).toBeDefined()
+    const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
+      && /\$0\.16\s*\/\s*\$1\.00\s*编辑/u.test(element.textContent ?? ''))
+    expect(weeklyAmount.textContent).not.toMatch(/已用|共享上限/u)
+    expect(within(weekly).queryByRole('img')).toBeNull()
+    const editLimit = within(weekly).getByRole('button', { name: zh.editSharingLimit })
+    expect(editLimit.textContent).toBe(zh.edit)
+    expect(editLimit.querySelector('svg')).toBeNull()
+    expect(within(weekly).getByText('Pro 20x')).toBeDefined()
+    expect(within(weekly).getByText('US$2,100.00')).toBeDefined()
+    expect(within(weekly).queryByText(/US\$1,554|周剩余预估/)).toBeNull()
+    expect(within(weekly).queryByLabelText(zh.amountEstimateHelpLabel)).toBeNull()
     expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
     expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
     expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
-      && /2 次请求.*Token API 等价金额.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+      && /2 次请求.*API 价格估算（非实际扣费）.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+    expect(within(account).queryByRole('button', { name: zh.recentRequests })).toBeNull()
     expect(within(actions).getByRole('button', { name: '终止共享' })).toBeDefined()
 
-    fireEvent.click(within(weekly).getByRole('button', { name: zh.editProtection }))
+    fireEvent.click(within(weekly).getByRole('button', { name: zh.editSharingLimit }))
     expect((within(screen.getByRole('dialog', { name: zh.editProtection }))
       .getByLabelText(zh.weeklyLimitLabel) as HTMLInputElement).value).toBe('1')
     fireEvent.click(within(screen.getByRole('dialog', { name: zh.editProtection })).getByRole('button', { name: zh.cancel }))
 
     fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
-    expect(screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })).toBeDefined()
-
-    fireEvent.click(within(account).getByRole('button', { name: zh.recentRequests }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
     expect(within(recent).getByText('2500 tokens')).toBeDefined()
+    expect(recent.textContent).not.toContain('0.03')
+  })
+
+  it('labels missing recent-day usage as unavailable instead of showing dash totals', async () => {
+    render(<TeamSettings t={translate} embedded />)
+
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+    const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
+
+    expect(within(recentUsage).getByText('最近 1 天用量暂不可用')).toBeDefined()
+    expect(recentUsage.textContent).not.toContain('— 次请求')
   })
 
   it('uses the approved account directory and selected-account detail workspace', async () => {
@@ -1540,6 +1799,9 @@ describe('Team subscription-pool workspace', () => {
     expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
     expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
+    expect(within(details).getByText('Plus')).toBeDefined()
+    expect(within(details).getByText('US$100.00')).toBeDefined()
+    expect(within(details).queryByText(/US\$68|周剩余预估/)).toBeNull()
     expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
   })
@@ -2728,7 +2990,11 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('usage')
     const mineUsage = within(within(settings).getByRole('region', { name: '用量' }))
       .getByRole('group', { name: zh.myTeamUsage })
-    expect(within(mineUsage).getByText(state)).toBeDefined()
+    if (state === zh.usageStateZero) {
+      expect(within(mineUsage).queryByText(state)).toBeNull()
+    } else {
+      expect(within(mineUsage).getByText(state)).toBeDefined()
+    }
     if (amount === tokens) {
       expect(within(mineUsage).getAllByText(amount)).toHaveLength(2)
     } else {
@@ -2830,7 +3096,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).getByRole('button', { name: zh.revokeInvite }).hasAttribute('disabled')).toBe(false)
   })
 
-  it('creates labeled invitations and exposes Owner removal without legacy role controls', async () => {
+  it('creates invitations without asking for a purpose and exposes Owner removal without legacy role controls', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await openTeamSettings('members')
 
@@ -2841,10 +3107,11 @@ describe('Team subscription-pool workspace', () => {
     expect(zh.createInvite).toBe('生成邀请码')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
+    expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
+    expect(within(inviteDialog).getByLabelText(zh.inviteExpiry)).toBeDefined()
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
-      expect(managementApi.createInvite).toHaveBeenCalledWith('周末协作', 7 * 86_400_000, expectedContext())
+      expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
     })
 
     const tokenDialog = await screen.findByRole('dialog', { name: zh.inviteCreated })
@@ -2874,7 +3141,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await screen.findByText(CREATED_INVITE_TOKEN)
 
@@ -2892,7 +3158,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
 
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
@@ -2914,7 +3179,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.cancel }))
 
@@ -2936,7 +3200,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await screen.findByText(CREATED_INVITE_TOKEN)
 
@@ -2968,7 +3231,6 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    fireEvent.change(within(inviteDialog).getByLabelText(zh.inviteLabel), { target: { value: '周末协作' } })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
 
     await waitFor(() => { expect(managementApi.overview).toHaveBeenCalledTimes(2) })
@@ -3552,8 +3814,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(inviteTrigger)
 
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
-    const inviteLabel = within(inviteDialog).getByLabelText(zh.inviteLabel)
-    await waitFor(() => { expect(document.activeElement).toBe(inviteLabel) })
+    const inviteExpiry = within(inviteDialog).getByLabelText(zh.inviteExpiry)
+    await waitFor(() => { expect(document.activeElement).toBe(inviteExpiry) })
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.cancel }))
 
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })

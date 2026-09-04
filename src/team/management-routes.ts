@@ -1,6 +1,7 @@
 /** Local same-origin Team management proxy. Raw Team keys remain Host-only. */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { parseSubscription } from '../shared/subscription.ts'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -14,6 +15,8 @@ import { OpenAICodexCredentialStore } from '../store.ts'
 import type { CodexProfileSummary } from '../store.ts'
 import {
   TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
   TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
@@ -50,6 +53,7 @@ import {
 } from '../shared/team-management.ts'
 import type {
   TeamManagementConnectionResult,
+  TeamAuthorizationFailureCode,
   TeamConnectionTerminalClearResult,
   TeamConnectionTerminalView,
   TeamManagementDepartureResult,
@@ -109,7 +113,7 @@ import {
   TEAM_USAGE_PATH,
 } from './types.ts'
 import type { TeamCredentialHandoffOffer } from './oauth-handoff.ts'
-import { sealTeamCredentialHandoff } from './oauth-handoff.ts'
+import { sealTeamCredentialHandoff, TEAM_CREDENTIAL_HANDOFF_TTL_MS } from './oauth-handoff.ts'
 import type {
   TeamContributionCapacityBucketSummary,
   TeamContributionCapacitySummary,
@@ -230,6 +234,13 @@ class RemoteTeamError extends Error {
   }
 }
 
+class RemoteTeamTransportError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'RemoteTeamTransportError'
+  }
+}
+
 class TeamManagementContextMismatchError extends Error {
   constructor() {
     super(TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE)
@@ -259,6 +270,28 @@ function projectedOAuthRemoteError(error: unknown): Error {
   return error instanceof RemoteTeamError
     ? new RemoteTeamError(error.status, message)
     : new Error(message)
+}
+
+function projectedBrowserOAuthFailureCode(error: unknown): TeamAuthorizationFailureCode {
+  return safeTeamOAuthErrorMessage(error) === TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
+    ? TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
+    : TEAM_AUTHORIZATION_FAILED_CODE
+}
+
+function rejectsOAuthFailureCodeField(error: unknown): boolean {
+  if (!(error instanceof RemoteTeamError) || error.status !== 400) return false
+  const response = error.responseBody
+  return typeof response === 'object'
+    && response !== null
+    && !Array.isArray(response)
+    && (response as Record<string, unknown>).error === 'request contains an unknown field'
+}
+
+function isRetryableRemoteTeamFailure(error: unknown): boolean {
+  if (error instanceof RemoteTeamError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500
+  }
+  return error instanceof RemoteTeamTransportError
 }
 
 function sameTeamManagementContext(
@@ -453,6 +486,7 @@ function statusFor(error: unknown): number {
   if (error instanceof TeamManagementContextMismatchError) return 409
   if (error instanceof TeamManagementLocalAccountAlreadySharedError) return 409
   if (error instanceof TeamManagementBrowserOAuthAlreadyPendingError) return 409
+  if (error instanceof RemoteTeamTransportError) return 502
   if (error instanceof RemoteTeamError) {
     if (error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) return error.status
     return 502
@@ -834,6 +868,7 @@ function projectCapacity(value: unknown): TeamContributionCapacitySummary {
 
 function projectCapacityBucket(value: unknown): TeamContributionCapacityBucketSummary {
   const item = record(value, 'capacity bucket')
+  const subscription = parseSubscription(item.subscription)
   const id = stringField(item, 'id')
   if (id !== 'codex' && id !== 'codex_spark') throw new Error('remote Team returned an invalid capacity bucket id')
   const reason = stringField(item, 'reason')
@@ -853,6 +888,7 @@ function projectCapacityBucket(value: unknown): TeamContributionCapacityBucketSu
   return {
     id,
     reason: reason as TeamContributionCapacityBucketSummary['reason'],
+    ...subscription === undefined ? {} : { subscription },
     ...remainingPercent === undefined ? {} : { remainingPercent },
     ...resetAt === undefined ? {} : { resetAt },
     ...sharedRequestsUsed === undefined ? {} : { sharedRequestsUsed },
@@ -2189,17 +2225,24 @@ class TeamManagementProxy {
       }
       if (offer.version !== 1) throw new Error('remote Team returned an unsupported OAuth handoff version')
     } catch (error: unknown) {
-      if (discardInitialOnFailure) {
-        await this.cancelRemoteOAuthBestEffort(account.id, true, key, expectedContext)
-      }
+      await this.cancelRemoteOAuthBestEffort(
+        account.id,
+        discardInitialOnFailure,
+        key,
+        expectedContext,
+        projectedBrowserOAuthFailureCode(error),
+      )
       throw error
     }
 
     const frozenExpectedContext = Object.freeze({ ...expectedContext })
+    // A remote absolute timestamp is not a safe local timer when the two Hosts have clock skew.
+    // The Team Host remains authoritative and rejects a handoff after its own deadline.
+    const localExpiresAt = this.now() + TEAM_CREDENTIAL_HANDOFF_TTL_MS
     const pending = Object.freeze({
       accountId: account.id,
       method: 'browser',
-      expiresAt: offer.expiresAt,
+      expiresAt: localExpiresAt,
       discardInitial: discardInitialOnFailure,
     } satisfies TeamManagementPendingBrowserAuthorization)
     try {
@@ -2210,6 +2253,7 @@ class TeamManagementProxy {
         discardInitialOnFailure,
         key,
         frozenExpectedContext,
+        projectedBrowserOAuthFailureCode(error),
       )
       throw error
     }
@@ -2222,7 +2266,7 @@ class TeamManagementProxy {
     }
     const expirationTimer = setTimeout(() => {
       abort(new Error('OpenAI Codex sign-in timed out'), false)
-    }, Math.max(0, offer.expiresAt - this.now()))
+    }, Math.max(0, localExpiresAt - this.now()))
     let resolveAuthorization!: (url: string) => void
     let rejectAuthorization!: (error: unknown) => void
     let authorizationSettled = false
@@ -2262,11 +2306,13 @@ class TeamManagementProxy {
       .catch(async (error: unknown) => {
         if (!authorizationSettled) rejectAuthorization(error)
         if (!suppressAutomaticCleanup) {
+          const failureCode = projectedBrowserOAuthFailureCode(error)
           await this.cancelRemoteOAuthBestEffort(
             account.id,
             discardInitialOnFailure,
             key,
             frozenExpectedContext,
+            failureCode,
           )
           this.onBackgroundError(projectedOAuthRemoteError(error))
         }
@@ -2285,7 +2331,7 @@ class TeamManagementProxy {
     })
     // Completion stays Host-side after the Browser receives and opens this URL.
     completion.catch(() => {})
-    return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: offer.expiresAt }
+    return { account, method: 'browser', authorizationUrl: await authorization, expiresAt: localExpiresAt }
   }
 
   /** Automatic cleanup is idempotent; retry one transport failure before giving up. */
@@ -2294,27 +2340,34 @@ class TeamManagementProxy {
     discardInitial: boolean,
     key: string,
     expectedContext: TeamManagementExpectedContext,
+    failureCode?: TeamAuthorizationFailureCode,
   ): Promise<boolean> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
-          method: 'POST', body: { accountId, discardInitial }, key,
-        }), 'OAuth cancellation')
-        const account = projectContribution(item.account)
-        if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
-        await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
-        return true
-      } catch (error: unknown) {
-        if (
-          error instanceof RemoteTeamError
-          && error.status >= 400
-          && error.status < 500
-          && error.status !== 408
-          && error.status !== 429
-        ) return false
+    const cancel = async (
+      body: Record<string, unknown>,
+      allowLegacyFallback: boolean,
+    ): Promise<boolean | 'legacy_contract'> => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const item = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH, {
+            method: 'POST', body, key,
+          }), 'OAuth cancellation')
+          const account = projectContribution(item.account)
+          if (account.id !== accountId) throw new Error('remote Team returned a mismatched OAuth contribution')
+          await this.clearOAuthRecoveryAfterFinalAccount(account, expectedContext)
+          return true
+        } catch (error: unknown) {
+          if (allowLegacyFallback && rejectsOAuthFailureCodeField(error)) return 'legacy_contract'
+          if (!isRetryableRemoteTeamFailure(error)) return false
+        }
       }
+      return false
     }
-    return false
+
+    if (failureCode !== undefined) {
+      const extended = await cancel({ accountId, discardInitial, failureCode }, true)
+      if (extended !== 'legacy_contract') return extended
+    }
+    return await cancel({ accountId, discardInitial }, false) === true
   }
 
   private async clearOAuthRecoveryAfterFinalAccount(
@@ -2356,7 +2409,7 @@ class TeamManagementProxy {
       if (validationIntent !== undefined && providerAccountId !== validationIntent.expectedProviderAccountId) {
         throw new Error('independently authorized OpenAI account does not match the selected local account')
       }
-      const currentKey = await this.expectedMutationKey(expectedContext)
+      const currentKey = await this.expectedOAuthMutationKey(expectedContext, signal)
       if (signal.aborted) throw abortReason(signal)
       if (validationIntent !== undefined) {
         await this.persistLocalContributionBinding({
@@ -2370,7 +2423,7 @@ class TeamManagementProxy {
         { teamId: account.teamId, accountId: account.id },
         { label: profile.label, credential: { ...credential, accountId: providerAccountId } },
       )
-      await this.completeRemoteOAuthHandoff(account, envelope, currentKey)
+      await this.completeRemoteOAuthHandoff(account, envelope, currentKey, signal)
       await this.removePendingBrowserOAuth(account.id, expectedContext).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to clear browser OAuth recovery metadata', { cause: error }))
       })
@@ -2383,9 +2436,11 @@ class TeamManagementProxy {
     account: TeamManagementContributionSummary,
     envelope: ReturnType<typeof sealTeamCredentialHandoff>,
     key: string,
+    signal: AbortSignal,
   ): Promise<void> {
     let failure: unknown
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (signal.aborted) throw abortReason(signal)
       try {
         const completed = record(await this.remote(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH, {
           method: 'POST', body: { accountId: account.id, envelope }, key,
@@ -2399,13 +2454,25 @@ class TeamManagementProxy {
         return
       } catch (error: unknown) {
         failure = error
-        if (
-          error instanceof RemoteTeamError
-          && error.status >= 400
-          && error.status < 500
-          && error.status !== 408
-          && error.status !== 429
-        ) break
+        if (!isRetryableRemoteTeamFailure(error)) break
+      }
+    }
+    throw failure
+  }
+
+  /** The credential is already captured, so survive one transient Team read before discarding it. */
+  private async expectedOAuthMutationKey(
+    expectedContext: TeamManagementExpectedContext,
+    signal: AbortSignal,
+  ): Promise<string> {
+    let failure: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (signal.aborted) throw abortReason(signal)
+      try {
+        return await this.expectedMutationKey(expectedContext)
+      } catch (error: unknown) {
+        failure = error
+        if (!isRetryableRemoteTeamFailure(error)) throw error
       }
     }
     throw failure
@@ -3306,9 +3373,16 @@ class TeamManagementProxy {
         ...options.body === undefined ? {} : { body: JSON.stringify(options.body) },
       })
     } catch (error: unknown) {
-      throw new Error(`remote Team unavailable: ${safeMessage(error)}`)
+      throw new RemoteTeamTransportError(`remote Team unavailable: ${safeMessage(error)}`)
     }
-    const value = await readRemoteJson(response)
+    let value: unknown
+    try {
+      value = await readRemoteJson(response)
+    } catch (error: unknown) {
+      // An HTTP failure remains classifiable by status even when a proxy replaces or truncates its body.
+      if (response.ok) throw error
+      value = undefined
+    }
     if (!response.ok) {
       if (
         response.status === 401
@@ -3341,7 +3415,9 @@ async function readRemoteJson(response: Response): Promise<unknown> {
   let bytes = 0
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await reader.read().catch((error: unknown) => {
+        throw new RemoteTeamTransportError(`remote Team response interrupted: ${safeMessage(error)}`)
+      })
       if (done) break
       bytes += value.byteLength
       if (bytes > MAX_REMOTE_BODY_BYTES) throw new Error('remote Team response is too large')

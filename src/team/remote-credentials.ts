@@ -3,6 +3,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OpenAICodexUsage } from '../shared/types.ts'
+import { normalizeCodexPlan } from '../shared/subscription.ts'
 import type {
   TeamCredentialActiveState,
   TeamCredentialAuthorizationState,
@@ -744,7 +745,9 @@ function parseUsage(value: unknown): OpenAICodexUsage {
   })
   const credits = parseCredits(value['credits'])
   const individualLimit = parseIndividualLimit(value['individualLimit'])
+  const planType = normalizeCodexPlan(value['planType'])
   return {
+    ...planType === undefined ? {} : { planType },
     rateLimits,
     ...credits === undefined ? {} : { credits },
     ...individualLimit === undefined ? {} : { individualLimit },

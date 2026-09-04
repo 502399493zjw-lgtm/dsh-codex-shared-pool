@@ -19,25 +19,22 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
-  it('bounds the subscription-pool settings shell with stable viewport gutters', () => {
+  it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
+    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
+    expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
+    expect(css).toMatch(/\.directoryHint\s*\{[^}]*flex-basis:\s*100%;/s)
+  })
+
+  it('caps the plugin page to the visible settings content width', () => {
+    expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
+    expect(css).not.toMatch(/width:\s*min\(100%,\s*calc\(100vw - 320px\),\s*960px\)/)
+  })
+
+  it('leaves the subscription-pool settings shell dimensions to stock DSH', () => {
     expect(subscriptionPoolSource).toMatch(/data-dsh-codex-subscription-pool/)
+    expect(subscriptionPoolCss).not.toMatch(/role=['"]dialog['"]|aria-modal|:has\(\[data-dsh-codex-subscription-pool\]\)/)
     expect(subscriptionPoolCss).toMatch(
-      /@media \(min-width: 641px\)\s*\{[\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*\{[^}]*width:\s*clamp\(760px,\s*calc\(100vw - 48px\),\s*1280px\);[^}]*max-width:\s*calc\(100vw - 24px\);[^}]*min-width:\s*0;/,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*width:\s*clamp\(200px,\s*18vw,\s*224px\);[^}]*flex:\s*0 0 clamp\(200px,\s*18vw,\s*224px\);/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\)\s*\{[^}]*min-width:\s*0;/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\) > :last-child\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*padding-right:\s*clamp\(24px,\s*4vw,\s*48px\);[^}]*padding-left:\s*clamp\(24px,\s*4vw,\s*48px\);/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /body\[data-ds-dark-theme\][\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*\{[^}]*border:\s*1px solid #35383d;[^}]*background:\s*#242629;/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /body\[data-ds-dark-theme\][\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*border-right:\s*1px solid #383c42;/s,
+      /\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s,
     )
   })
 
@@ -53,25 +50,14 @@ describe('Team Settings responsive container contract', () => {
     )
   })
 
-  it('stacks the stock settings shell instead of squeezing Team content on phones', () => {
+  it('lets the subscription-pool tabs shrink inside the stock phone content slot', () => {
     expect(subscriptionPoolCss).toMatch(
-      /@media \(max-width: 640px\)\s*\{[\s\S]*?\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*\{[^}]*width:\s*calc\(100vw - 16px\);[^}]*flex-direction:\s*column;/s,
+      /@media \(max-width: 640px\)\s*\{[\s\S]*?\.tabs\s*\{[^}]*gap:\s*8px;[^}]*\}[\s\S]*?\.tab\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1 1 0;/s,
     )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav\s*\{[^}]*width:\s*100%;[^}]*border-bottom:\s*1px solid var\(--dsw-alias-border-l2,/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav > :last-child\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav > :last-child > button\s*\{[^}]*min-height:\s*44px;/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> nav > :last-child > button > span\s*\{[^}]*white-space:\s*normal;[^}]*word-break:\s*keep-all;[^}]*text-overflow:\s*clip;/s,
-    )
-    expect(subscriptionPoolCss).toMatch(
-      /\[role='dialog'\]\[aria-modal='true'\]:has\(\[data-dsh-codex-subscription-pool\]\)[^\{]*> :not\(nav\)\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;/s,
-    )
+  })
+
+  it('wraps long Team configuration keys in the stock phone content slot', () => {
+    expect(css).toMatch(/\.body\s*\{[^}]*overflow-wrap:\s*anywhere;/s)
   })
 
   it('keeps account selection as a desktop master-detail workspace', () => {
@@ -81,8 +67,13 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(
       /\.workspaceShell\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(132px,\s*152px\)\s+minmax\(0,\s*1fr\);/s,
     )
+    expect(css).toMatch(/\.workspaceShell\s*\{[^}]*height:\s*clamp\(500px,\s*58vh,\s*580px\);/s)
+    expect(css).toMatch(/\.workspaceMain\s*\{[^}]*overflow-y:\s*auto;/s)
+    expect(css).toMatch(/\.workspaceBack\s*\{[^}]*width:\s*36px;[^}]*height:\s*36px;[^}]*margin:\s*auto 0 0;[^}]*border:\s*0;/s)
+    expect(css).toMatch(/\.workspaceTitle\s*\{[^}]*font-size:\s*18px;[^}]*line-height:\s*24px;/s)
+    expect(css).toMatch(/\.workspaceNavigation button\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*19px;/s)
     expect(css).toMatch(
-      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 460px\)\s*\{[\s\S]*?\.workspaceShell\s*\{[^}]*height:\s*auto;[^}]*grid-template-columns:\s*1fr;[^}]*overflow:\s*visible;/,
     )
     expect(css).toMatch(
       /\.accountWorkspace\s*\{[^}]*min-height:\s*640px;[^}]*grid-template-columns:\s*minmax\(260px,\s*\.82fr\)\s+minmax\(0,\s*1\.45fr\);/s,
@@ -204,9 +195,15 @@ describe('Team Settings responsive container contract', () => {
   })
 
   it('keeps the prototype usage hierarchy instead of equal metric tiles', () => {
-    expect(css).toMatch(/\.usageCards\s*\{[^}]*border-top:\s*1px solid var\(--team-line-strong\);[^}]*border-bottom:\s*1px solid var\(--team-line-strong\);/s)
+    expect(css).toMatch(/\.usageRefresh\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*padding:\s*0;/s)
+    expect(css).toMatch(/\.usageHeading\s*\{[^}]*font-size:\s*19px;[^}]*line-height:\s*26px;/s)
+    expect(css).toMatch(/\.usageCards\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-radius:\s*10px;[^}]*overflow:\s*hidden;/s)
+    expect(css).toMatch(/\.usageCard\s*\{[^}]*padding:\s*16px;[^}]*background:\s*color-mix\(/s)
     expect(css).toMatch(/\.usageMetric:first-child\s+dd\s*\{[^}]*font-size:\s*clamp\(24px,\s*4cqi,\s*32px\);/s)
-    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;/s)
+    expect(css).toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;[^}]*padding:\s*7px 0;/s)
+    expect(css).not.toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:/s)
+    expect(css).toMatch(/\.usageMetric dd\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*normal;/s)
+    expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
 
   it('keeps the prototype compact Team bar and detail rhythm', () => {
@@ -221,8 +218,9 @@ describe('Team Settings responsive container contract', () => {
 
   it('stacks owner usage groups only when the settings slot is genuinely narrow', () => {
     expect(css).toMatch(
-      /@container team-settings \(max-width: 520px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
+      /@container team-settings \(max-width: 620px\)\s*\{[\s\S]*?\.usageCards\[data-owner='true'\]\s*\{[^}]*grid-template-columns:\s*1fr;/,
     )
+    expect(css).toMatch(/\.usageCard \+ \.usageCard\s*\{[^}]*border-top:\s*1px solid var\(--team-line\);[^}]*border-left:\s*0;[^}]*padding:\s*16px;/s)
   })
 
   it('keeps the invitation entry action on one line', () => {
@@ -231,6 +229,12 @@ describe('Team Settings responsive container contract', () => {
     )
     expect(css).toMatch(
       /\.usageHeader\s*>\s*button\s*\{[^}]*white-space:\s*nowrap;/s,
+    )
+  })
+
+  it('gives the invite expiry control a visible frame', () => {
+    expect(css).toMatch(
+      /\.select\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);/s,
     )
   })
 })

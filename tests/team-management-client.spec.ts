@@ -759,6 +759,7 @@ describe('Team management browser API', () => {
     const unsafePatch = {
       status: 'paused' as const,
       personalReservePercent: 35,
+      weeklySharedEstimatedApiCostLimitMicros: 1_500_000,
       allowedModels: ['gpt-5-codex'],
       dailySharedCreditLimit: 424_242,
       futureHostOnlyField: 'must-not-cross',
@@ -772,6 +773,7 @@ describe('Team management browser API', () => {
       expectedContext: EXPECTED_CONTEXT,
       status: 'paused',
       personalReservePercent: 35,
+      weeklySharedEstimatedApiCostLimitMicros: 1_500_000,
       allowedModels: ['gpt-5-codex'],
     })
   })

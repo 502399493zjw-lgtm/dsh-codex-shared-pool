@@ -936,6 +936,7 @@ export class TeamManagementApi {
       ...patch.status === undefined ? {} : { status: patch.status },
       ...patch.personalReservePercent === undefined ? {} : { personalReservePercent: patch.personalReservePercent },
       ...patch.maxSharedRequestsPerWindow === undefined ? {} : { maxSharedRequestsPerWindow: patch.maxSharedRequestsPerWindow },
+      ...patch.weeklySharedEstimatedApiCostLimitMicros === undefined ? {} : { weeklySharedEstimatedApiCostLimitMicros: patch.weeklySharedEstimatedApiCostLimitMicros },
       ...patch.maxSharedConcurrency === undefined ? {} : { maxSharedConcurrency: patch.maxSharedConcurrency },
       ...patch.allowedModels === undefined ? {} : { allowedModels: [...patch.allowedModels] },
     }

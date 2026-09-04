@@ -13,110 +13,6 @@
   color: var(--subscription-pool-text, var(--dsw-alias-label-primary));
 }
 
-/*
- * DSH rc.8 fixes the settings dialog at 800px and does not expose a wide
- * presentation option through settings.section. Keep this override tied to
- * the subscription-pool marker so every other settings section retains the
- * stock shell dimensions.
- */
-@media (min-width: 641px) {
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
-    width: clamp(760px, calc(100vw - 48px), 1280px);
-    max-width: calc(100vw - 24px);
-    min-width: 0;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
-    width: clamp(200px, 18vw, 224px);
-    flex: 0 0 clamp(200px, 18vw, 224px);
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
-    min-width: 0;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) > :last-child {
-    width: 100%;
-    min-width: 0;
-    padding-right: clamp(24px, 4vw, 48px);
-    padding-left: clamp(24px, 4vw, 48px);
-  }
-
-  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
-    border: 1px solid #35383d;
-    background: #242629;
-  }
-
-  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
-    border-right: 1px solid #383c42;
-    background: #242629;
-  }
-
-  :global(body[data-ds-dark-theme]) :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
-    background: #242629;
-  }
-}
-
-@media (max-width: 640px) {
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) {
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-    max-height: calc(100dvh - 16px);
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav {
-    width: 100%;
-    flex: 0 0 auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--dsw-alias-border-l2, rgba(31, 35, 41, 0.2));
-    padding: 8px 10px;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :first-child {
-    display: none;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child {
-    display: grid;
-    width: 100%;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 4px;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child > button {
-    width: 100%;
-    min-width: 0;
-    min-height: 44px;
-    justify-content: flex-start;
-    padding: 6px 8px;
-    font-size: 12px;
-    line-height: 16px;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > nav > :last-child > button > span {
-    overflow: visible;
-    white-space: normal;
-    word-break: keep-all;
-    text-overflow: clip;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) {
-    width: 100%;
-    min-width: 0;
-    min-height: 0;
-    flex: 1 1 auto;
-  }
-
-  :global([role='dialog'][aria-modal='true']:has([data-dsh-codex-subscription-pool])) > :not(nav) > :last-child {
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
-}
-
 :global(body[data-ds-dark-theme]) .page {
   --subscription-pool-text: #f3f5f7;
   --subscription-pool-muted: #afb5bd;
@@ -199,6 +95,15 @@
 }
 
 @media (max-width: 640px) {
+  .tabs {
+    gap: 8px;
+  }
+
+  .tab {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
   .header {
     padding-bottom: 20px;
   }

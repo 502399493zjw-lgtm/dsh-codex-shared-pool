@@ -1,6 +1,9 @@
 /** Invite-only Team capacity management inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SubscriptionEstimate, subscriptionEstimateLabels } from '../SubscriptionEstimate.tsx'
+import { subscriptionFromUsage } from '../../shared/subscription.ts'
+import type { CodexSubscription } from '../../shared/subscription.ts'
 import {
   Button,
   IconCopyOutline16,
@@ -40,12 +43,16 @@ import type { TeamSettingsKey } from './locales.ts'
 import { createTeamUsageViewModel } from './team-usage-view-model.ts'
 import type { TeamUsageAggregateInput, TeamUsageState } from './team-usage-view-model.ts'
 import {
+  openAuthorizationPopupBridge,
+  type AuthorizationPopupController,
+} from '../authorization-popup.ts'
+import {
   canMemberLeaveTeam,
   canRemoveTeamMember,
   canTransferTeamOwnership,
   groupTeamContributions,
   localProfilesAvailableForTeam,
-  parseContributionProtectionDraft,
+  parseWeeklySharingLimitDraft,
 } from './team-settings-contract.ts'
 import styles from './TeamSettings.module.css'
 
@@ -57,8 +64,7 @@ const TEAM_INVITE_TOKEN_PATTERN = /^dsh_invite_[A-Za-z0-9_-]{16,}$/u
 const LOCAL_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
 const LOCAL_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
 const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
-/** Frozen design reference from the phase-two prototype; it is not a live account balance. */
-const CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS = 5_960_000
+const DEFAULT_PERSONAL_RESERVE_PERCENT = 20
 
 type ContributionCapacityReason = NonNullable<TeamManagementContributionSummary['capacity']>['buckets'][number]['reason']
 type AvailabilityDotState = 'done' | 'warning' | 'error'
@@ -113,7 +119,6 @@ export interface TeamSettingsProps extends Partial<TeamSettingsInjected> {
 }
 
 interface InviteDraft {
-  readonly label: string
   readonly expiresInMs: number
   readonly authorizationContext: string
 }
@@ -148,6 +153,7 @@ interface ActiveBrowserAuthorization {
 }
 
 interface LocalCodexProfileSummary {
+  readonly subscription?: CodexSubscription
   readonly id: string
   readonly label: string
   readonly inUse: boolean
@@ -225,7 +231,9 @@ function parseLocalProfiles(value: unknown): readonly LocalCodexProfileSummary[]
     const item = profile as Record<string, unknown>
     if (typeof item.id !== 'string' || typeof item.label !== 'string') return []
     const remainingPercent = parseLocalRemainingPercent(item)
+    const subscription = subscriptionFromUsage(item.usage)
     return [{
+      ...(subscription === undefined ? {} : { subscription }),
       id: item.id,
       label: item.label,
       inUse: item.inUse === true,
@@ -252,6 +260,7 @@ function mergeLocalProfileDirectory(
     return {
       ...profile,
       ...(previous.remainingPercent === undefined ? {} : { remainingPercent: previous.remainingPercent }),
+      ...(previous.subscription === undefined ? {} : { subscription: previous.subscription }),
       ...(previous.quotaError === undefined ? {} : { quotaError: previous.quotaError }),
     }
   })
@@ -270,10 +279,7 @@ type TeamWorkspaceView = 'usage' | 'members' | 'invitations'
 
 interface ContributionProtectionEdit {
   readonly account: TeamManagementContributionSummary
-  readonly reserve: string
-  readonly requestCap: string
   readonly weeklyLimitUsd: string
-  readonly models: string
 }
 
 type PendingTeamInvite = Extract<TeamManagementOverview, { readonly viewerRole: 'owner' }>['invites'][number]
@@ -324,6 +330,15 @@ function errorMessage(
   return message
 }
 
+function browserAuthorizationFailureMessage(
+  failureCode: string | undefined,
+  t: TeamSettingsInjected['t'],
+): string {
+  if (failureCode === TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE) return t('authorizationNetworkUnavailable')
+  if (failureCode === TEAM_AUTHORIZATION_FAILED_CODE) return t('authorizationFailed')
+  return t('browserAuthorizationEnded')
+}
+
 function errorStatus(cause: unknown): number | undefined {
   if (typeof cause !== 'object' || cause === null || !('status' in cause)) return undefined
   return typeof cause.status === 'number' ? cause.status : undefined
@@ -357,6 +372,14 @@ function formatUsdMicros(value: string | number | null | undefined): string {
   const micros = typeof value === 'number' ? value : Number(value)
   return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .format(micros / 1_000_000)
+}
+
+export function formatWeeklyUsdMicros(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '—'
+  const micros = typeof value === 'number' ? value : Number(value)
+  const amount = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    .format(micros / 1_000_000)
+  return `$${amount}`
 }
 
 function documentAllowsInviteSecret(): boolean {
@@ -619,7 +642,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const ownerAuthorizationContextRef = useRef<string | undefined>(undefined)
   const memberAuthorizationContextRef = useRef<string | undefined>(undefined)
   const teamSettingsReturnFocus = useRef<string | undefined>(undefined)
-  const oauthPopup = useRef<Window | null>(null)
+  const oauthPopup = useRef<AuthorizationPopupController | null>(null)
   const oauthStartLocked = useRef(false)
   const oauthTransitionLocked = useRef(false)
   const oauthPresentationActive = useRef(false)
@@ -627,6 +650,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const oauthExpectedContext = useRef<TeamManagementExpectedContext | undefined>(undefined)
   const oauthPresentedAfterRequestId = useRef(0)
   const pendingBrowserAuthorizationActive = useRef(false)
+  const recoveredBrowserAuthorization = useRef<ActiveBrowserAuthorization | undefined>(undefined)
   const oauthOperationEpoch = useRef(0)
   const mounted = useRef(true)
 
@@ -641,6 +665,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     oauthReturnSelection.current = undefined
     oauthExpectedContext.current = undefined
     oauthPresentedAfterRequestId.current = 0
+    recoveredBrowserAuthorization.current = undefined
     setOAuth(undefined)
     setOAuthDiscardInitial(false)
     setOAuthNavigationBlocked(false)
@@ -659,6 +684,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       oauthExpectedContext.current = undefined
       oauthPresentedAfterRequestId.current = 0
       pendingBrowserAuthorizationActive.current = false
+      recoveredBrowserAuthorization.current = undefined
       oauthPopup.current?.close()
       oauthPopup.current = null
     }
@@ -754,6 +780,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       || pendingLocalAuthorization.authorizationContext === teamAuthorizationContext)
     ? pendingLocalAuthorization
     : undefined
+  const activePendingLocalProfile = activePendingLocalAuthorization === undefined
+    ? undefined
+    : localProfiles.find(profile => profile.id === activePendingLocalAuthorization.id)
   const activeInviteDraft = inviteDraft !== undefined
     && (authorizationSnapshotPending || inviteDraft.authorizationContext === ownerAuthorizationContext)
     ? inviteDraft
@@ -1189,8 +1218,38 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       setSelectedAccountId(returnSelection)
     }
     clearOAuthPresentation()
-    if (account === undefined) setError(t('browserAuthorizationEnded'))
+    if (account?.status !== 'active') {
+      setError(browserAuthorizationFailureMessage(account?.lastError, t))
+    }
   }, [clearOAuthPresentation, oauth, overview, overviewSnapshotRequestId, status, t])
+
+  useEffect(() => {
+    if (oauth !== undefined || overview === undefined || oauthTransitionLocked.current) return
+    const actualContext = createTeamExpectedContext(status, overview)
+    if (projectedBrowserAuthorization !== undefined) {
+      if (actualContext !== undefined) {
+        recoveredBrowserAuthorization.current = {
+          ...projectedBrowserAuthorization,
+          expectedContext: actualContext,
+        }
+      }
+      return
+    }
+    const recovered = recoveredBrowserAuthorization.current
+    if (recovered === undefined) return
+    const account = overview.contributions.find(item => item.id === recovered.accountId)
+    if (account?.status === 'authorizing') return
+    recoveredBrowserAuthorization.current = undefined
+    if (!isSameTeamExpectedContext(recovered.expectedContext, actualContext)) {
+      setTeamContextChanged(true)
+      return
+    }
+    if (account?.status === 'active') {
+      setSelectedAccountId(contributionSelectionKey(account.id))
+      return
+    }
+    setError(browserAuthorizationFailureMessage(account?.lastError, t))
+  }, [oauth, overview, projectedBrowserAuthorization, status, t])
 
   useEffect(() => {
     if (overview === undefined) return
@@ -1276,23 +1335,21 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     const epoch = ++oauthOperationEpoch.current
     oauthReturnSelection.current = selectedAccountId
     oauthExpectedContext.current = expectedContext
-    let pendingPopup: Window | null = null
+    let pendingPopup: AuthorizationPopupController | null = null
     if (method === 'browser') {
       try {
-        pendingPopup = window.open('about:blank', '_blank')
-        if (pendingPopup !== null) {
-          pendingPopup.opener = null
-          oauthPopup.current?.close()
-          oauthPopup.current = pendingPopup
-        }
+        pendingPopup = openAuthorizationPopupBridge()
       } catch {
-        pendingPopup?.close()
-        if (oauthPopup.current === pendingPopup) oauthPopup.current = null
+        pendingPopup = null
+      }
+      if (pendingPopup === null) {
         oauthStartLocked.current = false
         clearOAuthPresentation()
         if (isCurrentOAuthOperation(epoch)) setError(t('browserPopupOpenFailed'))
         return Promise.resolve()
       }
+      oauthPopup.current?.close()
+      oauthPopup.current = pendingPopup
     }
 
     return run(busyName, async () => {
@@ -1307,16 +1364,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         onPresented?.()
 
         if (challenge.method === 'browser') {
-          if (pendingPopup === null) {
+          const navigated = pendingPopup !== null && await pendingPopup.navigate(challenge.authorizationUrl)
+          if (!isCurrentOAuthOperation(epoch)) {
+            pendingPopup?.close()
+            return
+          }
+          if (!navigated) {
+            pendingPopup?.close()
+            if (oauthPopup.current === pendingPopup) oauthPopup.current = null
             setOAuthNavigationBlocked(true)
-          } else {
-            try {
-              pendingPopup.location.replace(challenge.authorizationUrl)
-            } catch {
-              pendingPopup.close()
-              if (oauthPopup.current === pendingPopup) oauthPopup.current = null
-              setOAuthNavigationBlocked(true)
-            }
+          } else if (pendingPopup?.window === null && oauthPopup.current === pendingPopup) {
+            // The Codex in-app browser adopted the authorization tab. The Host
+            // acknowledged navigation, so the provider flow no longer depends
+            // on a WindowProxy owned by this settings view.
+            oauthPopup.current = null
           }
         } else {
           pendingPopup?.close()
@@ -2001,6 +2062,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           data-stale={quotaIsStale ? 'true' : undefined}
         >
           <h3>{t('capacityTitle')}</h3>
+          <SubscriptionEstimate subscription={profile.subscription} labels={subscriptionEstimateLabels(t)} />
           <div className={styles.capacityLine}>
             <span>{t('capacityCodex')}</span>
             <strong>{profile.remainingPercent === undefined
@@ -2062,13 +2124,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionAccount = (account: TeamManagementContributionSummary) => {
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
-      const currentWeekAggregate = accountUsage?.currentUtcWeek?.aggregate
+      const weeklyUsed = formatWeeklyUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
-      const remainingCapacity = capacityBucket?.remainingPercent === undefined
-        ? t('capacityQuotaUnavailable')
-        : `${capacityBucket.remainingPercent}%`
+      const subscription = account.capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
+      const remainingCapacity = usageUnavailable
+        ? t('accountCapacityFetchFailed')
+        : capacityBucket?.remainingPercent === undefined
+          ? t('capacityQuotaUnavailable')
+          : `${capacityBucket.remainingPercent}%`
+      const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
+        ? '∞'
+        : formatWeeklyUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const activeCapacityReason = account.status === 'active'
         ? activeContributionCapacityReason(account)
@@ -2090,12 +2158,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const openProtection = () => {
         setProtectionEdit({
           account,
-          reserve: String(account.personalReservePercent),
-          requestCap: account.maxSharedRequestsPerWindow === null ? '' : String(account.maxSharedRequestsPerWindow),
           weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
             ? ''
             : String(account.weeklySharedEstimatedApiCostLimitMicros / 1_000_000),
-          models: account.allowedModels.join(', '),
         })
       }
       return (
@@ -2139,31 +2204,18 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             )}
             {contributionHint === undefined ? null : <p>{contributionHint}</p>}
           </section>
-          {usageUnavailable ? (
-            <div className={styles.accountUsageWarning} role="alert">
-              <span>{t('usageUnavailableTitle')}</span>
-              <Button size="sm" variant="outline" disabled={usageLoading} onClick={() => { void refreshUsage() }}>{t('retry')}</Button>
-            </div>
-          ) : null}
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
+            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
             <dl className={styles.compactSummaryList}>
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
                 <dd className={styles.weeklyAmount}>
-                  <strong>{t('usedAmount', { amount: formatUsdMicros(currentWeekAggregate?.estimatedCostUsdMicros) })}</strong>
-                  <span aria-hidden="true">/</span>
-                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editProtection')} disabled={busy !== undefined} onClick={openProtection}>{account.weeklySharedEstimatedApiCostLimitMicros == null
-                    ? t('sharedLimitNoLimit')
-                    : t('sharedLimitAmount', { amount: formatUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros) })}</button>
+                  <span className={styles.weeklyLimitValue}>{weeklyUsed} / {weeklyLimit}</span>
+                  <button type="button" className={styles.inlineLimitButton} aria-label={t('editSharingLimit')} title={t('editSharingLimit')} disabled={busy !== undefined} onClick={openProtection}>
+                    {t('edit')}
+                  </button>
                 </dd>
-              </div>
-              <div>
-                <dt className={styles.estimateLabel}>
-                  <span>{t('weeklyCapacityReference')}</span>
-                  <button type="button" className={styles.estimateHelp} aria-label={t('amountEstimateHelpLabel')} title={t('amountEstimateHelp')}>?</button>
-                </dt>
-                <dd>{t('aboutAmount', { amount: formatUsdMicros(CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS) })}</dd>
               </div>
               <div>
                 <dt>{t('accountRemainingCapacity')}</dt>
@@ -2178,18 +2230,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
               }}>{t('viewSevenDays')}</Button>
             </header>
-            <p className={styles.compactRecentLine}>
-              <strong>{t('requestCount', { count: last24HoursAggregate?.requestCount ?? '—' })}</strong>
-              <span aria-hidden="true"> · </span>
-              <span>{t('tokenApiEquivalent')}</span>{' '}
-              <strong>{formatUsdMicros(last24HoursAggregate?.estimatedCostUsdMicros)}</strong>
-            </p>
+            {last24HoursAggregate === undefined
+              ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
+              : <p className={styles.compactRecentLine}>
+                  <strong>{t('requestCount', { count: last24HoursAggregate.requestCount })}</strong>
+                  <span aria-hidden="true"> · </span>
+                  <span>{t('tokenApiEquivalent')}</span>{' '}
+                  <strong>{formatUsdMicros(last24HoursAggregate.estimatedCostUsdMicros)}</strong>
+                </p>}
           </section>
-          <footer className={styles.detailFooter}>
-            <Button className={styles.detailFooterButton} variant="ghost" onClick={() => {
-              setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
-            }}>{t('recentRequests')}</Button>
-          </footer>
         </article>
       )
     }
@@ -2387,8 +2436,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <section className={styles.workspaceShell} role="region" aria-label={t('teamSettingsTitle')}>
           <aside className={styles.workspaceRail} aria-label={t('workspaceNavigation')}>
             <div className={styles.workspaceBrand}>
-              <p className={styles.workspaceKicker}>{t('workspaceKicker')}</p>
-              <h2 className={styles.workspaceTitle}>{t('workspaceTitle')}</h2>
+              <h2 className={styles.workspaceTitle}>{t('teamSettingsTitle')}</h2>
             </div>
             <nav className={styles.workspaceNavigation} aria-label={t('workspaceNavigation')}>
               <button type="button" aria-current={workspaceView === 'usage' ? 'page' : undefined} onClick={() => {
@@ -2412,24 +2460,26 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 }}>{t('invitationsTitle')}</button>
               ) : null}
             </nav>
+            <button
+              type="button"
+              className={styles.workspaceBack}
+              ref={workspaceBackRef}
+              aria-label={t('backToTeam')}
+              title={t('backToTeam')}
+              onClick={() => {
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+                restoreTeamSettingsTriggerFocus.current = true
+                setTeamSettingsOpen(false)
+              }}
+            >
+              <span aria-hidden="true">←</span>
+            </button>
           </aside>
           <div className={styles.workspaceMain}>
             <header className={styles.workspaceHeader}>
               <div className={styles.workspaceHeaderCopy}>
-                <button
-                  type="button"
-                  className={styles.workspaceBack}
-                  ref={workspaceBackRef}
-                  onClick={() => {
-                    setTeamMenuOpen(false)
-                    setMemberMenuId(undefined)
-                    setInviteRevealRequest(undefined)
-                    restoreTeamSettingsTriggerFocus.current = true
-                    setTeamSettingsOpen(false)
-                  }}
-                >
-                  <span aria-hidden="true">←</span> {t('backToTeam')}
-                </button>
                 <div className={styles.workspaceIdentity}>
                   <h2 className={styles.workspaceTeamName}>{team.name}</h2>
                   <div className={styles.workspaceMeta}>
@@ -2644,7 +2694,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   inviteCreationPresentationId.current += 1
                   teamSettingsReturnFocus.current = 'invite'
                   setInviteDraft({
-                    label: '',
                     expiresInMs: 7 * 86_400_000,
                     authorizationContext: ownerAuthorizationContext,
                   })
@@ -2775,6 +2824,29 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       >
         <div className={styles.localAuthorizationConfirmation}>
           <p>{t('localAuthorizationConfirmBody', { team: team.name })}</p>
+          <section className={styles.sharingQuotaConfirmation} role="region" aria-label={t('sharingQuotaConfirmation')}>
+            <div className={styles.sharingQuotaMeter} aria-hidden="true">
+              <span style={{ width: `${activePendingLocalProfile?.remainingPercent ?? 0}%` }} />
+              <i style={{ left: `${DEFAULT_PERSONAL_RESERVE_PERCENT}%` }} />
+            </div>
+            <dl className={styles.sharingQuotaFacts}>
+              <div>
+                <dt>{t('sharingQuotaCurrent')}</dt>
+                <dd>{activePendingLocalProfile?.remainingPercent === undefined
+                  ? t('sharingQuotaUnavailable')
+                  : `${activePendingLocalProfile.remainingPercent}%`}</dd>
+              </div>
+              <div>
+                <dt>{t('sharingQuotaReserve')}</dt>
+                <dd>{DEFAULT_PERSONAL_RESERVE_PERCENT}%</dd>
+              </div>
+              <div>
+                <dt>{t('sharingQuotaWeeklyLimit')}</dt>
+                <dd>{t('sharingQuotaNoWeeklyLimit')}</dd>
+              </div>
+            </dl>
+            <p className={styles.sharingQuotaHint}>{t('sharingQuotaConfirmationHint', { reserve: DEFAULT_PERSONAL_RESERVE_PERCENT })}</p>
+          </section>
           <p className={styles.localAuthorizationSafety}>
             <strong>{t('localCredentialBoundary')}</strong> {t('localAuthorizationConfirmSafety')}
           </p>
@@ -2841,15 +2913,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setProtectionEdit(undefined) }}>{t('cancel')}</Button>
             <Button size="sm" variant="primary" disabled={busy !== undefined} aria-busy={busy?.startsWith('protection-') === true} onClick={() => {
               if (protectionEdit === undefined) return
-              const result = parseContributionProtectionDraft(protectionEdit)
+              const result = parseWeeklySharingLimitDraft(protectionEdit)
               if (!result.ok) {
-                setError(t(result.field === 'reserve'
-                  ? 'reserveValidation'
-                  : result.field === 'requestCap'
-                    ? 'requestCapValidation'
-                    : result.field === 'weeklyLimitUsd'
-                      ? 'weeklyLimitValidation'
-                      : 'allowedModelsValidation'))
+                setError(t('weeklyLimitValidation'))
                 return
               }
               void run(`protection-${protectionEdit.account.id}`, async () => {
@@ -2872,19 +2938,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <Input id="team-account-weekly-limit" value={protectionEdit.weeklyLimitUsd} placeholder={t('weeklyLimitPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, weeklyLimitUsd: event.target.value }) }} />
               <span className={styles.hint}>{t('weeklyLimitHint')}</span>
             </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-reserve">{t('reserveLabel')}</label>
-              <Input id="team-account-reserve" value={protectionEdit.reserve} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, reserve: event.target.value }) }} />
-              <span className={styles.hint}>{t('reserveHint')}</span>
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-request-cap">{t('requestCapLabel')}</label>
-              <Input id="team-account-request-cap" value={protectionEdit.requestCap} placeholder={t('requestCapPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, requestCap: event.target.value }) }} />
-            </div>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-models">{t('allowedModelsLabel')}</label>
-              <Input id="team-account-models" value={protectionEdit.models} placeholder={t('allowedModelsPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, models: event.target.value }) }} />
-            </div>
           </div>
         )}
       </Modal>
@@ -2904,7 +2957,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             : <div className={styles.recentRequestList}>{requests.map(request => (
               <div className={styles.recentRequest} key={request.id}>
                 <div><strong>{request.model}</strong><span>{formatTime(request.startedAt)}</span></div>
-                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span><span>{formatUsdMicros(request.estimatedCostUsdMicros)}</span></div>
+                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span></div>
               </div>
             ))}</div>
         })()}
@@ -3042,13 +3095,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         footer={(
           <div className={styles.modalActions}>
             <Button variant="ghost" onClick={closeInviteDraft}>{t('cancel')}</Button>
-            <Button variant="primary" disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active' || activeInviteDraft?.label.trim() === ''} onClick={() => { if (activeInviteDraft !== undefined && ownerAuthorizationContext !== undefined && team.status === 'active') void run('invite', async () => {
+            <Button variant="primary" disabled={busy !== undefined || ownerAuthorizationContext === undefined || team.status !== 'active'} onClick={() => { if (activeInviteDraft !== undefined && ownerAuthorizationContext !== undefined && team.status === 'active') void run('invite', async () => {
               const authorizationContext = activeInviteDraft.authorizationContext
               if (ownerAuthorizationContextRef.current !== authorizationContext) return
               const expectedContext = ownerExpectedContextRef.current
               if (expectedContext === undefined) return
               const presentationId = ++inviteCreationPresentationId.current
-              const result = await api.createInvite(activeInviteDraft.label.trim(), activeInviteDraft.expiresInMs, expectedContext)
+              const result = await api.createInvite(t('inviteFriend'), activeInviteDraft.expiresInMs, expectedContext)
               if (inviteCreationPresentationId.current !== presentationId) {
                 await refresh(false)
                 return
@@ -3072,13 +3125,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         {activeInviteDraft === undefined ? null : (
           <div className={styles.modalBody}>
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
-            <Field label={t('inviteLabel')} hint={t('inviteLabelHint')}>
-              <Input aria-label={t('inviteLabel')} data-team-dialog-focus="invite" value={activeInviteDraft.label} maxLength={120} placeholder={t('inviteLabelPlaceholder')} onChange={event => {
-                setInviteDraft({ ...activeInviteDraft, label: event.target.value })
-              }} />
-            </Field>
             <Field label={t('inviteExpiry')}>
-              <select aria-label={t('inviteExpiry')} className={styles.select} value={activeInviteDraft.expiresInMs} onChange={event => {
+              <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
                 setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
               }}>
                 <option value={86_400_000}>{t('inviteOneDay')}</option>
@@ -3358,9 +3406,16 @@ function TeamUsageSection({ loading, projection, unavailable, onRefresh, t }: {
           <p className={styles.hint}>{t('usageWindow24h')}</p>
         </div>
         {projection === undefined || unavailable ? null : (
-          <Button size="sm" variant="ghost" icon={<IconRefreshOutline16 />} disabled={loading} onClick={onRefresh}>
-            {t('refresh')}
-          </Button>
+          <Button
+            className={styles.usageRefresh}
+            size="sm"
+            variant="ghost"
+            icon={<IconRefreshOutline16 />}
+            aria-label={t('refresh')}
+            title={t('refresh')}
+            disabled={loading}
+            onClick={onRefresh}
+          />
         )}
       </div>
 
@@ -3390,7 +3445,7 @@ function TeamUsageCard({ id, title, aggregate, t }: {
   t: TeamSettingsInjected['t']
 }) {
   const usage = createTeamUsageViewModel(aggregate)
-  const showStatus = usage.state !== 'complete'
+  const showStatus = usage.state !== 'complete' && usage.state !== 'zero'
   const showCoverage = usage.state !== 'complete' && usage.state !== 'zero'
 
   return (

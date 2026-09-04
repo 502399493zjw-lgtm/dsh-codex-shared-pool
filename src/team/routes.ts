@@ -5,6 +5,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TeamService } from './service.ts'
 import {
+  TEAM_AUTHORIZATION_FAILED_CODE,
+  TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
+  type TeamAuthorizationFailureCode,
+} from '../shared/team-management.ts'
+import {
   TEAM_BOOTSTRAP_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
@@ -141,13 +146,27 @@ function oauthReauthorizeInput(value: Record<string, unknown>): { accountId: str
   return { accountId, method: value.method === undefined ? 'device_code' : oauthMethod(value.method) }
 }
 
-function oauthCancelInput(value: Record<string, unknown>): { accountId: string; discardInitial: boolean } {
-  exactFields(value, ['accountId', 'discardInitial'])
+function oauthCancelInput(value: Record<string, unknown>): {
+  accountId: string
+  discardInitial: boolean
+  failureCode?: TeamAuthorizationFailureCode
+} {
+  exactFields(value, ['accountId', 'discardInitial', 'failureCode'])
   const accountId = exactStrings({ accountId: value.accountId }, ['accountId']).accountId
   if (value.discardInitial !== undefined && typeof value.discardInitial !== 'boolean') {
     throw new Error('discardInitial must be a boolean')
   }
-  return { accountId, discardInitial: value.discardInitial === true }
+  const failureCode = value.failureCode
+  if (
+    failureCode !== undefined
+    && failureCode !== TEAM_AUTHORIZATION_FAILED_CODE
+    && failureCode !== TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE
+  ) throw new Error('failureCode is invalid')
+  return {
+    accountId,
+    discardInitial: value.discardInitial === true,
+    ...(failureCode === undefined ? {} : { failureCode }),
+  }
 }
 
 function providerAccountMatchInput(value: Record<string, unknown>): { providerAccountId: string } {
@@ -566,12 +585,12 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
         handler: async (req, res) => {
           if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
           try {
-            const { accountId, discardInitial } = oauthCancelInput(await readJson(req))
+            const { accountId, discardInitial, failureCode } = oauthCancelInput(await readJson(req))
             json(res, 200, {
               account: await service.cancelContributionOAuth(
                 requireAuth(await authenticate(req, service)),
                 accountId,
-                { discardInitial },
+                { discardInitial, ...(failureCode === undefined ? {} : { failureCode }) },
               ),
             })
           } catch (error: unknown) {

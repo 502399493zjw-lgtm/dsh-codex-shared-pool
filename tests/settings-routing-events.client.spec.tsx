@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -38,6 +38,7 @@ afterEach(() => {
   resetResponsePreferencesForTests()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 function response(value: unknown): Response {
@@ -57,10 +58,179 @@ const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): strin
 }
 
 describe('OpenAI Codex local routing monitor', () => {
+  it('ignores an old quota response after refreshing directory metadata', async () => {
+    vi.useFakeTimers()
+    let revision = 0
+    let resolveOld!: (value: Response) => void
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [
+        { id: 'local-a', label: revision ? 'Renamed account' : 'Original account', createdAt: 1, updatedAt: revision + 1 },
+      ] })
+      if (path.endsWith('/profiles')) {
+        if (!revision) return new Promise<Response>(resolve => { resolveOld = resolve })
+        return response({ status: 'ready', profiles: [
+          { id: 'local-a', label: 'Stale quota label', usage: { rateLimits: [] }, connectionStatus: 'connected' },
+        ] })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<OpenAICodexSettings t={t} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByRole('button', { name: /Original account/ })).toBeDefined()
+    revision = 1
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(screen.getByRole('button', { name: /Renamed account/ })).toBeDefined()
+    await act(async () => {
+      resolveOld(response({ status: 'ready', profiles: [
+        { id: 'local-a', label: 'Original account', usage: { rateLimits: [] }, connectionStatus: 'reauth-required' },
+        { id: 'removed', label: 'Removed account', usage: { rateLimits: [] } },
+      ] }))
+    })
+    expect(screen.queryByText('Removed account')).toBeNull()
+    expect(screen.queryByText('Stale quota label')).toBeNull()
+    expect(screen.getByRole('status').textContent).toContain(en.accountConnected)
+  })
+
+  it('retains accounts after quota timeout and aborts loading on unmount', async () => {
+    vi.useFakeTimers()
+    let quotaSignal: AbortSignal | undefined
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [
+        { id: 'local-a', label: 'Local account', createdAt: 1, updatedAt: 1 },
+      ] })
+      if (path.endsWith('/profiles')) {
+        quotaSignal = init?.signal ?? undefined
+        return new Promise<Response>(() => {})
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const view = render(<OpenAICodexSettings t={t} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByRole('button', { name: /Local account/ })).toBeDefined()
+    expect(screen.getByText(en.loadingQuota)).toBeDefined()
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+    expect(screen.getByRole('button', { name: /Local account/ })).toBeDefined()
+    expect(screen.queryByText(en.loadingQuota)).toBeNull()
+    expect(screen.getByText(en.quotaUnavailable)).toBeDefined()
+    expect(quotaSignal?.aborted).toBe(true)
+    expect(fetchMock.mock.calls.filter(([path]) => String(path).endsWith('/profiles'))).toHaveLength(1)
+    // Next periodic refresh can retry; disposing the page cancels that request.
+    await act(async () => { await vi.advanceTimersByTimeAsync(40_000) })
+    expect(quotaSignal?.aborted).toBe(false)
+    view.unmount()
+    expect(quotaSignal?.aborted).toBe(true)
+  })
+
+  it('bounds directory loading and exposes retry', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/profiles/directory')) return new Promise<Response>(() => {})
+      return response({})
+    }))
+    render(<OpenAICodexSettings t={t} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(screen.queryByText(en.loadingAccount)).toBeNull()
+    expect(screen.getByRole('button', { name: en.retry })).toBeDefined()
+  })
+
+  it('renders the local directory while quota remains pending', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [
+        { id: 'local-a', label: 'Local account', createdAt: 1, updatedAt: 1 },
+      ] })
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return new Promise<Response>(() => {})
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    }))
+    render(<OpenAICodexSettings t={t} />)
+    expect(await screen.findByRole('button', { name: /Local account/ })).toBeDefined()
+    expect(screen.queryByText(en.loadingAccount)).toBeNull()
+    expect(screen.queryByText(en.accountConnected)).toBeNull()
+  })
+
+  it('keeps a signed-in profile connected when only quota telemetry is unavailable', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
+        return response({
+          status: 'ready',
+          profiles: [{
+            id: 'private-a',
+            label: 'Private A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [] },
+            inUse: true,
+            connectionStatus: 'connected',
+            quotaError: 'usage endpoint temporarily unavailable',
+          }],
+        })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      if (path.endsWith('/image-tools')) return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      if (path.endsWith('/response-api')) return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/network')) return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      throw new Error(`unexpected request: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<OpenAICodexSettings t={t} />)
+
+    const profile = await screen.findByRole('button', { name: /Private A/ })
+    expect(profile.querySelector('[state="done"]')).not.toBeNull()
+    const connection = screen.getByRole('status')
+    expect(connection.textContent).toContain(en.accountConnected)
+    expect(connection.getAttribute('data-state')).toBe('done')
+    expect(screen.queryByText(en.accountConnectionUnavailable)).toBeNull()
+    expect(screen.getByText(en.quotaUnavailable)).toBeDefined()
+  })
+
+  it('keeps a reauthorization failure visible as a connection error', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
+        return response({
+          status: 'ready',
+          profiles: [{
+            id: 'private-a',
+            label: 'Private A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [] },
+            inUse: true,
+            connectionStatus: 'reauth-required',
+            quotaError: 'OpenAI Codex sign-in needs to be renewed',
+          }],
+        })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      if (path.endsWith('/image-tools')) return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      if (path.endsWith('/response-api')) return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/network')) return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      throw new Error(`unexpected request: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<OpenAICodexSettings t={t} />)
+
+    const profile = await screen.findByRole('button', { name: /Private A/ })
+    expect(profile.querySelector('[state="error"]')).not.toBeNull()
+    const connection = screen.getByRole('status')
+    expect(connection.textContent).toContain(en.accountConnectionUnavailable)
+    expect(connection.getAttribute('data-state')).toBe('error')
+  })
+
   it('shows exactly one in-use marker for the current first-choice profile', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (path.endsWith('/profiles')) {
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
         return response({
           status: 'ready',
           profiles: [
@@ -94,7 +264,7 @@ describe('OpenAI Codex local routing monitor', () => {
     let routingReads = 0
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (path.endsWith('/profiles')) {
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
         profileReads += 1
         const switched = profileReads > 1
         return response({
@@ -150,7 +320,7 @@ describe('OpenAI Codex local routing monitor', () => {
   it('starts collapsed and reveals only the three newest metadata-only request receipts', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (path.endsWith('/profiles')) {
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
         return response({
           status: 'ready',
           profiles: [
@@ -252,7 +422,7 @@ describe('OpenAI Codex local routing monitor', () => {
   ])('keeps account management usable in the $expected state', async ({ routeResult, expected }) => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      if (path.endsWith('/profiles')) {
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
         return response({
           status: 'ready',
           profiles: [

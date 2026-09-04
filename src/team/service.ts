@@ -39,6 +39,7 @@ import { TeamRequestRouter, TeamRouteCapacityError } from './routing.ts'
 import { TeamCapacityProvider } from './capacity.ts'
 import { safeTeamErrorMessage, safeTeamOAuthErrorMessage } from './safe-message.ts'
 import { openAICodexQuotaBucket } from '../account-allocation.ts'
+import type { TeamAuthorizationFailureCode } from '../shared/team-management.ts'
 import { TEAM_SHARED_CREDIT_RESERVATION } from './credits.ts'
 import {
   estimateTeamUsageCostUsdMicros,
@@ -95,6 +96,8 @@ export interface TeamRequestAdmission extends TeamRouteSelection {
 export interface TeamContributionOAuthCancelOptions {
   /** Remove a placeholder that never completed its first authorization. */
   readonly discardInitial?: boolean
+  /** Preserve a browser-safe automatic failure instead of reporting a user cancellation. */
+  readonly failureCode?: TeamAuthorizationFailureCode
 }
 
 export class TeamService {
@@ -275,7 +278,7 @@ export class TeamService {
       account.teamId,
       account.id,
       options.discardInitial === true ? 'revoked' : 'reauth_required',
-      'authorization cancelled',
+      options.failureCode ?? 'authorization cancelled',
       'authorizing',
     )
     if (cancelled.status === 'revoked') await this.cleanupCommittedRevokedContributions([cancelled])
@@ -711,6 +714,7 @@ export class TeamService {
       const remainingPercent = validCapacityPercent(quota.remainingPercent)
       const bucket: TeamContributionCapacityBucketSummary = {
         id,
+        ...quota.subscription === undefined ? {} : { subscription: quota.subscription },
         reason: capacityReason(account, quota.healthy, remainingPercent, resetAt, inspection),
         ...remainingPercent === undefined ? {} : { remainingPercent },
         ...resetAt === undefined ? {} : { resetAt },

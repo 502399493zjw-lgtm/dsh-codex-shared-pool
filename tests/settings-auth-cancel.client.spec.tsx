@@ -101,7 +101,7 @@ describe('OpenAI Codex settings authorization', () => {
           ? firstLogin
           : response({ url: 'https://auth.openai.com/oauth/authorize?attempt=retry' })
       }
-      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
         return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
       }
@@ -163,7 +163,7 @@ describe('OpenAI Codex settings authorization', () => {
       if (path.endsWith('/profiles/login')) {
         return response({ url: 'https://auth.openai.com/oauth/authorize?attempt=close' })
       }
-      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
         return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
       }
@@ -208,7 +208,7 @@ describe('OpenAI Codex settings authorization', () => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       if (path.endsWith('/profiles/login/cancel')) return response({ cancelled: true })
       if (path.endsWith('/profiles/login')) return loginResponse
-      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
         return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
       }
@@ -257,7 +257,7 @@ describe('OpenAI Codex settings authorization', () => {
           ? response({ status: 'ready' })
           : response({ status: 'acknowledged' })
       }
-      if (path.endsWith('/profiles')) return response({ status: 'ready', profiles: [] })
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [] })
       if (path.endsWith('/image-tools')) {
         return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
       }

@@ -10,10 +10,13 @@ import {
   readOpenAICodexRateLimits,
 } from '../src/usage.ts'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from '../src/store.ts'
+import { OpenAICodexAuthenticationError } from '../src/openai-codex-authentication-error.ts'
 
 let root: string | undefined
 
 afterEach(async () => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   if (root !== undefined) await rm(root, { recursive: true, force: true })
   root = undefined
@@ -57,14 +60,14 @@ function payload(): unknown {
   }
 }
 
-async function authenticatedStore(): Promise<OpenAICodexCredentialStore> {
+async function authenticatedStore(expires = Date.now() + 3_600_000): Promise<OpenAICodexCredentialStore> {
   root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-usage-'))
   const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
   const credential: OAuthCredential = {
     type: 'oauth',
     access: 'access-secret',
     refresh: 'refresh-secret',
-    expires: Date.now() + 3_600_000,
+    expires,
     accountId: 'account-1',
   }
   await store.modify(OPENAI_CODEX_PROVIDER, () => Promise.resolve(credential))
@@ -72,8 +75,83 @@ async function authenticatedStore(): Promise<OpenAICodexCredentialStore> {
 }
 
 describe('OpenAI Codex usage', () => {
+  it('persists successfully rotated credentials even after the caller times out', async () => {
+    const store = await authenticatedStore(Date.now() - 1)
+    let finishRefresh!: (response: Response) => void
+    let started!: () => void
+    const startedRequest = new Promise<void>(resolve => { started = resolve })
+    const fetchMock = vi.fn(async () => {
+      started()
+      return new Promise<Response>(resolve => { finishRefresh = resolve })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = readOpenAICodexRateLimits(store, controller.signal)
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+    await startedRequest
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+    await rejected
+    const access = `test.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'account-1' } })).toString('base64url')}.test`
+    finishRefresh(response({ access_token: access, refresh_token: 'rotated-test-refresh', expires_in: 3600 }))
+    await store.modify(OPENAI_CODEX_PROVIDER, async current => current)
+    expect(await store.read(OPENAI_CODEX_PROVIDER)).toMatchObject({ access, refresh: 'rotated-test-refresh' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('bounds OAuth refresh without invalid-auth classification or a late quota request', async () => {
+    const store = await authenticatedStore(Date.now() - 1)
+    let finishRefresh!: (response: Response) => void
+    let started!: () => void
+    const startedRequest = new Promise<void>(resolve => { started = resolve })
+    const fetchMock = vi.fn(async () => {
+      started()
+      return new Promise<Response>(resolve => { finishRefresh = resolve })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = readOpenAICodexRateLimits(store, controller.signal)
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+    await startedRequest
+    controller.abort(new DOMException('Request timed out', 'TimeoutError'))
+    await rejected
+    // Let the supplier lifecycle settle; do not abandon its credential lock.
+    finishRefresh(response({ error: 'invalid_grant' }, 400))
+    await store.modify(OPENAI_CODEX_PROVIDER, async current => current)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('bounds a stalled response body with the same deadline', async () => {
+    const store = await authenticatedStore()
+    let bodyStarted!: () => void
+    const started = new Promise<void>(resolve => { bodyStarted = resolve })
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: () => {
+      bodyStarted()
+      return new Promise(() => {})
+    } })))
+    const controller = new AbortController()
+    const pending = readOpenAICodexRateLimits(store, controller.signal)
+    const rejected = expect(pending).rejects.toThrow('body cancelled')
+    await started
+    controller.abort(new Error('body cancelled'))
+    await rejected
+  })
+
+  it('bounds credential resolution with caller cancellation', async () => {
+    const store = await authenticatedStore()
+    vi.spyOn(store, 'read').mockImplementation(() => new Promise(() => {}))
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = readOpenAICodexRateLimits(store, controller.signal)
+    const assertion = expect(pending).rejects.toThrow('cancelled')
+    controller.abort(new Error('cancelled'))
+    await assertion
+    expect(fetchMock).not.toHaveBeenCalled()
+  }, 1000)
+
   it('projects rolling percentages and exact provider-supported balances', () => {
     expect(parseOpenAICodexUsage(payload())).toEqual({
+      planType: 'business',
       rateLimits: [
         {
           id: 'codex',
@@ -138,5 +216,31 @@ describe('OpenAI Codex usage', () => {
     })
     expect(status).not.toHaveProperty('expiresAt')
   })
-})
 
+  it.each([401, 403])('types HTTP %i as a reauthorization failure', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'unauthorized' }, status)))
+
+    await expect(readOpenAICodexRateLimits(await authenticatedStore()))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+
+  it('types a rejected refresh for an expired credential as a reauthorization failure', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe('https://auth.openai.com/oauth/token')
+      return response({ error: 'invalid_grant', error_description: 'refresh token expired' }, 400)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readOpenAICodexRateLimits(await authenticatedStore(Date.now() - 1)))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('types a missing stored credential as a reauthorization failure', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-signed-out-'))
+    const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
+
+    await expect(readOpenAICodexRateLimits(store))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+})

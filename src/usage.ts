@@ -1,9 +1,12 @@
 /** Live ChatGPT Codex rate-limit usage for the browser account page. */
 
-import { createModels } from '@earendil-works/pi-ai'
+import { createModels, ModelsError } from '@earendil-works/pi-ai'
 import type { CredentialStore } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
+import { normalizeCodexPlan } from './shared/subscription.ts'
+import { OpenAICodexAuthenticationError } from './openai-codex-authentication-error.ts'
+import { withDeadline } from './with-deadline.ts'
 import type {
   OpenAICodexCredits,
   OpenAICodexIndividualLimit,
@@ -167,7 +170,9 @@ export function parseOpenAICodexUsage(value: unknown, observedAt = Date.now()): 
   }
   const credits = parseCredits(value['credits'])
   const individualLimit = parseIndividualLimit(value['spend_control'])
+  const planType = normalizeCodexPlan(value['plan_type'])
   return {
+    ...planType === undefined ? {} : { planType },
     rateLimits: limits,
     ...credits === undefined ? {} : { credits },
     ...individualLimit === undefined ? {} : { individualLimit },
@@ -185,14 +190,47 @@ export async function readOpenAICodexRateLimits(
   store: CredentialStore,
   signal?: AbortSignal,
 ): Promise<OpenAICodexUsage> {
-  const models = createModels({ credentials: store })
+  return withDeadline(deadline => readRateLimits(store, deadline), USAGE_REQUEST_TIMEOUT_MS, signal)
+}
+
+async function readRateLimits(store: CredentialStore, signal: AbortSignal): Promise<OpenAICodexUsage> {
+  const models = createModels({ credentials: {
+    list: () => store.list(),
+    read: async provider => {
+      signal.throwIfAborted()
+      const credential = await store.read(provider)
+      signal.throwIfAborted()
+      return credential
+    },
+    modify: (provider, update) => store.modify(provider, current => {
+      // Queued transactions must not start a fresh OAuth refresh after expiry.
+      // Once started, let update finish and persist rotated credentials safely.
+      signal.throwIfAborted()
+      return update(current)
+    }),
+    delete: provider => store.delete(provider),
+  } })
+  // The pinned provider does not forward abort to its OAuth refresh fetch.
+  // Bound the caller, but let its locked credential transaction settle safely:
+  // abandoning a rotated token before persistence could invalidate the account.
   models.setProvider(openaiCodexProvider())
-  const auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
+  let auth
+  try {
+    auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
+  } catch (error: unknown) {
+    signal.throwIfAborted()
+    if (error instanceof ModelsError && error.code === 'oauth') {
+      throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+    }
+    throw error
+  }
+  signal.throwIfAborted()
   const credential = await store.read(OPENAI_CODEX_PROVIDER)
+  signal.throwIfAborted()
   const access = auth?.auth.apiKey
   const accountId = credential?.type === 'oauth' ? credential.accountId : undefined
   if (access === undefined || access.length === 0 || typeof accountId !== 'string' || accountId.length === 0) {
-    throw new Error('OpenAI Codex is signed out')
+    throw new OpenAICodexAuthenticationError('OpenAI Codex is signed out')
   }
   const response = await fetch(OPENAI_CODEX_USAGE_URL, {
     method: 'GET',
@@ -204,14 +242,13 @@ export async function readOpenAICodexRateLimits(
       'cache-control': 'no-store',
       'user-agent': 'dsh-openai-codex',
     },
-    signal: signal === undefined
-      ? AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS)
-      : AbortSignal.any([signal, AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS)]),
+    signal,
   })
   if (!response.ok) {
-    throw new Error(response.status === 401 || response.status === 403
-      ? 'OpenAI Codex sign-in needs to be renewed'
-      : `OpenAI Codex usage request failed with HTTP ${response.status}`)
+    if (response.status === 401 || response.status === 403) {
+      throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+    }
+    throw new Error(`OpenAI Codex usage request failed with HTTP ${response.status}`)
   }
   let value: unknown
   try {

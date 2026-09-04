@@ -26,7 +26,7 @@ import {
 
 const auth = vi.hoisted(() => ({
   loginOpenAICodex: vi.fn(),
-  loginOpenAICodexProfile: vi.fn(),
+  loginOpenAICodexLocalProfile: vi.fn(),
   logoutOpenAICodex: vi.fn(),
   openAICodexAuthStatus: vi.fn(),
 }))
@@ -149,6 +149,8 @@ describe('OpenAI Codex Web routes', () => {
       expect(opened.status).toBe(200)
       expect(opened.headers['content-security-policy']).toContain("default-src 'none'")
       expect(opened.body).toContain(OPENAI_CODEX_AUTHORIZATION_POPUP_SESSION_PATH)
+      expect(opened.body).toContain('try{window.opener=null}catch{}')
+      expect(opened.body.indexOf('window.opener=null')).toBeLessThan(opened.body.indexOf('window.location.replace'))
       expect(opened.body).not.toContain('client_id=')
 
       const published = await request(session, 'POST', {
@@ -275,7 +277,7 @@ describe('OpenAI Codex Web routes', () => {
   })
 
   it('cancels an active Host attempt through the route and immediately restores retryable state', async () => {
-    auth.loginOpenAICodexProfile.mockImplementation(async (interaction: AuthInteraction) => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
       interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
       await new Promise<void>((_resolve, reject) => {
         interaction.signal?.addEventListener('abort', () => reject(interaction.signal?.reason), { once: true })
@@ -304,7 +306,7 @@ describe('OpenAI Codex Web routes', () => {
   })
 
   it('keeps authorization failures in the fast directory lifecycle without listing profiles', async () => {
-    auth.loginOpenAICodexProfile.mockRejectedValueOnce(new Error('provider rejected login'))
+    auth.loginOpenAICodexLocalProfile.mockRejectedValueOnce(new Error('provider rejected login'))
     const listProfiles = vi.fn().mockResolvedValue([])
     const webAuth = new OpenAICodexWebAuth(
       { listProfiles } as unknown as OpenAICodexCredentialStore,
