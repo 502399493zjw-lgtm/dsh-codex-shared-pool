@@ -10,6 +10,7 @@ import {
   readOpenAICodexRateLimits,
 } from '../src/usage.ts'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from '../src/store.ts'
+import { OpenAICodexAuthenticationError } from '../src/openai-codex-authentication-error.ts'
 
 let root: string | undefined
 
@@ -138,5 +139,19 @@ describe('OpenAI Codex usage', () => {
     })
     expect(status).not.toHaveProperty('expiresAt')
   })
-})
 
+  it.each([401, 403])('types HTTP %i as a reauthorization failure', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'unauthorized' }, status)))
+
+    await expect(readOpenAICodexRateLimits(await authenticatedStore()))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+
+  it('types a missing stored credential as a reauthorization failure', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-signed-out-'))
+    const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
+
+    await expect(readOpenAICodexRateLimits(store))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+})

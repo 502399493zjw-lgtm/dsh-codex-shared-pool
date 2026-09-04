@@ -4,6 +4,7 @@ import { createModels } from '@earendil-works/pi-ai'
 import type { CredentialStore } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
+import { OpenAICodexAuthenticationError } from './openai-codex-authentication-error.ts'
 import type {
   OpenAICodexCredits,
   OpenAICodexIndividualLimit,
@@ -192,7 +193,7 @@ export async function readOpenAICodexRateLimits(
   const access = auth?.auth.apiKey
   const accountId = credential?.type === 'oauth' ? credential.accountId : undefined
   if (access === undefined || access.length === 0 || typeof accountId !== 'string' || accountId.length === 0) {
-    throw new Error('OpenAI Codex is signed out')
+    throw new OpenAICodexAuthenticationError('OpenAI Codex is signed out')
   }
   const response = await fetch(OPENAI_CODEX_USAGE_URL, {
     method: 'GET',
@@ -209,9 +210,10 @@ export async function readOpenAICodexRateLimits(
       : AbortSignal.any([signal, AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS)]),
   })
   if (!response.ok) {
-    throw new Error(response.status === 401 || response.status === 403
-      ? 'OpenAI Codex sign-in needs to be renewed'
-      : `OpenAI Codex usage request failed with HTTP ${response.status}`)
+    if (response.status === 401 || response.status === 403) {
+      throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+    }
+    throw new Error(`OpenAI Codex usage request failed with HTTP ${response.status}`)
   }
   let value: unknown
   try {

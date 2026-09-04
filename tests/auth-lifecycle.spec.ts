@@ -2,6 +2,7 @@ import type { AuthInteraction } from '@earendil-works/pi-ai'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OpenAICodexCredentialStore } from '../src/store.ts'
 import { LocalRoutingEventLedger } from '../src/local-routing-events.ts'
+import { OpenAICodexAuthenticationError } from '../src/openai-codex-authentication-error.ts'
 
 interface LoginAttemptOptions {
   beforeCommit(): void
@@ -218,10 +219,48 @@ describe('OpenAI Codex Web auth lifecycle', () => {
     expect(status).toEqual({
       status: 'ready',
       profiles: [
-        { ...profiles[0], usage: { rateLimits: [] }, inUse: true },
-        { ...profiles[1], usage: { rateLimits: [] }, inUse: false },
+        { ...profiles[0], usage: { rateLimits: [] }, inUse: true, connectionStatus: 'connected' },
+        { ...profiles[1], usage: { rateLimits: [] }, inUse: false, connectionStatus: 'connected' },
       ],
     })
     expect(JSON.stringify(ledger.list())).not.toContain('profile-b')
+  })
+
+  it('separates reauthorization failures from ordinary quota telemetry failures', async () => {
+    const { OpenAICodexWebAuth } = await import('../src/auth-routes.ts')
+    const profiles = [
+      { id: 'profile-auth', label: 'Renew me', createdAt: 1, updatedAt: 2 },
+      { id: 'profile-quota', label: 'Quota unavailable', createdAt: 1, updatedAt: 1 },
+    ]
+    const store = {
+      listProfiles: () => Promise.resolve(profiles),
+      forProfile: (profileId: string) => ({ profileId }),
+    } as unknown as OpenAICodexCredentialStore
+    usage.readOpenAICodexRateLimits.mockImplementation(async (profileStore: { profileId: string }) => {
+      if (profileStore.profileId === 'profile-auth') {
+        throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+      }
+      throw new Error('OpenAI Codex usage request failed with HTTP 503')
+    })
+
+    await expect(new OpenAICodexWebAuth(store).profilesStatus()).resolves.toEqual({
+      status: 'ready',
+      profiles: [
+        {
+          ...profiles[0],
+          usage: { rateLimits: [] },
+          inUse: false,
+          connectionStatus: 'reauth-required',
+          quotaError: 'OpenAI Codex sign-in needs to be renewed',
+        },
+        {
+          ...profiles[1],
+          usage: { rateLimits: [] },
+          inUse: false,
+          connectionStatus: 'connected',
+          quotaError: 'OpenAI Codex usage request failed with HTTP 503',
+        },
+      ],
+    })
   })
 })
