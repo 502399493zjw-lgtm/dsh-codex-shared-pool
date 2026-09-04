@@ -19,6 +19,12 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
+    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
+    expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
+    expect(css).toMatch(/\.directoryHint\s*\{[^}]*flex-basis:\s*100%;/s)
+  })
+
   it('caps the plugin page to the visible settings content width', () => {
     expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
     expect(css).not.toMatch(/width:\s*min\(100%,\s*calc\(100vw - 320px\),\s*960px\)/)
