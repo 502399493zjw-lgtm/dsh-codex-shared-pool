@@ -5,6 +5,7 @@ import type { CredentialStore } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
 import { OpenAICodexAuthenticationError } from './openai-codex-authentication-error.ts'
+import { withDeadline } from './with-deadline.ts'
 import type {
   OpenAICodexCredits,
   OpenAICodexIndividualLimit,
@@ -186,18 +187,43 @@ export async function readOpenAICodexRateLimits(
   store: CredentialStore,
   signal?: AbortSignal,
 ): Promise<OpenAICodexUsage> {
-  const models = createModels({ credentials: store })
+  return withDeadline(deadline => readRateLimits(store, deadline), USAGE_REQUEST_TIMEOUT_MS, signal)
+}
+
+async function readRateLimits(store: CredentialStore, signal: AbortSignal): Promise<OpenAICodexUsage> {
+  const models = createModels({ credentials: {
+    list: () => store.list(),
+    read: async provider => {
+      signal.throwIfAborted()
+      const credential = await store.read(provider)
+      signal.throwIfAborted()
+      return credential
+    },
+    modify: (provider, update) => store.modify(provider, current => {
+      // Queued transactions must not start a fresh OAuth refresh after expiry.
+      // Once started, let update finish and persist rotated credentials safely.
+      signal.throwIfAborted()
+      return update(current)
+    }),
+    delete: provider => store.delete(provider),
+  } })
+  // The pinned provider does not forward abort to its OAuth refresh fetch.
+  // Bound the caller, but let its locked credential transaction settle safely:
+  // abandoning a rotated token before persistence could invalidate the account.
   models.setProvider(openaiCodexProvider())
   let auth
   try {
     auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
   } catch (error: unknown) {
+    signal.throwIfAborted()
     if (error instanceof ModelsError && error.code === 'oauth') {
       throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
     }
     throw error
   }
+  signal.throwIfAborted()
   const credential = await store.read(OPENAI_CODEX_PROVIDER)
+  signal.throwIfAborted()
   const access = auth?.auth.apiKey
   const accountId = credential?.type === 'oauth' ? credential.accountId : undefined
   if (access === undefined || access.length === 0 || typeof accountId !== 'string' || accountId.length === 0) {
@@ -213,9 +239,7 @@ export async function readOpenAICodexRateLimits(
       'cache-control': 'no-store',
       'user-agent': 'dsh-openai-codex',
     },
-    signal: signal === undefined
-      ? AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS)
-      : AbortSignal.any([signal, AbortSignal.timeout(USAGE_REQUEST_TIMEOUT_MS)]),
+    signal,
   })
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
