@@ -2076,9 +2076,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
-      const remainingCapacity = capacityBucket?.remainingPercent === undefined
-        ? t('capacityQuotaUnavailable')
-        : `${capacityBucket.remainingPercent}%`
+      const remainingCapacity = usageUnavailable
+        ? t('accountCapacityFetchFailed')
+        : capacityBucket?.remainingPercent === undefined
+          ? t('capacityQuotaUnavailable')
+          : `${capacityBucket.remainingPercent}%`
       const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
         ? '∞'
         : formatWeeklyUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
@@ -2136,12 +2138,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             )}
             {contributionHint === undefined ? null : <p>{contributionHint}</p>}
           </section>
-          {usageUnavailable ? (
-            <div className={styles.accountUsageWarning} role="alert">
-              <span>{t('usageUnavailableTitle')}</span>
-              <Button size="sm" variant="outline" disabled={usageLoading} onClick={() => { void refreshUsage() }}>{t('retry')}</Button>
-            </div>
-          ) : null}
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
             <dl className={styles.compactSummaryList}>
