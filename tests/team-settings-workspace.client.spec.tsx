@@ -126,7 +126,7 @@ const mine = {
   personalReservePercent: 20, maxSharedRequestsPerWindow: null,
   maxSharedConcurrency: 1, allowedModels: [], createdAt: 1, updatedAt: 1,
   capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74,
-    subscription: { planType: 'pro', weeklyEstimatedUsd: 2100, weeklyRemainingEstimatedUsd: 1554 },
+    subscription: { planType: 'pro', weeklyEstimatedUsd: 2100 },
   }] },
 } as const
 const paused = { ...mine, id: 'mine-paused', label: '备用账号', status: 'paused' as const }
@@ -463,7 +463,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     fireEvent.click(await screen.findByRole('button', { name: /个人 Pro/u }))
     expect(await screen.findByText('Pro 20x')).toBeDefined()
-    expect(screen.getByText('US$1,554.00 / US$2,100.00')).toBeDefined()
+    expect(screen.getByText('US$2,100.00')).toBeDefined()
   })
 
   it('opens management only from the Team panel', async () => {
@@ -1617,7 +1617,8 @@ describe('Team subscription-pool workspace', () => {
     expect(editLimit.textContent).toBe(zh.edit)
     expect(editLimit.querySelector('svg')).toBeNull()
     expect(within(weekly).getByText('Pro 20x')).toBeDefined()
-    expect(within(weekly).getByText('US$1,554.00 / US$2,100.00')).toBeDefined()
+    expect(within(weekly).getByText('US$2,100.00')).toBeDefined()
+    expect(within(weekly).queryByText(/US\$1,554|周剩余预估/)).toBeNull()
     expect(within(weekly).queryByLabelText(zh.amountEstimateHelpLabel)).toBeNull()
     expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
@@ -1736,7 +1737,8 @@ describe('Team subscription-pool workspace', () => {
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
     expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
     expect(within(details).getByText('Plus')).toBeDefined()
-    expect(within(details).getByText('US$68.00 / US$100.00')).toBeDefined()
+    expect(within(details).getByText('US$100.00')).toBeDefined()
+    expect(within(details).queryByText(/US\$68|周剩余预估/)).toBeNull()
     expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
   })

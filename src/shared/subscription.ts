@@ -14,7 +14,6 @@ export type CodexPlanType = keyof typeof PLAN_LABELS
 export interface CodexSubscription {
   readonly planType: CodexPlanType
   readonly weeklyEstimatedUsd?: number
-  readonly weeklyRemainingEstimatedUsd?: number
 }
 
 export function normalizeCodexPlan(value: unknown): CodexPlanType | undefined {
@@ -26,28 +25,20 @@ export function subscriptionPlanLabel(plan: CodexPlanType): string {
   return PLAN_LABELS[plan]
 }
 
-export function projectSubscription(plan: unknown, weeklyRemainingPercent?: number): CodexSubscription | undefined {
+export function projectSubscription(plan: unknown): CodexSubscription | undefined {
   const planType = normalizeCodexPlan(plan)
   if (planType === undefined) return undefined
   const total = planType === 'plus' ? 100 : planType === 'prolite' ? 600 : planType === 'pro' ? 2100 : undefined
   if (total === undefined) return { planType }
-  const validPercent = typeof weeklyRemainingPercent === 'number'
-    && Number.isFinite(weeklyRemainingPercent) && weeklyRemainingPercent >= 0 && weeklyRemainingPercent <= 100
   return {
     planType,
     weeklyEstimatedUsd: total,
-    ...(validPercent ? { weeklyRemainingEstimatedUsd: Math.round(total * weeklyRemainingPercent) / 100 } : {}),
   }
 }
 
 export function subscriptionFromUsage(value: unknown): CodexSubscription | undefined {
   if (!isRecord(value)) return undefined
-  const bucket: unknown = Array.isArray(value.rateLimits)
-    ? value.rateLimits.find((limit: unknown) => isRecord(limit) && limit.id === 'codex') : undefined
-  const weekly: unknown = isRecord(bucket) && Array.isArray(bucket.windows)
-    ? bucket.windows.find((window: unknown) => isRecord(window) && window.windowSeconds === 604_800) : undefined
-  return projectSubscription(value.planType,
-    isRecord(weekly) && typeof weekly.remainingPercent === 'number' ? weekly.remainingPercent : undefined)
+  return projectSubscription(value.planType)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,14 +47,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Rebuild a remote projection from allowlisted metadata; never forward arbitrary fields. */
 export function parseSubscription(value: unknown): CodexSubscription | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const item = value as Record<string, unknown>
-  const base = projectSubscription(item.planType)
-  if (base === undefined || base.weeklyEstimatedUsd === undefined) return base
-  const remaining = item.weeklyRemainingEstimatedUsd
-  return {
-    ...base,
-    ...(typeof remaining === 'number' && Number.isFinite(remaining) && remaining >= 0 && remaining <= base.weeklyEstimatedUsd
-      ? { weeklyRemainingEstimatedUsd: Math.round(remaining * 100) / 100 } : {}),
-  }
+  return isRecord(value) ? projectSubscription(value.planType) : undefined
 }

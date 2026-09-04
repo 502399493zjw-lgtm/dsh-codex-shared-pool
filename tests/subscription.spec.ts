@@ -15,35 +15,37 @@ describe('subscription capacity estimates', () => {
       { windowSeconds: 604800, remainingPercent: 75 },
     ] }] }, 'gpt-5.4')
     expect(quota.remainingPercent).toBe(10)
-    expect(quota.subscription).toEqual({ planType: 'pro', weeklyEstimatedUsd: 2100, weeklyRemainingEstimatedUsd: 1575 })
+    expect(quota.subscription).toEqual({ planType: 'pro', weeklyEstimatedUsd: 2100 })
   })
   it.each([['plus', 100], ['prolite', 600], ['pro', 2100]] as const)('estimates %s directly', (plan, total) => {
-    expect(projectSubscription(plan, 75)).toEqual({
-      planType: plan, weeklyEstimatedUsd: total, weeklyRemainingEstimatedUsd: total * 0.75,
+    expect(projectSubscription(plan)).toEqual({
+      planType: plan, weeklyEstimatedUsd: total,
     })
   })
-  it('preserves zero and rounds fractional dollars', () => {
-    expect(projectSubscription('pro', 0)?.weeklyRemainingEstimatedUsd).toBe(0)
-    expect(projectSubscription('pro', 33.333)?.weeklyRemainingEstimatedUsd).toBe(699.99)
+  it('drops legacy remaining dollar fields even when valid', () => {
+    expect(parseSubscription({ planType: 'pro', weeklyRemainingEstimatedUsd: 1575 }))
+      .toEqual({ planType: 'pro', weeklyEstimatedUsd: 2100 })
   })
   it.each(['business', 'free', 'enterprise', 'unknown'])('does not price %s', plan => {
-    expect(projectSubscription(plan, 50)).toEqual({ planType: plan })
+    expect(projectSubscription(plan)).toEqual({ planType: plan })
   })
   it('normalizes unknown text without exposing arbitrary provider strings', () => {
     expect(projectSubscription('unexpected-secret')).toEqual({ planType: 'unknown' })
     expect(projectSubscription(undefined)).toBeUndefined()
     expect(projectSubscription({ token: 'secret' })).toBeUndefined()
   })
-  it.each([undefined, NaN, Infinity, -1, 101])('does not fabricate remaining dollars for %s', percent => {
-    expect(projectSubscription('plus', percent)).toEqual({ planType: 'plus', weeklyEstimatedUsd: 100 })
+  it.each([undefined, NaN, Infinity, -1, 0, 75, 100, 101])('keeps the total independent of remaining quota %s', percent => {
+    expect(subscriptionFromUsage({ planType: 'plus', rateLimits: [{ id: 'codex', windows: [
+      { windowSeconds: 604800, remainingPercent: percent },
+    ] }] })).toEqual({ planType: 'plus', weeklyEstimatedUsd: 100 })
   })
-  it('uses only the main seven-day window regardless of order', () => {
+  it('does not derive dollars from any quota window', () => {
     expect(subscriptionFromUsage({ planType: 'plus', rateLimits: [
       { id: 'codex_spark', windows: [{ windowSeconds: 604800, remainingPercent: 99 }] },
       { id: 'codex', windows: [{ windowSeconds: 18000, remainingPercent: 10 }, { windowSeconds: 604800, remainingPercent: 75 }] },
-    ] })?.weeklyRemainingEstimatedUsd).toBe(75)
+    ] })).toEqual({ planType: 'plus', weeklyEstimatedUsd: 100 })
     expect(subscriptionFromUsage({ planType: 'plus', rateLimits: [
       { id: 'codex', windows: [{ windowSeconds: 18000, remainingPercent: 10 }] },
-    ] })?.weeklyRemainingEstimatedUsd).toBeUndefined()
+    ] })).toEqual({ planType: 'plus', weeklyEstimatedUsd: 100 })
   })
 })

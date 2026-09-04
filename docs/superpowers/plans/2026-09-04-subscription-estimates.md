@@ -1,5 +1,13 @@
 # Subscription estimates implementation plan
 
+## Current scope (supersedes the original remaining-dollar design below)
+
+Show subscription tier and fixed weekly total only: Plus US$100, Pro 5x US$600, Pro 20x US$2,100. Remaining capacity stays in the existing percentage UI. Do not calculate or transport remaining dollar estimates; discard legacy remote remaining-dollar fields. Routing and actual spend accounting remain unchanged.
+
+Acceptance AC-SUB-003: synthetic local and contribution accounts show the weekly total and retain their existing 68% / 74% quota indicators, with no remaining-dollar display. Unit tests cover unchanged totals across absent, invalid, zero, and nonzero quota values; DOM tests include legacy projections. No real provider accounts or shared services are used by these tests.
+
+Current validation: focused 295 tests and full 998 tests passed (23 skipped), plus 33 prototype tests. Build, package-format verification, and diff whitespace checks passed. Repository-wide sensitive scanning still reports existing fixture/code-name matches; the current diff contains no credentials. This display simplification does not change installation; no new stock-install or real OAuth claim is made. GitHub connectivity probe timed out, so remote delivery remains blocked.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Show account subscription tiers and simple estimated weekly dollar capacity.

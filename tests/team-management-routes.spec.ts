@@ -895,7 +895,7 @@ describe('local Team management routes', () => {
       sharedInFlight: 1,
       buckets: [{
         id: 'codex', reason: 'request_cap_reached', remainingPercent: 72, resetAt: 10_000, sharedRequestsUsed: 5,
-        subscription: { planType: 'plus', weeklyEstimatedUsd: 100, weeklyRemainingEstimatedUsd: 72 },
+        subscription: { planType: 'plus', weeklyEstimatedUsd: 100 },
       }],
     })
     expect(contributions).toHaveLength(1)
