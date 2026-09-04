@@ -1,6 +1,6 @@
 /** Live ChatGPT Codex rate-limit usage for the browser account page. */
 
-import { createModels } from '@earendil-works/pi-ai'
+import { createModels, ModelsError } from '@earendil-works/pi-ai'
 import type { CredentialStore } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { OPENAI_CODEX_PROVIDER } from './store.ts'
@@ -188,7 +188,15 @@ export async function readOpenAICodexRateLimits(
 ): Promise<OpenAICodexUsage> {
   const models = createModels({ credentials: store })
   models.setProvider(openaiCodexProvider())
-  const auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
+  let auth
+  try {
+    auth = await models.getAuth(OPENAI_CODEX_PROVIDER)
+  } catch (error: unknown) {
+    if (error instanceof ModelsError && error.code === 'oauth') {
+      throw new OpenAICodexAuthenticationError('OpenAI Codex sign-in needs to be renewed')
+    }
+    throw error
+  }
   const credential = await store.read(OPENAI_CODEX_PROVIDER)
   const access = auth?.auth.apiKey
   const accountId = credential?.type === 'oauth' ? credential.accountId : undefined
