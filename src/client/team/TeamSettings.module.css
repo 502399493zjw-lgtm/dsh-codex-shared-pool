@@ -23,7 +23,7 @@
   container-name: team-settings;
   container-type: inline-size;
   display: flex;
-  width: min(100%, calc(100vw - 320px), 960px);
+  width: min(100%, 960px);
   max-width: 960px;
   min-width: 0;
   flex-direction: column;
@@ -1450,6 +1450,10 @@
   color: var(--team-muted);
   font-size: 13px;
   line-height: 20px;
+}
+
+.body {
+  overflow-wrap: anywhere;
 }
 
 .intro {
