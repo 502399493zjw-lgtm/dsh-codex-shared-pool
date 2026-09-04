@@ -1465,6 +1465,56 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).queryByText(zh.contributionActiveHint)).toBeNull()
   })
 
+  it('keeps a provider-unavailable contribution manageable without claiming Team availability', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: [{
+        ...mine,
+        capacity: {
+          sharedInFlight: 0,
+          buckets: [{ id: 'codex', reason: 'provider_unavailable' }],
+        },
+      }],
+    }
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(panel).getByRole('complementary')
+    const contribution = within(directory).getByRole('button', { name: `${mine.label} · ${zh.contributedByMe}` })
+    const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
+
+    expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
+    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.capacityProviderUnavailable}`)).toBeDefined()
+    expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
+    expect(within(account).queryByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeNull()
+    expect(within(account).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
+  })
+
+  it('keeps a contribution available when at least one model bucket is ready', async () => {
+    overviewState = {
+      ...overviewState,
+      contributions: [{
+        ...mine,
+        capacity: {
+          sharedInFlight: 0,
+          buckets: [
+            { id: 'codex', reason: 'provider_unavailable' },
+            { id: 'codex_spark', reason: 'ready', remainingPercent: 61 },
+          ],
+        },
+      }],
+    }
+    render(<TeamSettings t={translate} embedded />)
+
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(panel).getByRole('complementary')
+    const contribution = within(directory).getByRole('button', { name: `${mine.label} · ${zh.contributedByMe}` })
+    const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
+
+    expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('done')
+    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeDefined()
+  })
+
   it('shows teammate shared accounts in the directory and opens a safe read-only detail', async () => {
     render(<TeamSettings t={translate} embedded />)
 
@@ -1477,10 +1527,14 @@ describe('Team subscription-pool workspace', () => {
     })
 
     expect(within(teammateAccount).getByText(contributionLabel)).toBeDefined()
+    expect(teammateAccount.querySelector('[data-state]')?.getAttribute('data-state')).toBe('ongoing')
     fireEvent.click(teammateAccount)
 
-    expect(within(details).getByRole('heading', { name: friend.label })).toBeDefined()
-    expect(within(details).getByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeDefined()
+    const account = within(details).getByRole('heading', { name: friend.label }).closest('article')!
+    expect(account).toBeDefined()
+    expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('ongoing')
+    expect(within(details).getByText(`${contributionLabel} · ${zh.teamShared}`)).toBeDefined()
+    expect(within(details).queryByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(details).getByText(zh.sharedAccountReadonlyHint)).toBeDefined()
     expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
     expect(within(details).queryByRole('button', { name: zh.editProtection })).toBeNull()
@@ -1830,9 +1884,15 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const directory = within(settings).getByRole('complementary')
     const details = within(settings).getByRole('region', { name: zh.accountDetails })
-    fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
+    const localAccountNavigation = within(directory).getByRole('button', { name: /本机账号 A/u })
+    fireEvent.click(localAccountNavigation)
 
     const capacity = within(details).getByRole('region', { name: zh.capacityTitle })
+    const account = within(details).getByRole('heading', { name: '本机账号 A' }).closest('article')!
+    expect(localAccountNavigation.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
+    expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
+    expect(within(account.querySelector('header')!).getByText(zh.capacityQuotaError)).toBeDefined()
+    expect(within(account).queryByText(zh.localInUse)).toBeNull()
     expect(within(capacity).getByText(zh.capacityQuotaError)).toBeDefined()
     expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
     expect(capacity.textContent).not.toContain('telemetry unavailable')
