@@ -1,6 +1,9 @@
 /** Invite-only Team capacity management inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SubscriptionEstimate, subscriptionEstimateLabels } from '../SubscriptionEstimate.tsx'
+import { subscriptionFromUsage } from '../../shared/subscription.ts'
+import type { CodexSubscription } from '../../shared/subscription.ts'
 import {
   Button,
   IconCopyOutline16,
@@ -62,8 +65,6 @@ const LOCAL_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directo
 const LOCAL_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
 const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
 const DEFAULT_PERSONAL_RESERVE_PERCENT = 20
-/** Frozen design reference from the phase-two prototype; it is not a live account balance. */
-const CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS = 5_960_000
 
 export interface TeamSettingsInjected {
   t: (key: TeamSettingsKey, params?: Record<string, unknown>) => string
@@ -109,6 +110,7 @@ interface ActiveBrowserAuthorization {
 }
 
 interface LocalCodexProfileSummary {
+  readonly subscription?: CodexSubscription
   readonly id: string
   readonly label: string
   readonly inUse: boolean
@@ -186,7 +188,9 @@ function parseLocalProfiles(value: unknown): readonly LocalCodexProfileSummary[]
     const item = profile as Record<string, unknown>
     if (typeof item.id !== 'string' || typeof item.label !== 'string') return []
     const remainingPercent = parseLocalRemainingPercent(item)
+    const subscription = subscriptionFromUsage(item.usage)
     return [{
+      ...(subscription === undefined ? {} : { subscription }),
       id: item.id,
       label: item.label,
       inUse: item.inUse === true,
@@ -213,6 +217,7 @@ function mergeLocalProfileDirectory(
     return {
       ...profile,
       ...(previous.remainingPercent === undefined ? {} : { remainingPercent: previous.remainingPercent }),
+      ...(previous.subscription === undefined ? {} : { subscription: previous.subscription }),
       ...(previous.quotaError === undefined ? {} : { quotaError: previous.quotaError }),
     }
   })
@@ -2011,6 +2016,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           data-stale={quotaIsStale ? 'true' : undefined}
         >
           <h3>{t('capacityTitle')}</h3>
+          <SubscriptionEstimate subscription={profile.subscription} labels={subscriptionEstimateLabels(t)} />
           <div className={styles.capacityLine}>
             <span>{t('capacityCodex')}</span>
             <strong>{profile.remainingPercent === undefined
@@ -2076,6 +2082,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
+      const subscription = account.capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
       const remainingCapacity = usageUnavailable
         ? t('accountCapacityFetchFailed')
         : capacityBucket?.remainingPercent === undefined
@@ -2140,6 +2147,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           </section>
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
+            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
             <dl className={styles.compactSummaryList}>
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
@@ -2149,13 +2157,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                     {t('edit')}
                   </button>
                 </dd>
-              </div>
-              <div>
-                <dt className={styles.estimateLabel}>
-                  <span>{t('weeklyCapacityReference')}</span>
-                  <button type="button" className={styles.estimateHelp} aria-label={t('amountEstimateHelpLabel')} title={t('amountEstimateHelp')}>?</button>
-                </dt>
-                <dd>{t('aboutAmount', { amount: formatUsdMicros(CODEX_WEEKLY_SHAREABLE_ESTIMATED_API_COST_REFERENCE_MICROS) })}</dd>
               </div>
               <div>
                 <dt>{t('accountRemainingCapacity')}</dt>

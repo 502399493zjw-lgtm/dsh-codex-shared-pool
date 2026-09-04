@@ -151,6 +151,7 @@ describe('OpenAI Codex usage', () => {
 
   it('projects rolling percentages and exact provider-supported balances', () => {
     expect(parseOpenAICodexUsage(payload())).toEqual({
+      planType: 'business',
       rateLimits: [
         {
           id: 'codex',

@@ -304,6 +304,7 @@ export interface TeamContributionAccountSummary {
 }
 
 export interface TeamContributionCapacityBucketSummary {
+  readonly subscription?: import('../shared/subscription.ts').CodexSubscription
   readonly id: TeamContributionCapacityBucketId
   readonly reason: TeamContributionCapacityReason
   readonly remainingPercent?: number

@@ -58,6 +58,7 @@ export interface OpenAICodexIndividualLimit {
 
 /** Secret-free quota projection returned to the browser. */
 export interface OpenAICodexUsage {
+  readonly planType?: import('./subscription.ts').CodexPlanType
   /** Rate-limit buckets returned by the provider. */
   readonly rateLimits: readonly OpenAICodexRateLimit[]
   /** Optional prepaid-credit projection. */

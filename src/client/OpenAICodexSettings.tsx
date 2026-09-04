@@ -1,6 +1,8 @@
 /** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { SubscriptionEstimate, subscriptionEstimateLabels } from './SubscriptionEstimate.tsx'
+import { subscriptionFromUsage } from '../shared/subscription.ts'
 import type { CSSProperties } from 'react'
 import {
   Button,
@@ -243,6 +245,7 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
+      <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} />
       {usage.rateLimits.map(limit => (
         <div key={limit.id} style={quotaGroupStyle}>
           <h4 style={quotaTitleStyle}>{limit.name ?? limit.id}</h4>

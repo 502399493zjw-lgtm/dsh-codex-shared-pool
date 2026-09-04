@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { TeamContributionAccountSummary, TeamStatus } from './types.ts'
 
 export interface TeamQuotaSnapshot {
+  readonly subscription?: import('../shared/subscription.ts').CodexSubscription
   /** The latest provider health result for this upstream account. */
   readonly healthy: boolean
   /** Effective provider remaining percentage after applying all known limits. */
