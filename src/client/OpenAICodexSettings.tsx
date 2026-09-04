@@ -20,6 +20,7 @@ import type {
   LocalRoutingStatus,
   OpenAICodexAuthorizationFailure,
   OpenAICodexCancelLoginResult,
+  OpenAICodexConnectionStatus,
   OpenAICodexLoginChallenge,
   OpenAICodexProfilesStatus,
   OpenAICodexUsage,
@@ -65,6 +66,7 @@ interface AccountProfile {
   createdAt: number
   updatedAt: number
   usage: OpenAICodexUsage
+  connectionStatus: OpenAICodexConnectionStatus
   inUse?: boolean
   quotaError?: string
 }
@@ -759,7 +761,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                   setPriorityError(undefined)
                 }}
               >
-                <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} size={9} />
+                <StateDot state={profile.connectionStatus === 'reauth-required' ? 'error' : 'done'} size={9} />
                 <span className="dsh-codex-profile-identity">
                   <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
                   <span className="dsh-codex-profile-name">{profile.label}</span>
@@ -804,12 +806,16 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
               <h3 className="dsh-codex-detail-title">{selectedProfile.label}</h3>
               <span
                 className="dsh-codex-account-status"
-                data-state={selectedProfile.quotaError === undefined ? 'done' : 'error'}
+                data-state={selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'}
                 role="status"
-                {...selectedProfile.quotaError === undefined ? {} : { title: selectedProfile.quotaError }}
+                {...selectedProfile.connectionStatus === 'reauth-required' && selectedProfile.quotaError !== undefined
+                  ? { title: selectedProfile.quotaError }
+                  : {}}
               >
-                <StateDot state={selectedProfile.quotaError === undefined ? 'done' : 'error'} size={9} />
-                {selectedProfile.quotaError === undefined ? t('accountConnected') : t('accountConnectionUnavailable')}
+                <StateDot state={selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'} size={9} />
+                {selectedProfile.connectionStatus === 'reauth-required'
+                  ? t('accountConnectionUnavailable')
+                  : t('accountConnected')}
               </span>
             </div>
             <div className="dsh-codex-default">

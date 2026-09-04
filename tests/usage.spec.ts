@@ -10,6 +10,7 @@ import {
   readOpenAICodexRateLimits,
 } from '../src/usage.ts'
 import { OpenAICodexCredentialStore, OPENAI_CODEX_PROVIDER } from '../src/store.ts'
+import { OpenAICodexAuthenticationError } from '../src/openai-codex-authentication-error.ts'
 
 let root: string | undefined
 
@@ -57,14 +58,14 @@ function payload(): unknown {
   }
 }
 
-async function authenticatedStore(): Promise<OpenAICodexCredentialStore> {
+async function authenticatedStore(expires = Date.now() + 3_600_000): Promise<OpenAICodexCredentialStore> {
   root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-usage-'))
   const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
   const credential: OAuthCredential = {
     type: 'oauth',
     access: 'access-secret',
     refresh: 'refresh-secret',
-    expires: Date.now() + 3_600_000,
+    expires,
     accountId: 'account-1',
   }
   await store.modify(OPENAI_CODEX_PROVIDER, () => Promise.resolve(credential))
@@ -138,5 +139,31 @@ describe('OpenAI Codex usage', () => {
     })
     expect(status).not.toHaveProperty('expiresAt')
   })
-})
 
+  it.each([401, 403])('types HTTP %i as a reauthorization failure', async (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ error: 'unauthorized' }, status)))
+
+    await expect(readOpenAICodexRateLimits(await authenticatedStore()))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+
+  it('types a rejected refresh for an expired credential as a reauthorization failure', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe('https://auth.openai.com/oauth/token')
+      return response({ error: 'invalid_grant', error_description: 'refresh token expired' }, 400)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(readOpenAICodexRateLimits(await authenticatedStore(Date.now() - 1)))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('types a missing stored credential as a reauthorization failure', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-signed-out-'))
+    const store = new OpenAICodexCredentialStore(join(root, 'auth.json'))
+
+    await expect(readOpenAICodexRateLimits(store))
+      .rejects.toBeInstanceOf(OpenAICodexAuthenticationError)
+  })
+})

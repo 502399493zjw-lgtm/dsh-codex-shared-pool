@@ -66,6 +66,9 @@ export interface OpenAICodexUsage {
   readonly individualLimit?: OpenAICodexIndividualLimit
 }
 
+/** Browser-safe authentication health for one stored Codex profile. */
+export type OpenAICodexConnectionStatus = 'connected' | 'reauth-required'
+
 /** Fixed, secret-free reasons an OAuth attempt can fail in the Host. */
 export type OpenAICodexAuthorizationFailure =
   | 'authorization-failed'

@@ -57,6 +57,78 @@ const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): strin
 }
 
 describe('OpenAI Codex local routing monitor', () => {
+  it('keeps a signed-in profile connected when only quota telemetry is unavailable', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles')) {
+        return response({
+          status: 'ready',
+          profiles: [{
+            id: 'private-a',
+            label: 'Private A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [] },
+            inUse: true,
+            connectionStatus: 'connected',
+            quotaError: 'usage endpoint temporarily unavailable',
+          }],
+        })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      if (path.endsWith('/image-tools')) return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      if (path.endsWith('/response-api')) return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/network')) return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      throw new Error(`unexpected request: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<OpenAICodexSettings t={t} />)
+
+    const profile = await screen.findByRole('button', { name: /Private A/ })
+    expect(profile.querySelector('[state="done"]')).not.toBeNull()
+    const connection = screen.getByRole('status')
+    expect(connection.textContent).toContain(en.accountConnected)
+    expect(connection.getAttribute('data-state')).toBe('done')
+    expect(screen.queryByText(en.accountConnectionUnavailable)).toBeNull()
+    expect(screen.getByText(en.quotaUnavailable)).toBeDefined()
+  })
+
+  it('keeps a reauthorization failure visible as a connection error', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (path.endsWith('/profiles')) {
+        return response({
+          status: 'ready',
+          profiles: [{
+            id: 'private-a',
+            label: 'Private A',
+            createdAt: 1,
+            updatedAt: 1,
+            usage: { rateLimits: [] },
+            inUse: true,
+            connectionStatus: 'reauth-required',
+            quotaError: 'OpenAI Codex sign-in needs to be renewed',
+          }],
+        })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      if (path.endsWith('/image-tools')) return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      if (path.endsWith('/response-api')) return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/network')) return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      throw new Error(`unexpected request: ${path}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<OpenAICodexSettings t={t} />)
+
+    const profile = await screen.findByRole('button', { name: /Private A/ })
+    expect(profile.querySelector('[state="error"]')).not.toBeNull()
+    const connection = screen.getByRole('status')
+    expect(connection.textContent).toContain(en.accountConnectionUnavailable)
+    expect(connection.getAttribute('data-state')).toBe('error')
+  })
+
   it('shows exactly one in-use marker for the current first-choice profile', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url

@@ -15,8 +15,10 @@ import type { OpenAICodexUsage } from './usage.ts'
 import type { CodexQuotaSnapshot } from './quota/types.ts'
 import { assembleOpenAICodexProfileQuota } from './quota/profiles.ts'
 import { safeExternalErrorMessage } from './safe-message.ts'
+import { isOpenAICodexAuthenticationError } from './openai-codex-authentication-error.ts'
 import type {
   OpenAICodexAuthorizationFailure,
+  OpenAICodexConnectionStatus,
   OpenAICodexLoginChallenge,
   OpenAICodexProfilesStatus,
 } from './shared/types.ts'
@@ -70,6 +72,8 @@ export type OpenAICodexWebAuthStatus =
 /** Browser-safe account profile with its current quota projection. */
 export interface OpenAICodexWebProfile extends CodexProfileSummary {
   usage: OpenAICodexUsage
+  /** Whether this stored profile can still authenticate or needs authorization again. */
+  connectionStatus: OpenAICodexConnectionStatus
   /** Whether the newest local provider attempt selected this profile. */
   inUse: boolean
   quotaError?: string
@@ -174,9 +178,20 @@ export class OpenAICodexWebAuth {
       profiles: await Promise.all(profiles.map(async (profile) => {
         const inUse = this.routingEvents?.currentProfileId() === profile.id
         try {
-          return { ...profile, usage: await readOpenAICodexRateLimits(this.store.forProfile(profile.id)), inUse }
+          return {
+            ...profile,
+            usage: await readOpenAICodexRateLimits(this.store.forProfile(profile.id)),
+            inUse,
+            connectionStatus: 'connected' as const,
+          }
         } catch (error: unknown) {
-          return { ...profile, usage: { rateLimits: [] }, inUse, quotaError: safeExternalErrorMessage(error) }
+          return {
+            ...profile,
+            usage: { rateLimits: [] },
+            inUse,
+            connectionStatus: isOpenAICodexAuthenticationError(error) ? 'reauth-required' as const : 'connected' as const,
+            quotaError: safeExternalErrorMessage(error),
+          }
         }
       })),
     }
