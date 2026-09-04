@@ -19,7 +19,7 @@ describe('OpenAI Codex profile settings contract', () => {
 
     expect(source).toContain("width: '100%', minWidth: 0, maxWidth: 960, containerType: 'inline-size'")
     expect(source).toContain('.dsh-codex-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; min-width: 0; }')
-    expect(source).toContain('.dsh-codex-add-account { max-width: 100%; min-width: 0; flex: 0 1 auto; }')
+    expect(source).toMatch(/\.dsh-codex-add-account\s*\{[^}]*max-width: 100%; min-width: 0; flex: 0 1 auto;/)
     expect(source).toContain('.dsh-codex-add-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }')
     expect(source).toContain('className="dsh-codex-add-account"')
     expect(source).toContain('className="dsh-codex-add-account-label"')

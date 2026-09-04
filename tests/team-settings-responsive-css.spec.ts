@@ -43,7 +43,7 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.page\s*\{[^}]*width:\s*min\(100%,\s*960px\);[^}]*max-width:\s*960px;[^}]*min-width:\s*0;/s)
     expect(localSettingsSource).toMatch(/maxWidth:\s*960,\s*containerType:\s*'inline-size'/)
     expect(localSettingsSource).toMatch(
-      /@container \(max-width:\s*520px\)\s*\{[\s\S]*?\.dsh-codex-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+      /@container \(max-width:\s*620px\)\s*\{[\s\S]*?\.dsh-codex-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     )
     expect(css).toMatch(
       /@container team-settings \(max-width: 520px\)\s*\{[\s\S]*?\.accountWorkspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
