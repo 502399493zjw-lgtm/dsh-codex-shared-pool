@@ -451,6 +451,21 @@ async function submitDissolution() {
 }
 
 describe('Team subscription-pool workspace', () => {
+  it('shows subscription metadata for Spark-only accounts without Spark quota telemetry', async () => {
+    overviewState.contributions = [{
+      ...mine,
+      allowedModels: ['gpt-5.3-codex-spark'],
+      capacity: { sharedInFlight: 0, buckets: [{
+        id: 'codex_spark', reason: 'quota_unavailable',
+        subscription: mine.capacity.buckets[0].subscription,
+      }] },
+    }] as typeof overviewState.contributions
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /个人 Pro/u }))
+    expect(await screen.findByText('Pro 20x')).toBeDefined()
+    expect(screen.getByText('US$1,554.00 / US$2,100.00')).toBeDefined()
+  })
+
   it('opens management only from the Team panel', async () => {
     render(<TeamSettings t={translate} embedded />)
 

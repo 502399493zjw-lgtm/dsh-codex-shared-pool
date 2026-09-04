@@ -2082,6 +2082,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
+      const subscription = account.capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
       const remainingCapacity = capacityBucket?.remainingPercent === undefined
         ? t('capacityQuotaUnavailable')
         : `${capacityBucket.remainingPercent}%`
@@ -2150,7 +2151,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           ) : null}
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
-            <SubscriptionEstimate subscription={capacityBucket?.subscription} labels={subscriptionEstimateLabels(t)} />
+            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
             <dl className={styles.compactSummaryList}>
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>

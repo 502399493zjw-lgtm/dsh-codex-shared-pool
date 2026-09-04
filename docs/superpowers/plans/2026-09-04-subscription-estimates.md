@@ -41,3 +41,11 @@ Interface: React `SubscriptionEstimate` consumes optional `CodexSubscription` an
 - [ ] Commit only task files, push and open a draft PR against main, obtain independent change-scoped review, fix blockers and re-review. Do not merge.
 
 Acceptance: AC-SUB-001 uses synthetic Plus/Pro profiles to assert correct tier and weekly estimates; AC-SUB-002 asserts unsupported/missing plans and short-only windows never fabricate remaining dollars. Unit/DOM tests own no external accounts or shared services. Any isolated stock smoke owns only its temporary runtime and browser resources and must clean them up.
+
+## Execution results
+
+- Tasks 1 and 2 implementation and TDD checks completed. Final regression: 995 tests passed, 23 skipped; 33 prototype tests passed. Build and package verification passed.
+- Independent review identified missing subscription display for Spark-only contributions without Spark quota telemetry. Added a failing DOM regression and separated subscription metadata selection from quota bucket selection; regression now passes.
+- Isolated official DSH 0.1.0-rc.8 tarball installation and HTTP/browser-bundle smoke passed. This is not interactive browser or live OAuth evidence; those remain NOT_PROVEN. No shared instance was installed into or restarted.
+- Repository-wide sensitive-data scanner reported existing fixture/code-name matches and local worktree metadata, so its gate is not clean; task diff manually checked for credentials.
+- Initial implementation committed on `codex/subscription-estimates`. Git push timed out; no remote branch or draft PR was created. No merge or deployment performed.
