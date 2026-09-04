@@ -2206,7 +2206,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           </section>
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
-            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
             <dl className={styles.compactSummaryList}>
               <div>
                 <dt>{t('weeklySharedAmount')}</dt>
@@ -2222,6 +2221,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 <dd>{remainingCapacity}</dd>
               </div>
             </dl>
+            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
           </section>
           <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
             <header className={styles.compactRecentHeader}>

@@ -1587,6 +1587,18 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
+  it('places subscription details below remaining capacity in the weekly summary', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
+    const summary = within(account).getByRole('region', { name: zh.weeklySharingTitle })
+    const capacity = within(summary).getByText(zh.accountRemainingCapacity)
+    const tier = within(summary).getByText(zh.subscriptionTier)
+    const estimate = within(summary).getByText(zh.weeklyEstimate)
+    expect(capacity.compareDocumentPosition(tier) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(tier.compareDocumentPosition(estimate) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  })
+
   it('keeps unavailable usage inline without an account warning or retry button', async () => {
     managementApi.usage.mockRejectedValueOnce(new Error('upstream-usage-secret'))
 
