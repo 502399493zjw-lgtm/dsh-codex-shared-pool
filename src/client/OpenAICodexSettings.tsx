@@ -690,12 +690,12 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-settings button:focus-visible,
         .dsh-codex-settings input:focus-visible,
         .dsh-codex-settings select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3964fe); outline-offset: 2px; }
-        .dsh-codex-workspace { display: grid; grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.45fr); min-height: 500px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
+        .dsh-codex-workspace { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.45fr); overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
         .dsh-codex-profile-list { display: flex; flex-direction: column; min-width: 0; padding: 20px; border-right: 1px solid var(--dsw-alias-border-l2); }
         .dsh-codex-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; min-width: 0; }
         .dsh-codex-list-heading h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 16px; line-height: 24px; font-weight: 600; }
         .dsh-codex-list-heading h3 span { color: var(--dsw-alias-label-tertiary); font-weight: 500; }
-        .dsh-codex-add-account { max-width: 100%; min-width: 0; flex: 0 1 auto; }
+        .dsh-codex-add-account { min-height: 32px; padding: 5px 10px; border-radius: 8px; max-width: 100%; min-width: 0; flex: 0 1 auto; }
         .dsh-codex-add-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .dsh-codex-profile-items { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
         .dsh-codex-profile-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
@@ -705,20 +705,20 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-profile-alias { color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 18px; font-weight: 600; }
         .dsh-codex-profile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
         .dsh-codex-profile-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
-        .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 24px 26px 0; }
+        .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 20px 24px 0; }
         .dsh-codex-detail-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
         .dsh-codex-detail-title { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 20px; line-height: 28px; font-weight: 600; }
         .dsh-codex-account-status { display: inline-flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 7px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-weight: 500; }
         .dsh-codex-account-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-default { margin-top: 18px; }
-        .dsh-codex-default-action { min-width: 112px; justify-content: center; }
+        .dsh-codex-default-action { min-height: 34px; padding: 6px 14px; border-radius: 8px; min-width: 112px; justify-content: center; }
         .dsh-codex-default p { margin: 8px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
         .dsh-codex-default p[role='alert'] { color: var(--dsw-alias-state-error-primary); }
-        .dsh-codex-quota { margin-top: 26px; padding: 24px 0 28px; border-top: 1px solid var(--dsw-alias-border-l2); }
-        .dsh-codex-detail-actions { display: grid; grid-template-columns: 1fr 1fr; min-height: 60px; margin: auto -26px 0; border-top: 1px solid var(--dsw-alias-border-l2); }
-        .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; gap: 8px; padding: 8px; overflow-wrap: anywhere; border: 0; color: var(--dsw-alias-state-business-primary, #3964fe); background: transparent; cursor: pointer; }
-        .dsh-codex-detail-actions button + button { border-left: 1px solid var(--dsw-alias-border-l2); }
-        .dsh-codex-detail-actions button:hover { background: var(--dsw-alias-interactive-bg-hover); }
+        .dsh-codex-quota { margin-top: 20px; padding: 20px 0 24px; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0; margin-top: auto; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; gap: 6px; min-height: 36px; padding: 8px 12px; overflow-wrap: anywhere; border: 0; border-radius: 8px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-state-business-primary, #3964fe); background: transparent; cursor: pointer; }
+        .dsh-codex-detail-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+        .dsh-codex-detail-actions button:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover); }
         .dsh-codex-detail-actions .danger { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-dialog-field { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
         .dsh-codex-dialog-field > span { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; font-weight: 500; }
@@ -726,11 +726,10 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
         .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
         .dsh-codex-cancel-auth { margin-top: 16px; }
-        @container (max-width: 520px) {
+        @container (max-width: 620px) {
           .dsh-codex-workspace { grid-template-columns: minmax(0, 1fr); }
           .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-          .dsh-codex-profile-detail { min-height: 420px; padding-right: 18px; padding-left: 18px; }
-          .dsh-codex-detail-actions { margin-right: -18px; margin-left: -18px; }
+          .dsh-codex-profile-detail { padding-right: 18px; padding-left: 18px; }
           .dsh-codex-empty { min-height: 280px; }
         }
         .dsh-codex-routing { overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
@@ -779,7 +778,6 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
           .dsh-codex-workspace { grid-template-columns: 1fr; }
           .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
           .dsh-codex-profile-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
-          .dsh-codex-profile-detail { min-height: 440px; }
         }
         @media (prefers-reduced-motion: reduce) {
           .dsh-codex-settings *, .dsh-codex-settings *::before, .dsh-codex-settings *::after { transition: none !important; }
