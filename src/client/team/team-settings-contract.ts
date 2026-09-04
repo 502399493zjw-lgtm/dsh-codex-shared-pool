@@ -22,6 +22,10 @@ export interface ContributionProtectionDraft {
   readonly models: string
 }
 
+export interface WeeklySharingLimitDraft {
+  readonly weeklyLimitUsd: string
+}
+
 export interface TeamContributionGroups {
   readonly shared: readonly TeamManagementContributionSummary[]
   readonly unshared: readonly TeamManagementContributionSummary[]
@@ -71,6 +75,37 @@ export type ContributionProtectionDraftResult = {
   readonly field: 'reserve' | 'requestCap' | 'weeklyLimitUsd' | 'allowedModels'
 }
 
+export type WeeklySharingLimitDraftResult = {
+  readonly ok: true
+  readonly patch: {
+    readonly weeklySharedEstimatedApiCostLimitMicros: number | null
+  }
+} | {
+  readonly ok: false
+  readonly field: 'weeklyLimitUsd'
+}
+
+export function parseWeeklySharingLimitDraft(
+  draft: WeeklySharingLimitDraft,
+): WeeklySharingLimitDraftResult {
+  const weeklyLimitText = draft.weeklyLimitUsd.trim()
+  const weeklyLimitUsd = weeklyLimitText.length === 0 ? null : Number(weeklyLimitText)
+  const weeklyLimitMicros = weeklyLimitUsd === null ? null : Math.round(weeklyLimitUsd * 1_000_000)
+  if (
+    weeklyLimitMicros !== null
+    && (weeklyLimitUsd === null
+      || !Number.isFinite(weeklyLimitUsd)
+      || weeklyLimitMicros < MIN_WEEKLY_LIMIT_USD_MICROS
+      || weeklyLimitMicros > MAX_WEEKLY_LIMIT_USD_MICROS
+      || Math.abs(weeklyLimitMicros / 1_000_000 - weeklyLimitUsd) > Number.EPSILON)
+  ) return { ok: false, field: 'weeklyLimitUsd' }
+
+  return {
+    ok: true,
+    patch: { weeklySharedEstimatedApiCostLimitMicros: weeklyLimitMicros },
+  }
+}
+
 /**
  * Parse the text-field representation into the exact limits accepted by both
  * Team store implementations, so invalid settings never become a failed HTTP
@@ -99,17 +134,8 @@ export function parseContributionProtectionDraft(
     )
   ) return { ok: false, field: 'requestCap' }
 
-  const weeklyLimitText = (draft.weeklyLimitUsd ?? '').trim()
-  const weeklyLimitUsd = weeklyLimitText.length === 0 ? null : Number(weeklyLimitText)
-  const weeklyLimitMicros = weeklyLimitUsd === null ? null : Math.round(weeklyLimitUsd * 1_000_000)
-  if (
-    weeklyLimitMicros !== null
-    && (weeklyLimitUsd === null
-      || !Number.isFinite(weeklyLimitUsd)
-      || weeklyLimitMicros < MIN_WEEKLY_LIMIT_USD_MICROS
-      || weeklyLimitMicros > MAX_WEEKLY_LIMIT_USD_MICROS
-      || Math.abs(weeklyLimitMicros / 1_000_000 - weeklyLimitUsd) > Number.EPSILON)
-  ) return { ok: false, field: 'weeklyLimitUsd' }
+  const weeklyLimitResult = parseWeeklySharingLimitDraft({ weeklyLimitUsd: draft.weeklyLimitUsd ?? '' })
+  if (!weeklyLimitResult.ok) return weeklyLimitResult
 
   const allowedModels = draft.models.split(',').map(value => value.trim()).filter(Boolean)
   if (
@@ -122,7 +148,7 @@ export function parseContributionProtectionDraft(
     patch: {
       personalReservePercent: reserve,
       maxSharedRequestsPerWindow: requestCap,
-      weeklySharedEstimatedApiCostLimitMicros: weeklyLimitMicros,
+      ...weeklyLimitResult.patch,
       allowedModels,
     },
   }

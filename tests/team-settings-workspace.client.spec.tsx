@@ -83,7 +83,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   writeClipboard: vi.fn().mockResolvedValue(true),
 }))
 
-import { TeamSettings } from '../src/client/team/TeamSettings.tsx'
+import { formatWeeklyUsdMicros, TeamSettings } from '../src/client/team/TeamSettings.tsx'
 import { zh, type TeamSettingsKey } from '../src/client/team/locales.ts'
 import { TEAM_AUTHORIZATION_FAILED_CODE } from '../src/shared/team-management.ts'
 
@@ -144,6 +144,14 @@ function expectedContext(currentMemberId = 'member-me') {
     currentMemberId,
   }
 }
+
+it('keeps compact weekly amounts in dollar-sign form for Chinese UI', () => {
+  const previousLanguage = document.documentElement.lang
+  document.documentElement.lang = 'zh-CN'
+  expect(formatWeeklyUsdMicros(157_500)).toBe('$0.16')
+  expect(formatWeeklyUsdMicros(null)).toBe('—')
+  document.documentElement.lang = previousLanguage
+})
 
 function confirmingDissolution() {
   return { state: 'confirming' as const, teamName: '周末造物局', requestedAt: NOW }
@@ -1323,18 +1331,20 @@ describe('Team subscription-pool workspace', () => {
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
 
-    expect(within(account).getByText(zh.limitNoLimit)).toBeDefined()
+    expect(within(account).getByText((_, element) => element?.tagName === 'DD'
+      && /—\s*\/\s*∞\s*编辑/u.test(element.textContent ?? ''))).toBeDefined()
     fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
-    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    expect(within(dialog).getByLabelText(zh.weeklyLimitLabel)).toBeDefined()
+    expect(within(dialog).queryByLabelText(zh.reserveLabel)).toBeNull()
+    expect(within(dialog).queryByLabelText(zh.requestCapLabel)).toBeNull()
+    expect(within(dialog).queryByLabelText(zh.allowedModelsLabel)).toBeNull()
+    fireEvent.change(within(dialog).getByLabelText(zh.weeklyLimitLabel), { target: { value: '25' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
 
     await waitFor(() => {
       expect(managementApi.updateContribution).toHaveBeenCalledWith('mine-active', {
-        personalReservePercent: 30,
-        maxSharedRequestsPerWindow: null,
-        weeklySharedEstimatedApiCostLimitMicros: null,
-        allowedModels: [],
+        weeklySharedEstimatedApiCostLimitMicros: 25_000_000,
       }, expectedContext())
     })
   })
@@ -1410,14 +1420,14 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
-    fireEvent.change(within(dialog).getByLabelText(zh.reserveLabel), { target: { value: '30' } })
+    fireEvent.change(within(dialog).getByLabelText(zh.weeklyLimitLabel), { target: { value: '25' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
 
     const saving = await within(dialog).findByRole('button', { name: zh.savingContribution })
     expect(saving).toHaveProperty('disabled', true)
     expect(saving.getAttribute('aria-busy')).toBe('true')
 
-    resolveUpdate({ account: { ...mine, personalReservePercent: 30 } })
+    resolveUpdate({ account: { ...mine, weeklySharedEstimatedApiCostLimitMicros: 25_000_000 } })
     await waitFor(() => { expect(screen.queryByRole('dialog', { name: zh.editProtection })).toBeNull() })
   })
 
@@ -1583,8 +1593,8 @@ describe('Team subscription-pool workspace', () => {
     expect(weekly.querySelectorAll('dl > div')).toHaveLength(3)
     expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
     const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
-      && /上限.*\$1\.00.*编辑/u.test(element.textContent ?? ''))
-    expect(weeklyAmount.textContent).not.toMatch(/\$0\.16|已用|共享上限|\//u)
+      && /\$0\.16\s*\/\s*\$1\.00\s*编辑/u.test(element.textContent ?? ''))
+    expect(weeklyAmount.textContent).not.toMatch(/已用|共享上限/u)
     expect(within(weekly).queryByRole('img')).toBeNull()
     const editLimit = within(weekly).getByRole('button', { name: zh.editSharingLimit })
     expect(editLimit.textContent).toBe(zh.edit)
