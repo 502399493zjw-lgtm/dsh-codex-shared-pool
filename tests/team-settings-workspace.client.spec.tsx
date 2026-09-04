@@ -422,13 +422,13 @@ async function openTeamSettings(view?: 'usage' | 'members' | 'invitations') {
 }
 
 function openTeamManagement(settings: HTMLElement) {
-  fireEvent.click(within(settings).getByRole('button', { name: /Team 管理/u }))
+  fireEvent.click(within(settings).getByRole('button', { name: /团队管理/u }))
   return within(settings).getByRole('menu', { name: zh.teamManagement })
 }
 
 async function openDissolutionDialog() {
   const settings = await openTeamSettings()
-  fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散 Team' }))
+  fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散团队' }))
   return screen.getByRole('dialog', { name: /永久解散.*周末造物局/u })
 }
 
@@ -443,10 +443,10 @@ it('does not expose local-only disconnect as a normal action for a valid Team co
 
 async function submitDissolution() {
   const dialog = await openDissolutionDialog()
-  fireEvent.change(within(dialog).getByLabelText('输入完整 Team 名称以确认'), {
+  fireEvent.change(within(dialog).getByLabelText('输入完整团队名称以确认'), {
     target: { value: '周末造物局' },
   })
-  fireEvent.click(within(dialog).getByRole('button', { name: '永久解散 Team' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: '永久解散团队' }))
   return dialog
 }
 
@@ -518,7 +518,7 @@ describe('Team subscription-pool workspace', () => {
   it('keeps account sharing in the Team panel and management behind Team settings', async () => {
     render(<TeamSettings t={translate} embedded />)
 
-    expect(screen.queryByRole('navigation', { name: 'Team 工作区' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: '团队工作区' })).toBeNull()
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     expect(within(panel).getByRole('button', { name: /个人 Pro/u })).toBeDefined()
     expect(within(panel).getByRole('button', { name: /备用账号/u })).toBeDefined()
@@ -526,7 +526,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(panel).getByRole('button', { name: zh.addAccount })).toBeDefined()
 
     const settings = await openTeamSettings()
-    const navigation = within(settings).getByRole('navigation', { name: 'Team 工作区' })
+    const navigation = within(settings).getByRole('navigation', { name: '团队工作区' })
     const usageEntry = within(navigation).getByRole('button', { name: '用量' })
     const membersEntry = within(navigation).getByRole('button', { name: '成员' })
     const invitationsEntry = within(navigation).getByRole('button', { name: '邀请码' })
@@ -678,22 +678,22 @@ describe('Team subscription-pool workspace', () => {
     expect(await within(panel).findByRole('heading', { name: '本机账号 A' })).toBeDefined()
     expect(within(panel).getByRole('button', { name: /本机账号 B/u })).toBeDefined()
     expect(within(panel).getByRole('button', { name: /本机账号 C/u })).toBeDefined()
-    expect(within(panel).getByText((content) => content.includes('需要再次授权后，Team 才能使用这个账号。'))).toBeDefined()
+    expect(within(panel).getByText((content) => content.includes('需要再次授权后，团队才能使用这个账号。'))).toBeDefined()
 
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
 
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
-    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
     expect(within(confirmation).getByText('请再次登录这个 OpenAI 账号。')).toBeDefined()
     expect(within(confirmation).getByText((content) => content.includes('你的本机登录保持不变。'))).toBeDefined()
     expect(within(confirmation).getByText((content) => content.includes('不会上传本机 auth.json。'))).toBeDefined()
     fireEvent.click(within(confirmation).getByRole('button', { name: zh.cancel }))
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
 
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })).getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })).getByRole('button', { name: '继续，再次授权' }))
 
     await waitFor(() => {
       expect(managementApi.startOAuth).toHaveBeenCalledWith(
@@ -714,7 +714,7 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    expect(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeDefined()
+    expect(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeDefined()
 
     switchToSecondOwnerTeam()
     fireEvent.click(within(panel).getByRole('button', { name: zh.teamSettings }))
@@ -722,7 +722,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+      expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
     })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
   })
@@ -741,14 +741,14 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    const recoveryTitle = await screen.findByText('Team 已更新，请重新确认后继续。')
+    const recoveryTitle = await screen.findByText('团队已更新，请重新确认后继续。')
     expect(recoveryTitle.parentElement?.getAttribute('aria-live')).toBe('polite')
     expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
     expect(document.body.textContent).not.toContain('Team connection changed; refresh before trying again')
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
   })
 
   it('discards a newly-added placeholder and restores the prior account after cancellation', async () => {
@@ -1189,7 +1189,7 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => {
       expect(screen.queryByRole('region', { name: '等待浏览器授权' })).toBeNull()
       expect(screen.getByText('另一个团队')).toBeDefined()
-      expect(screen.getByText('Team 已更新，请重新确认后继续。')).toBeDefined()
+      expect(screen.getByText('团队已更新，请重新确认后继续。')).toBeDefined()
     })
     expect(managementApi.cancelOAuth).toHaveBeenCalledTimes(1)
   })
@@ -1271,10 +1271,10 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    expect(await screen.findByText('暂时无法连接 OpenAI 授权服务，请检查 Team Host 的网络或代理配置后重试。')).toBeDefined()
+    expect(await screen.findByText('暂时无法连接 OpenAI 授权服务，请检查团队 Host 的网络或代理配置后重试。')).toBeDefined()
     expect(document.body.textContent).not.toMatch(/team_authorization_network_unavailable|Country, region|provider-detail/iu)
   })
 
@@ -1288,7 +1288,7 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
     expect(await screen.findByText('OpenAI 授权未能完成，未添加账号。请重试。')).toBeDefined()
@@ -1312,12 +1312,12 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
       .getByRole('button', { name: '继续，再次授权' }))
 
-    expect(await screen.findByText('这个 OpenAI 账号已在 Team 中共享，已自动关联到现有账号，无需再次授权。')).toBeDefined()
+    expect(await screen.findByText('这个 OpenAI 账号已在团队中共享，已自动关联到现有账号，无需再次授权。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_local_account_already_shared')
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于 Team' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
     const directory = within(panel).getByRole('complementary')
     expect(within(directory).getByRole('button', { name: /本机账号 A · 我贡献/u })).toBeDefined()
     expect(within(directory).queryByRole('button', { name: /本机账号 A · 本机已登录/u })).toBeNull()
@@ -1334,7 +1334,7 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    const dialogName = '将 本机账号 A 用于 Team'
+    const dialogName = '将 本机账号 A 用于团队'
     fireEvent.click(within(screen.getByRole('dialog', { name: dialogName }))
       .getByRole('button', { name: '继续，再次授权' }))
 
@@ -1397,7 +1397,7 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
 
-    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
     const quota = within(dialog).getByRole('region', { name: zh.sharingQuotaConfirmation })
     expect(within(quota).getByText(zh.sharingQuotaUnavailable)).toBeDefined()
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
@@ -1460,7 +1460,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(teamBar).getByText(translate('membersCount', { count: 2 }))).toBeDefined()
     expect(within(teamBar).queryByText(translate('connectedAs', { name: 'Edison' }))).toBeNull()
     expect(within(contribution).getByText(zh.contributedByMe)).toBeDefined()
-    expect(within(account).getByText('本机已登录 · Team 可用')).toBeDefined()
+    expect(within(account).getByText('本机已登录 · 团队可用')).toBeDefined()
     expect(within(account).getByRole('button', { name: '终止共享' })).toBeDefined()
     expect(within(account).queryByText(zh.contributionActiveHint)).toBeNull()
   })
@@ -1606,7 +1606,7 @@ describe('Team subscription-pool workspace', () => {
     const usage = within(usageSettings).getByRole('region', { name: '用量' })
     fireEvent.click(within(usage).getByRole('button', { name: zh.retry }))
     expect(await within(usage).findByRole('group', { name: zh.myTeamUsage })).toBeDefined()
-    fireEvent.click(screen.getByRole('button', { name: '返回 Team' }))
+    fireEvent.click(screen.getByRole('button', { name: '返回团队' }))
     const restoredAccount = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
     expect(within(restoredAccount).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
@@ -1789,10 +1789,10 @@ describe('Team subscription-pool workspace', () => {
 
     expect(within(details).getByRole('heading', { name: '本机账号 A' })).toBeDefined()
     expect(within(details).getAllByText('本机正在使用')).toHaveLength(1)
-    expect(details.textContent).toContain('需要再次授权后，Team 才能使用这个账号。')
+    expect(details.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(details.textContent).toContain('不会上传本机 auth.json。')
     const shareRegion = within(details).getByRole('region', { name: zh.shareToTeam })
-    expect(shareRegion.textContent).toContain('需要再次授权后，Team 才能使用这个账号。')
+    expect(shareRegion.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(shareRegion.textContent).toContain(zh.localCredentialBoundary)
     expect(shareRegion.textContent).not.toContain(zh.localCredentialBoundaryHint)
     expect(within(shareRegion).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
@@ -1843,7 +1843,7 @@ describe('Team subscription-pool workspace', () => {
     const details = within(settings).getByRole('region', { name: zh.accountDetails })
     fireEvent.click(within(details).getByRole('button', { name: zh.shareToTeam }))
 
-    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于 Team' })
+    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
     fireEvent.click(within(confirmation).getByRole('button', { name: '继续，再次授权' }))
 
@@ -2303,7 +2303,7 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => {
       expect(within(settings).getByText(/当前的成员名称是「Edison · 2」/u)).toBeDefined()
     })
-    expect(screen.queryByText('这个 Team 已永久解散，无法继续访问。')).toBeNull()
+    expect(screen.queryByText('这个团队已永久解散，无法继续访问。')).toBeNull()
   })
 
   it('keeps the display-name migration notice visible when the server ACK fails', async () => {
@@ -2447,7 +2447,7 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('此设备的 Team 访问已失效')).toBeDefined()
+    expect(await screen.findByText('此设备的团队访问已失效')).toBeDefined()
     expect(screen.queryByRole('button', { name: zh.previewInvitation })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '清除本地连接' }))
 
@@ -2570,7 +2570,7 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings()
     const menu = openTeamManagement(settings)
 
-    expect(within(menu).getByRole('menuitem', { name: '永久解散 Team' })).toBeDefined()
+    expect(within(menu).getByRole('menuitem', { name: '永久解散团队' })).toBeDefined()
   })
 
   it('binds an Owner pause request to the rendered lifecycle revision', async () => {
@@ -2593,11 +2593,11 @@ describe('Team subscription-pool workspace', () => {
     const dialog = await openDissolutionDialog()
     expect(within(dialog).getByText(/全部成员.*失去访问/u)).toBeDefined()
     expect(within(dialog).getByText(/全部邀请码.*失效/u)).toBeDefined()
-    expect(within(dialog).getByText(/全部 Team 设备连接.*失效/u)).toBeDefined()
+    expect(within(dialog).getByText(/全部团队设备连接.*失效/u)).toBeDefined()
     expect(within(dialog).getByText(/共享账号.*停止承接新请求/u)).toBeDefined()
 
-    const confirmation = within(dialog).getByLabelText('输入完整 Team 名称以确认')
-    const submit = within(dialog).getByRole('button', { name: '永久解散 Team' })
+    const confirmation = within(dialog).getByLabelText('输入完整团队名称以确认')
+    const submit = within(dialog).getByRole('button', { name: '永久解散团队' })
     expect(submit.hasAttribute('disabled')).toBe(true)
 
     fireEvent.change(confirmation, { target: { value: '周末造物' } })
@@ -2613,9 +2613,9 @@ describe('Team subscription-pool workspace', () => {
     managementApi.dissolveTeam.mockImplementationOnce(() => new Promise(resolve => { resolveDissolution = resolve }))
     render(<TeamSettings t={translate} embedded />)
     const dialog = await openDissolutionDialog()
-    const confirmation = within(dialog).getByLabelText('输入完整 Team 名称以确认')
+    const confirmation = within(dialog).getByLabelText('输入完整团队名称以确认')
     const cancel = within(dialog).getByRole('button', { name: zh.cancel })
-    const submit = within(dialog).getByRole('button', { name: '永久解散 Team' })
+    const submit = within(dialog).getByRole('button', { name: '永久解散团队' })
     fireEvent.change(confirmation, { target: { value: '周末造物局' } })
 
     fireEvent.click(submit)
@@ -2636,17 +2636,17 @@ describe('Team subscription-pool workspace', () => {
     expect(document.body.contains(dialog)).toBe(true)
 
     await act(async () => { resolveDissolution(confirmingDissolution()) })
-    expect(await screen.findByRole('heading', { name: '正在确认 Team 解散结果' })).toBeDefined()
+    expect(await screen.findByRole('heading', { name: '正在确认团队解散结果' })).toBeDefined()
   })
 
   it.each([403, 409])('keeps the confirmation form and refreshes Owner state after a definite %s rejection', async status => {
     managementApi.dissolveTeam.mockRejectedValueOnce(Object.assign(new Error('Team lifecycle changed'), { status }))
     render(<TeamSettings t={translate} embedded />)
     const dialog = await openDissolutionDialog()
-    const confirmation = within(dialog).getByLabelText('输入完整 Team 名称以确认')
+    const confirmation = within(dialog).getByLabelText('输入完整团队名称以确认')
     fireEvent.change(confirmation, { target: { value: '周末造物局' } })
 
-    fireEvent.click(within(dialog).getByRole('button', { name: '永久解散 Team' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '永久解散团队' }))
 
     await waitFor(() => { expect(managementApi.overview).toHaveBeenCalledTimes(2) })
     expect(screen.getByRole('dialog', { name: /永久解散.*周末造物局/u })).toBe(dialog)
@@ -2660,8 +2660,8 @@ describe('Team subscription-pool workspace', () => {
 
     await submitDissolution()
 
-    expect(await screen.findByRole('heading', { name: '正在确认 Team 解散结果' })).toBeDefined()
-    expect(screen.getByText('正在确认 Team 解散结果。')).toBeDefined()
+    expect(await screen.findByRole('heading', { name: '正在确认团队解散结果' })).toBeDefined()
+    expect(screen.getByText('正在确认团队解散结果。')).toBeDefined()
     expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
     expect(screen.getAllByRole('button')).toHaveLength(1)
     expect(screen.getByRole('button', { name: '继续确认' })).toBeDefined()
@@ -2676,7 +2676,7 @@ describe('Team subscription-pool workspace', () => {
     { cleanupState: 'retry_required' as const, copy: '远端操作已完成，本机连接清理待重试。' },
     {
       cleanupState: 'manual_required' as const,
-      copy: 'Team 端操作已完成，请按说明手动清理这台设备上的只读配置。',
+      copy: '团队端操作已完成，请按说明手动清理这台设备上的只读配置。',
     },
   ])('keeps confirmed dissolution terminal when local cleanup is $cleanupState', async ({ cleanupState, copy }) => {
     managementApi.dissolveTeam.mockResolvedValueOnce(confirmedDissolution(cleanupState))
@@ -2684,7 +2684,7 @@ describe('Team subscription-pool workspace', () => {
 
     await submitDissolution()
 
-    expect(await screen.findByText('这个 Team 已永久解散，无法继续访问。')).toBeDefined()
+    expect(await screen.findByText('这个团队已永久解散，无法继续访问。')).toBeDefined()
     expect(screen.getByText(copy)).toBeDefined()
     expect(screen.queryByRole('region', { name: zh.teamSettingsTitle })).toBeNull()
     expect(managementApi.overview).toHaveBeenCalledTimes(1)
@@ -2708,7 +2708,7 @@ describe('Team subscription-pool workspace', () => {
     })
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('这个 Team 已永久解散，无法继续访问。')).toBeDefined()
+    expect(await screen.findByText('这个团队已永久解散，无法继续访问。')).toBeDefined()
     expect(managementApi.overview).not.toHaveBeenCalled()
     expect(document.body.textContent).not.toContain('team_dissolved')
   })
@@ -2728,7 +2728,7 @@ describe('Team subscription-pool workspace', () => {
     managementApi.clearTeamDissolution.mockResolvedValueOnce({ cleared: true })
     render(<TeamSettings t={translate} embedded />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '继续加入 Team' }))
+    fireEvent.click(await screen.findByRole('button', { name: '继续加入团队' }))
 
     expect(await screen.findByRole('heading', { name: zh.notConnected })).toBeDefined()
     expect(managementApi.clearTeamDissolution).toHaveBeenCalledTimes(1)
@@ -2737,9 +2737,9 @@ describe('Team subscription-pool workspace', () => {
   })
 
   it.each([
-    ['member_removed', '你已不再是这个 Team 的成员。'],
-    ['member_left', '你已经退出这个 Team。'],
-    ['device_revoked', '当前 Team 连接已失效。'],
+    ['member_removed', '你已不再是这个团队的成员。'],
+    ['member_left', '你已经退出这个团队。'],
+    ['device_revoked', '当前团队连接已失效。'],
   ] as const)('renders the %s terminal without requesting overview', async (code, copy) => {
     managementApi.status.mockResolvedValue({
       enabled: true,
@@ -2753,7 +2753,7 @@ describe('Team subscription-pool workspace', () => {
     expect(await screen.findByText(copy)).toBeDefined()
     expect(managementApi.overview).not.toHaveBeenCalled()
     expect(document.body.textContent).not.toContain(code)
-    expect(document.body.textContent).not.toContain('这个 Team 已永久解散')
+    expect(document.body.textContent).not.toContain('这个团队已永久解散')
   })
 
   it('forgets a completed connection terminal before returning to the join flow', async () => {
@@ -2770,7 +2770,7 @@ describe('Team subscription-pool workspace', () => {
       })
     render(<TeamSettings t={translate} embedded />)
 
-    fireEvent.click(await screen.findByRole('button', { name: '继续加入 Team' }))
+    fireEvent.click(await screen.findByRole('button', { name: '继续加入团队' }))
 
     expect(await screen.findByRole('heading', { name: zh.notConnected })).toBeDefined()
     expect(managementApi.clearConnectionTerminal).toHaveBeenCalledTimes(1)
@@ -2795,7 +2795,7 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('这个 Team 已永久解散，无法继续访问。')).toBeDefined()
+    expect(await screen.findByText('这个团队已永久解散，无法继续访问。')).toBeDefined()
     expect(managementApi.status).toHaveBeenCalledTimes(2)
     expect(managementApi.overview).toHaveBeenCalledTimes(1)
     expect(document.body.textContent).not.toContain('team_dissolved')
@@ -2819,7 +2819,7 @@ describe('Team subscription-pool workspace', () => {
 
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('你已不再是这个 Team 的成员。')).toBeDefined()
+    expect(await screen.findByText('你已不再是这个团队的成员。')).toBeDefined()
     expect(managementApi.status).toHaveBeenCalledTimes(2)
     expect(document.body.textContent).not.toContain('周末造物局')
     expect(document.body.textContent).not.toContain('US$5.88')
@@ -2845,7 +2845,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: zh.pauseTeam }))
     fireEvent.click(within(screen.getByRole('dialog', { name: '暂停“周末造物局”？' })).getByRole('button', { name: '确认暂停' }))
 
-    expect(await screen.findByText('当前 Team 连接已失效。')).toBeDefined()
+    expect(await screen.findByText('当前团队连接已失效。')).toBeDefined()
     expect(managementApi.status).toHaveBeenCalledTimes(2)
     expect(document.body.textContent).not.toContain('周末造物局')
     expect(screen.queryByRole('button', { name: zh.pauseTeam })).toBeNull()
@@ -2871,7 +2871,7 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('invitations')
     fireEvent.click(within(settings).getByRole('button', { name: zh.revealInvite }))
 
-    expect(await screen.findByText('你已不再是这个 Team 的成员。')).toBeDefined()
+    expect(await screen.findByText('你已不再是这个团队的成员。')).toBeDefined()
     expect(managementApi.status).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('dialog', { name: zh.inviteRevealed })).toBeNull()
     expect(screen.queryByText(REVEALED_INVITE_TOKEN)).toBeNull()
@@ -3036,7 +3036,7 @@ describe('Team subscription-pool workspace', () => {
 
     const settings = await openTeamSettings('usage')
     const usage = within(settings).getByRole('region', { name: '用量' })
-    expect(screen.getByText(/Team 已暂停/u)).toBeDefined()
+    expect(screen.getByText(/团队已暂停/u)).toBeDefined()
     expect(usage.textContent).toContain('US$5.88')
     expect(managementApi.usage).toHaveBeenCalledTimes(1)
   })
@@ -3058,7 +3058,7 @@ describe('Team subscription-pool workspace', () => {
 
     expect(managementApi.setTeamStatus).not.toHaveBeenCalled()
     let confirmation = screen.getByRole('dialog', { name: '暂停“周末造物局”？' })
-    expect(confirmation.textContent).toContain('暂停后，Team 将停止接受新的共享请求；正在进行的请求可以完成。')
+    expect(confirmation.textContent).toContain('暂停后，团队将停止接受新的共享请求；正在进行的请求可以完成。')
     expect(confirmation.textContent).toContain('暂停期间不能生成或使用邀请码；现有邀请码会继续自然到期。')
     expect(confirmation.textContent).toContain('成员、用量和共享设置会保留，之后可以恢复。')
     fireEvent.click(within(confirmation).getByRole('button', { name: '确认暂停' }))
@@ -3071,7 +3071,7 @@ describe('Team subscription-pool workspace', () => {
 
     expect(managementApi.setTeamStatus).toHaveBeenCalledTimes(1)
     confirmation = screen.getByRole('dialog', { name: '恢复“周末造物局”？' })
-    expect(confirmation.textContent).toContain('恢复后，Team 会重新接受新的共享请求，并允许使用仍有效的邀请码加入。')
+    expect(confirmation.textContent).toContain('恢复后，团队会重新接受新的共享请求，并允许使用仍有效的邀请码加入。')
     expect(confirmation.textContent).toContain('成员自己的共享设置将按当前状态继续生效。')
     fireEvent.click(within(confirmation).getByRole('button', { name: '确认恢复' }))
 
@@ -3090,7 +3090,7 @@ describe('Team subscription-pool workspace', () => {
 
     const settings = await openTeamSettings('invitations')
     expect(within(settings).getByRole('button', { name: zh.inviteFriend }).hasAttribute('disabled')).toBe(true)
-    expect(within(settings).getByText('Team 已暂停。暂停期间不能生成或使用邀请码，但仍可查看或撤销。以下邀请码会继续自然到期；恢复后，届时仍有效的邀请码可继续使用。')).toBeDefined()
+    expect(within(settings).getByText('团队已暂停。暂停期间不能生成或使用邀请码，但仍可查看或撤销。以下邀请码会继续自然到期；恢复后，届时仍有效的邀请码可继续使用。')).toBeDefined()
     expect(within(settings).getByText('暂停期间不可用')).toBeDefined()
     expect(within(settings).getByRole('button', { name: zh.revealInvite }).hasAttribute('disabled')).toBe(false)
     expect(within(settings).getByRole('button', { name: zh.revokeInvite }).hasAttribute('disabled')).toBe(false)
@@ -3121,7 +3121,7 @@ describe('Team subscription-pool workspace', () => {
     const navigation = within(reopenedSettings).getByRole('navigation', { name: zh.workspaceNavigation })
     fireEvent.click(within(navigation).getByRole('button', { name: zh.membersTitle }))
 
-    expect(within(reopenedSettings).getByText('Team Owner · 我')).toBeDefined()
+    expect(within(reopenedSettings).getByText('团队所有者 · 我')).toBeDefined()
     expect(within(reopenedSettings).getAllByText('成员').length).toBeGreaterThan(0)
     expect(within(reopenedSettings).queryByRole('button', { name: '设为 Admin' })).toBeNull()
     expect(within(reopenedSettings).queryByRole('button', { name: '设为 Member' })).toBeNull()
@@ -3259,7 +3259,7 @@ describe('Team subscription-pool workspace', () => {
       'Mia',
       'Bob',
     ])
-    expect(within(rows[0]!).getByText('Team Owner · 我')).toBeDefined()
+    expect(within(rows[0]!).getByText('团队所有者 · 我')).toBeDefined()
     expect(within(settings).queryByRole('button', { name: zh.leaveTeam })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.removeMember })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '管理 Edison' })).toBeNull()
@@ -3293,8 +3293,8 @@ describe('Team subscription-pool workspace', () => {
     expect(within(transferDialog).queryByRole('radio', { name: 'Bob' })).toBeNull()
     fireEvent.click(eligibleTarget)
 
-    transferDialog = screen.getByRole('dialog', { name: '邀请「Mia」接任 Team Owner？' })
-    expect(within(transferDialog).getByText('对方接受前，你仍是 Team Owner。对方接受后，你会变为成员，全部尚未使用的邀请码会失效。成员显示名称不代表经过验证的身份，请先通过可信渠道确认「Mia」是预期成员。')).toBeDefined()
+    transferDialog = screen.getByRole('dialog', { name: '邀请「Mia」接任团队所有者？' })
+    expect(within(transferDialog).getByText('对方接受前，你仍是团队所有者。对方接受后，你会变为成员，全部尚未使用的邀请码会失效。成员显示名称不代表经过验证的身份，请先通过可信渠道确认「Mia」是预期成员。')).toBeDefined()
     fireEvent.click(within(transferDialog).getByRole('button', { name: '发送转让请求' }))
 
     await waitFor(() => {
@@ -3302,9 +3302,9 @@ describe('Team subscription-pool workspace', () => {
     })
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
     fireEvent.click(within(within(settings).getByRole('navigation', { name: zh.workspaceNavigation })).getByRole('button', { name: zh.membersTitle }))
-    expect(within(settings).getByText('Team Owner · 我')).toBeDefined()
+    expect(within(settings).getByText('团队所有者 · 我')).toBeDefined()
     expect(within(settings).getAllByText('成员').length).toBeGreaterThan(0)
-    expect(within(settings).getByText('已邀请「Mia」接任 Team Owner。')).toBeDefined()
+    expect(within(settings).getByText('已邀请「Mia」接任团队所有者。')).toBeDefined()
     expect(within(settings).getByText(`转让请求将在 ${uiTime(pendingOwnershipTransfer().expiresAt)} 到期。`)).toBeDefined()
     expect(managementApi.overview.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
@@ -3315,7 +3315,7 @@ describe('Team subscription-pool workspace', () => {
 
     let settings = await openTeamSettings()
     const ownership = within(settings).getByRole('region', { name: '所有权转让' })
-    expect(within(ownership).getByText('已邀请「Mia」接任 Team Owner。')).toBeDefined()
+    expect(within(ownership).getByText('已邀请「Mia」接任团队所有者。')).toBeDefined()
     expect(within(ownership).getByText(`转让请求将在 ${uiTime(pendingOwnershipTransfer().expiresAt)} 到期。`)).toBeDefined()
     expect(within(ownership).queryByRole('button', { name: zh.transferOwnership })).toBeNull()
 
@@ -3324,7 +3324,7 @@ describe('Team subscription-pool workspace', () => {
       expect(managementApi.revokeOwnershipTransfer).toHaveBeenCalledWith('transfer-1', expectedContext())
     })
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
-    expect(within(settings).queryByText('已邀请「Mia」接任 Team Owner。')).toBeNull()
+    expect(within(settings).queryByText('已邀请「Mia」接任团队所有者。')).toBeNull()
     expect(within(openTeamManagement(settings)).getByRole('menuitem', { name: zh.transferOwnership })).toBeDefined()
   })
 
@@ -3356,11 +3356,11 @@ describe('Team subscription-pool workspace', () => {
 
     let settings = await openTeamSettings()
     const ownership = within(settings).getByRole('region', { name: '所有权转让' })
-    expect(within(ownership).getByText('「Edison」邀请你接任 Team Owner。')).toBeDefined()
-    expect(within(ownership).getByText('接受后，你将负责邀请成员、管理 Team 运行和解散 Team。')).toBeDefined()
+    expect(within(ownership).getByText('「Edison」邀请你接任团队所有者。')).toBeDefined()
+    expect(within(ownership).getByText('接受后，你将负责邀请成员、管理团队运行和解散团队。')).toBeDefined()
     expect(within(ownership).getByText(`转让请求将在 ${uiTime(pendingOwnershipTransfer().expiresAt)} 到期。`)).toBeDefined()
 
-    fireEvent.click(within(ownership).getByRole('button', { name: '接受并成为 Team Owner' }))
+    fireEvent.click(within(ownership).getByRole('button', { name: '接受并成为团队所有者' }))
     await waitFor(() => {
       expect(managementApi.acceptOwnershipTransfer).toHaveBeenCalledWith('transfer-1', expectedContext('member-mia'))
       expect(managementApi.overview.mock.calls.length).toBeGreaterThanOrEqual(2)
@@ -3371,9 +3371,9 @@ describe('Team subscription-pool workspace', () => {
         name: zh.membersTitle,
       }),
     )
-    expect(within(settings).getByText('Team Owner · 我')).toBeDefined()
+    expect(within(settings).getByText('团队所有者 · 我')).toBeDefined()
     expect(within(settings).getByRole('button', { name: zh.invitationsTitle })).toBeDefined()
-    expect(within(settings).queryByText('「Edison」邀请你接任 Team Owner。')).toBeNull()
+    expect(within(settings).queryByText('「Edison」邀请你接任团队所有者。')).toBeNull()
   })
 
   it('lets the nominated member reject the transfer without gaining Owner controls', async () => {
@@ -3399,7 +3399,7 @@ describe('Team subscription-pool workspace', () => {
       expect(managementApi.rejectOwnershipTransfer).toHaveBeenCalledWith('transfer-1', expectedContext('member-mia'))
     })
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
-    expect(within(settings).queryByText('「Edison」邀请你接任 Team Owner。')).toBeNull()
+    expect(within(settings).queryByText('「Edison」邀请你接任团队所有者。')).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
   })
 
@@ -3422,9 +3422,9 @@ describe('Team subscription-pool workspace', () => {
 
     const settings = await openTeamSettings()
     expect(within(settings).queryByRole('region', { name: '所有权转让' })).toBeNull()
-    expect(within(settings).queryByText('已邀请「Mia」接任 Team Owner。')).toBeNull()
-    expect(within(settings).queryByText('「Edison」邀请你接任 Team Owner。')).toBeNull()
-    expect(within(settings).queryByRole('button', { name: '接受并成为 Team Owner' })).toBeNull()
+    expect(within(settings).queryByText('已邀请「Mia」接任团队所有者。')).toBeNull()
+    expect(within(settings).queryByText('「Edison」邀请你接任团队所有者。')).toBeNull()
+    expect(within(settings).queryByRole('button', { name: '接受并成为团队所有者' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '拒绝' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '撤销转让请求' })).toBeNull()
   })
@@ -3554,7 +3554,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await openTeamSettings('usage')
 
-    fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散 Team' }))
+    fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散团队' }))
     expect(screen.getByRole('dialog', { name: /永久解散.*周末造物局/u })).toBeDefined()
 
     overviewState = {
@@ -3618,7 +3618,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await openTeamSettings('usage')
 
-    fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散 Team' }))
+    fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: '永久解散团队' }))
     expect(screen.getByRole('dialog', { name: /永久解散.*周末造物局/u })).toBeDefined()
 
     switchToSecondOwnerTeam()
@@ -3714,7 +3714,7 @@ describe('Team subscription-pool workspace', () => {
     overviewState = {
       ...overviewState,
       invites: [{
-        ...pendingInvite('invite-1', '新 Team 邀请', true),
+        ...pendingInvite('invite-1', '新团队邀请', true),
         teamId: 'team-2',
         invitedByMemberId: 'member-other-owner',
       }],
@@ -3857,7 +3857,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.revokeInvite })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.pauseTeam })).toBeNull()
-    expect(within(settings).queryByRole('button', { name: '永久解散 Team' })).toBeNull()
+    expect(within(settings).queryByRole('button', { name: '永久解散团队' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.removeMember })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '设为 Admin' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '设为 Member' })).toBeNull()
@@ -3906,6 +3906,6 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).getAllByText('成员').length).toBeGreaterThan(0)
     expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.pauseTeam })).toBeNull()
-    expect(within(settings).queryByRole('button', { name: '永久解散 Team' })).toBeNull()
+    expect(within(settings).queryByRole('button', { name: '永久解散团队' })).toBeNull()
   })
 })
