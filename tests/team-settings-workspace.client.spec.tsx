@@ -1516,19 +1516,28 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
-  it('shows an explicit warning in the selected shared account when Team usage is unavailable', async () => {
+  it('keeps unavailable usage inline without an account warning or retry button', async () => {
     managementApi.usage.mockRejectedValueOnce(new Error('upstream-usage-secret'))
 
     render(<TeamSettings t={translate} embedded />)
 
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
-    const warning = await within(account).findByRole('alert')
+    expect(await within(account).findByText(zh.recentUsageUnavailable)).toBeDefined()
 
-    expect(within(warning).getByText(zh.usageUnavailableTitle)).toBeDefined()
-    expect(within(warning).getByRole('button', { name: zh.retry })).toBeDefined()
-    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+    expect(within(account).queryByRole('alert')).toBeNull()
+    expect(within(account).queryByText(zh.usageUnavailableTitle)).toBeNull()
+    expect(within(account).queryByRole('button', { name: zh.retry })).toBeNull()
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('获取失败')
     expect(account.textContent).not.toContain('upstream-usage-secret')
+
+    const usageSettings = await openTeamSettings('usage')
+    const usage = within(usageSettings).getByRole('region', { name: '用量' })
+    fireEvent.click(within(usage).getByRole('button', { name: zh.retry }))
+    expect(await within(usage).findByRole('group', { name: zh.myTeamUsage })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '返回 Team' }))
+    const restoredAccount = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
+    expect(within(restoredAccount).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
 
   it('matches the approved weekly-sharing and recent-day account detail', async () => {

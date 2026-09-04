@@ -2153,25 +2153,6 @@
   background: color-mix(in srgb, var(--team-red) 10%, transparent);
 }
 
-.accountUsageWarning {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 20px;
-  border-left: 2px solid var(--team-amber);
-  border-radius: 6px;
-  padding: 10px 12px;
-  background: color-mix(in srgb, var(--team-amber) 6%, var(--team-workspace-layer));
-  color: var(--team-amber);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.accountUsageWarning > button {
-  flex: 0 0 auto;
-}
-
 .capacityOverview {
   padding-bottom: 19px;
 }
