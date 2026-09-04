@@ -465,7 +465,7 @@ export const zh: { [Key in TeamSettingsKey]: string } = {
   workspaceKicker: 'SETTINGS',
   workspaceTitle: '团队',
   workspaceNavigation: '团队工作区',
-  workspaceBreadcrumb: '设置 /团队',
+  workspaceBreadcrumb: '设置 / 团队',
   teamManagement: '团队管理',
   teamOperationGroup: '团队运行',
   ownershipGroup: '所有权',
