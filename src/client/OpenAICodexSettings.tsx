@@ -690,7 +690,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-settings button:focus-visible,
         .dsh-codex-settings input:focus-visible,
         .dsh-codex-settings select:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary, #3964fe); outline-offset: 2px; }
-        .dsh-codex-workspace { display: grid; grid-template-columns: minmax(220px, 0.8fr) minmax(0, 1.45fr); overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
+        .dsh-codex-workspace { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.45fr); overflow: hidden; border: 1px solid var(--dsw-alias-border-l2); border-radius: 12px; background: var(--dsw-alias-bg-module-platform); }
         .dsh-codex-profile-list { display: flex; flex-direction: column; min-width: 0; padding: 20px; border-right: 1px solid var(--dsw-alias-border-l2); }
         .dsh-codex-list-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; min-width: 0; }
         .dsh-codex-list-heading h3 { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 16px; line-height: 24px; font-weight: 600; }
@@ -726,7 +726,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-empty { display: grid; place-items: center; min-height: 360px; padding: 32px; color: var(--dsw-alias-label-secondary); text-align: center; }
         .dsh-codex-empty-status { display: inline-flex; align-items: center; justify-content: center; gap: 9px; }
         .dsh-codex-cancel-auth { margin-top: 16px; }
-        @container (max-width: 620px) {
+        @container (max-width: 460px) {
           .dsh-codex-workspace { grid-template-columns: minmax(0, 1fr); }
           .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
           .dsh-codex-profile-detail { padding-right: 18px; padding-left: 18px; }
@@ -774,11 +774,6 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-preference-row strong { color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
         .dsh-codex-danger-button { border-color: var(--dsw-alias-state-error-primary) !important; background: var(--dsw-alias-state-error-primary) !important; color: white !important; }
         .dsh-codex-danger-button:hover:not(:disabled) { filter: brightness(1.08); }
-        @media (max-width: 760px) {
-          .dsh-codex-workspace { grid-template-columns: 1fr; }
-          .dsh-codex-profile-list { border-right: 0; border-bottom: 1px solid var(--dsw-alias-border-l2); }
-          .dsh-codex-profile-items { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); }
-        }
         @media (prefers-reduced-motion: reduce) {
           .dsh-codex-settings *, .dsh-codex-settings *::before, .dsh-codex-settings *::after { transition: none !important; }
         }
