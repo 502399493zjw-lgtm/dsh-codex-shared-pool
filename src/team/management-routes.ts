@@ -1,3 +1,4 @@
+import { parseTeamSharing } from '../shared/team-sharing.ts'
 /** Local same-origin Team management proxy. Raw Team keys remain Host-only. */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -861,13 +862,15 @@ function projectContribution(value: unknown, capacityOwnerMemberId?: string): Te
 
 function projectActiveSharedAccount(value: unknown): TeamManagementSharedAccountDirectoryEntry {
   const item = record(value, 'active shared account')
-  exactRemoteKeys(item, ['id', 'label', 'ownerMemberId', 'status'], 'active shared account')
+  exactRemoteKeys(item, ['id', 'label', 'ownerMemberId', 'status', 'sharing', 'capacity'], 'active shared account')
   if (item.status !== 'active') throw new Error('remote Team returned an invalid active shared account')
   return {
     id: stringField(item, 'id'),
     label: stringField(item, 'label'),
     ownerMemberId: stringField(item, 'ownerMemberId'),
     status: 'active',
+    ...(item.sharing === undefined ? {} : { sharing: parseTeamSharing(item.sharing) }),
+    ...(item.capacity === undefined ? {} : { capacity: projectCapacity(item.capacity) }),
   }
 }
 
@@ -3660,6 +3663,7 @@ class TeamManagementProxy {
         signal,
         headers: {
           accept: 'application/json',
+          ...(path === TEAM_OVERVIEW_PATH ? { 'x-dsh-team-shared-details': '1' } : {}),
           ...key === undefined ? {} : { authorization: `Bearer ${key}` },
           ...options.body === undefined ? {} : { 'content-type': 'application/json' },
         },

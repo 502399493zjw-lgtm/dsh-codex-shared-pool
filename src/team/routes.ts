@@ -443,7 +443,7 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
         handler: async (req, res) => {
           if (req.method !== 'GET') { json(res, 405, { error: 'method not allowed' }); return }
           try {
-            json(res, 200, await service.overviewProjection(requireAuth(await authenticate(req, service))))
+            json(res, 200, await service.overviewProjection(requireAuth(await authenticate(req, service)), req.headers['x-dsh-team-shared-details'] === '1'))
           } catch (error: unknown) {
             json(res, /API key required/iu.test(safeMessage(error)) ? 401 : statusFor(error), { error: safeMessage(error) })
           }

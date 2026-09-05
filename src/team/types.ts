@@ -219,12 +219,23 @@ export interface TeamOverviewMemberSummary extends TeamMemberSummary {
   readonly canReceiveOwnership: boolean
 }
 
-/** Minimum Team-wide directory row for one account that is currently shared. */
+/** Sharing controls safe for authenticated teammates to inspect, but not edit. */
+export type TeamSharedAccountSharingSummary = Pick<TeamContributionAccountSummary,
+  | 'personalReservePercent'
+  | 'maxSharedRequestsPerWindow'
+  | 'weeklySharedEstimatedApiCostLimitMicros'
+  | 'maxSharedConcurrency'
+  | 'allowedModels'
+>
+
+/** Team-wide read-only row for one account that is currently shared. */
 export interface TeamSharedAccountDirectoryEntry {
   readonly id: string
   readonly label: string
   readonly ownerMemberId: string
   readonly status: 'active'
+  readonly sharing?: TeamSharedAccountSharingSummary
+  readonly capacity?: TeamContributionCapacitySummary
 }
 
 interface TeamOverviewProjectionBase {
@@ -233,7 +244,7 @@ interface TeamOverviewProjectionBase {
   readonly members: readonly TeamOverviewMemberSummary[]
   /** A caller can manage and inspect only contribution accounts they own. */
   readonly contributions: readonly TeamContributionAccountSummary[]
-  /** Team-wide active accounts, projected without private policy, capacity, usage, or credentials. */
+  /** Team-wide active accounts with quota and sharing controls; no credentials or request details. */
   readonly activeSharedAccounts: readonly TeamSharedAccountDirectoryEntry[]
   readonly displayNameMigrationNotice?: TeamDisplayNameMigrationNotice
   /** Visible only to the current Owner/requester and the requested target while pending. */

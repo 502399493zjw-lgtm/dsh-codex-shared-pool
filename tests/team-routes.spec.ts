@@ -378,6 +378,14 @@ describe('Team control-plane routes', () => {
       expect(Object.keys(item).sort()).toEqual(['id', 'label', 'ownerMemberId', 'status'])
     }
     expect(memberView.body.activeSharedAccounts).toEqual(ownerView.body.activeSharedAccounts)
+    const detailedView = await response(overview.handler, request('GET', undefined, {
+      authorization: `Bearer ${memberKey}`, 'x-dsh-team-shared-details': '1',
+    }))
+    expect(detailedView).toMatchObject({ status: 200, body: { activeSharedAccounts: [
+      { id: ownerAccount.id, sharing: { personalReservePercent: expect.any(Number) }, capacity: { buckets: expect.any(Array) } },
+      { id: memberAccount.id, sharing: { personalReservePercent: expect.any(Number) }, capacity: { buckets: expect.any(Array) } },
+    ] } })
+
     expect(JSON.stringify([ownerView.body, memberView.body])).not.toContain(ownerKey)
   })
 

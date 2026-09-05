@@ -1,3 +1,4 @@
+import { parseTeamSharing } from '../../shared/team-sharing.ts'
 /** Runtime-validated same-origin client for the Host-owned Team management proxy. */
 
 import { parseSubscription } from '../../shared/subscription.ts'
@@ -293,13 +294,15 @@ function parsePendingBrowserAuthorization(
 
 function parseActiveSharedAccount(value: unknown): TeamManagementSharedAccountDirectoryEntry {
   const item = object(value, 'active shared account')
-  exactKeys(item, ['id', 'label', 'ownerMemberId', 'status'], 'active shared account')
+  exactKeys(item, ['id', 'label', 'ownerMemberId', 'status', 'sharing', 'capacity'], 'active shared account')
   if (item.status !== 'active') throw new Error('active shared account status is invalid')
   return {
     id: stringField(item, 'id'),
     label: stringField(item, 'label'),
     ownerMemberId: stringField(item, 'ownerMemberId'),
     status: 'active',
+    ...(item.sharing === undefined ? {} : { sharing: parseTeamSharing(item.sharing) }),
+    ...(item.capacity === undefined ? {} : { capacity: parseCapacity(item.capacity) }),
   }
 }
 

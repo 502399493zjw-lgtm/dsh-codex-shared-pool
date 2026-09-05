@@ -1529,6 +1529,25 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).getByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeDefined()
   })
 
+  it('shows teammate quota and limits as read-only details', async () => {
+    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
+      sharing: { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
+        weeklySharedEstimatedApiCostLimitMicros: 50_000_000, allowedModels: ['gpt-5-codex'] },
+      capacity: { sharedInFlight: 1, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74,
+        subscription: { planType: 'pro', weeklyEstimatedUsd: 2100 } }] },
+    }] }
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
+    const details = within(panel).getByRole('region', { name: zh.accountDetails })
+    expect(within(details).getByText('74%')).toBeDefined()
+    expect(within(details).getByText('$50.00')).toBeDefined()
+    expect(within(details).getByText('20%')).toBeDefined()
+    expect(within(details).getByText('gpt-5-codex')).toBeDefined()
+    expect(within(details).queryByRole('button', { name: zh.editSharingLimit })).toBeNull()
+    expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
+  })
+
   it('shows teammate shared accounts in the directory and opens a safe read-only detail', async () => {
     render(<TeamSettings t={translate} embedded />)
 

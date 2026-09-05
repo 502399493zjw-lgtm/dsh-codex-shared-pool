@@ -933,6 +933,24 @@ describe('local Team management routes', () => {
       .toEqual(['id', 'label', 'ownerMemberId', 'status'])
   })
 
+  it('requests and preserves teammate quota and sharing controls', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const sharing = { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
+      weeklySharedEstimatedApiCostLimitMicros: 50_000_000, allowedModels: ['gpt-5-codex'] }
+    const capacity = { sharedInFlight: 1, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74,
+      refreshToken: 'must-not-cross' }] }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(overview({
+      activeSharedAccounts: [{ id: 'account-2', label: 'Friend', ownerMemberId: 'member-2', status: 'active', sharing, capacity }],
+    })), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+    const result = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+    expect(result).toMatchObject({ status: 200, body: { activeSharedAccounts: [{ sharing,
+      capacity: { buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74 }] } }] } })
+    expect(fetch.mock.calls[0]?.[1]?.headers).toMatchObject({ 'x-dsh-team-shared-details': '1' })
+    expect(JSON.stringify(result.body)).not.toContain('must-not-cross')
+  })
+
   it('keeps rolling upgrades usable when an older Team Host omits the shared-account directory', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_owner-secret-1234567890'
@@ -955,7 +973,7 @@ describe('local Team management routes', () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(overview({
       activeSharedAccounts: [{
         id: 'account-1', label: 'Owner Codex', ownerMemberId: 'member-1', status: 'active',
-        capacity: { buckets: [] },
+        refreshToken: 'must-not-cross',
       }],
     })), { status: 200, headers: { 'content-type': 'application/json' } }))
     const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
@@ -963,7 +981,7 @@ describe('local Team management routes', () => {
     const result = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
 
     expect(result.status).toBe(502)
-    expect(JSON.stringify(result.body)).not.toContain('capacity')
+    expect(JSON.stringify(result.body)).not.toContain('must-not-cross')
   })
 
   it('strips owner-only and sibling data from a legacy broad member overview', async () => {
