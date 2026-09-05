@@ -84,6 +84,38 @@ function lifecycleStore(store: PostgresTeamStore): TestPostgresTeamLifecycleStor
 }
 
 describePostgres('real PostgreSQL Team concurrency', () => {
+  it('repairs missing invite labels and preserves existing encrypted invitations', async () => {
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString: requiredDatabaseUrl() })
+    const pool = new Pool({ connectionString: requiredDatabaseUrl(), options: `-c search_path=${schema},public` })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const original = testStore({ pool })
+      const boot = await original.bootstrap('Friends', 'Owner')
+      const owner = (await original.authenticateApiKey(boot.apiKey))!
+      const existing = await original.createInvite(owner, 60_000, 'Original label')
+      await pool.query('ALTER TABLE team_invites DROP COLUMN label')
+      await pool.query('DELETE FROM team_schema_migrations WHERE version = 22')
+
+      const upgraded = testStore({ pool })
+      await upgraded.initialize()
+      expect(await pool.query('SELECT label FROM team_invites WHERE id = $1', [existing.invite.id]))
+        .toMatchObject({ rows: [{ label: 'Team invitation' }] })
+      expect(await upgraded.revealInvite(owner, existing.invite.id)).toMatchObject({ inviteToken: existing.inviteToken })
+      const created = await upgraded.createInvite(owner, 60_000, 'New label')
+      expect(created.invite.label).toBe('New label')
+      await testStore({ pool }).initialize()
+      expect(await upgraded.revealInvite(owner, created.invite.id)).toMatchObject({ inviteToken: created.inviteToken })
+
+      await pool.query('ALTER TABLE team_invites DROP COLUMN label')
+      await expect(testStore({ pool }).initialize()).rejects.toThrow(/Team database schema.*dsh-codex-team-migrate/)
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  })
+
   it('lets only the Host runtime role mutate ownership-transfer state', async () => {
     const connectionString = requiredDatabaseUrl()
     const suffix = randomUUID().replaceAll('-', '')
