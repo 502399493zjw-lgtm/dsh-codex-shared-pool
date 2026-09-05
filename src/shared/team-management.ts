@@ -268,3 +268,14 @@ export type TeamManagementUsageResult = TeamUsageProjection
 export interface TeamManagementTeamStatusResult {
   readonly team: TeamSummary & { readonly status: TeamStatus }
 }
+
+/** Saved identities on this Host; credentials never cross this projection. */
+export interface TeamSavedConnection {
+  readonly id: string
+  readonly teamId: string
+  readonly teamName: string
+  readonly currentMemberId: string
+  readonly memberName: string
+}
+export const TEAM_MANAGEMENT_CONNECTIONS_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/connections`
+export const TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH = `${TEAM_MANAGEMENT_CONNECTIONS_PATH}/switch`

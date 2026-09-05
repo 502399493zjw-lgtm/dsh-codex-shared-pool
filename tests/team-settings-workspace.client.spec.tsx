@@ -5,6 +5,8 @@ import styles from '../src/client/team/TeamSettings.module.css'
 
 const { managementApi } = vi.hoisted(() => ({
   managementApi: {
+    connections: vi.fn(),
+    switchConnection: vi.fn(),
     status: vi.fn(),
     overview: vi.fn(),
     acknowledgeDisplayNameMigration: vi.fn(),
@@ -340,6 +342,8 @@ beforeEach(() => {
     teamName: '周末造物局', label: '周末协作', expiresAt: NOW + 86_400_000, teamStatus: 'active',
     joinHandle: `dsh_join_${'a'.repeat(43)}`,
   })
+  managementApi.connections.mockResolvedValue([])
+  managementApi.switchConnection.mockResolvedValue({})
   managementApi.join.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
   managementApi.recoverJoin.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
   managementApi.discardPendingJoin.mockResolvedValue({ discarded: true })
@@ -3935,4 +3939,47 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByRole('button', { name: zh.pauseTeam })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '永久解散团队' })).toBeNull()
   })
+})
+
+it('lets a connected owner preview another invitation without disconnecting the current Team', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '加入其他团队' }))
+  fireEvent.change(screen.getByLabelText('邀请 Token'), { target: { value: `dsh_invite_${'a'.repeat(32)}` } })
+  fireEvent.click(screen.getByRole('button', { name: '查看邀请' }))
+  await screen.findByText('邀请已验证')
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+  expect(managementApi.leaveTeam).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: '返回当前团队' }))
+  expect(await screen.findByRole('button', { name: '加入其他团队' })).toBeDefined()
+})
+
+it('switches to a saved Team using the displayed context and refreshes its identity', async () => {
+  managementApi.connections.mockResolvedValue([{ id: 'saved-b', teamId: 'team-2', teamName: '第二团队', currentMemberId: 'member-b', memberName: 'Edison' }])
+  managementApi.switchConnection.mockResolvedValue({})
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '切换团队' }))
+  fireEvent.click(await screen.findByRole('button', { name: '第二团队 · Edison' }))
+  await waitFor(() => expect(managementApi.switchConnection).toHaveBeenCalledWith('saved-b', {
+    serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
+  }))
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+})
+
+it('shows recovery immediately after an uncertain join while keeping the original connection', async () => {
+  managementApi.join.mockImplementationOnce(async () => {
+    managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: true, serverOrigin: 'https://team.example.test' })
+    throw new Error('network interrupted')
+  })
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: zh.joinOtherTeam }))
+  fireEvent.change(screen.getByLabelText(zh.inviteToken), { target: { value: 'dsh_invite_secret-1234567890' } })
+  fireEvent.click(screen.getByRole('button', { name: zh.previewInvitation }))
+  await screen.findByText(zh.invitationVerified)
+  fireEvent.change(screen.getByLabelText(zh.displayName), { target: { value: 'Edison' } })
+  fireEvent.click(screen.getByRole('button', { name: zh.confirmJoin }))
+  expect(await screen.findByRole('button', { name: zh.recoverJoin })).toBeDefined()
+  expect(managementApi.join).toHaveBeenCalledWith(`dsh_join_${'a'.repeat(43)}`, 'Edison', {
+    serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
+  })
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
 })

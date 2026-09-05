@@ -1195,3 +1195,17 @@ describe('Team management browser API', () => {
     })
   })
 })
+
+it('projects saved identities and sends capability-protected context when switching', async () => {
+  const identity = { id: 'saved-1', teamId: 'team-1', teamName: 'Friends', currentMemberId: 'member-1', memberName: 'Edison' }
+  const fetchMock = withManagementSession(async input => String(input).endsWith('/connections')
+    ? Response.json({ connections: [{ ...identity, apiKey: 'must-not-survive' }] })
+    : Response.json({ team: overview().team, member: overview().currentMember }))
+  const api = createTeamManagementApi(fetchMock)
+  expect(await api.connections()).toEqual([identity])
+  await api.switchConnection(identity.id, EXPECTED_CONTEXT)
+  expect(fetchMock).toHaveBeenLastCalledWith('/plugins/dsh-codex-shared-pool/team-client/connections/switch', expect.objectContaining({
+    method: 'POST', headers: expect.objectContaining({ [TEAM_MANAGEMENT_CAPABILITY_HEADER]: MANAGEMENT_CAPABILITY }),
+    body: JSON.stringify({ connectionId: identity.id, expectedContext: EXPECTED_CONTEXT }),
+  }))
+})

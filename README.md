@@ -117,6 +117,11 @@ dsh plugin --profile web add dsh-codex-shared-pool@0.1.0
 
 第二期在同一个 npm 包中加入邀请制 Team、成员额度共享、Team 请求路由和自托管部署。OAuth 凭据、数据库连接和密钥仍只存在于 Host；Browser 只读取插件 same-origin 路由返回的最小脱敏投影。
 
+在 **设置 → Codex 订阅池 → 团队** 使用邀请码：尚未连接时直接粘贴邀请码并查看邀请；已连接时点击 **加入其他团队**，核对团队名称后填写成员名称并加入。成功加入前，本机仍使用原团队；网络中断时可通过页面的恢复入口继续处理。
+
+点击同页的 **切换团队** 可以选择本机保存的其他团队。切换只改变这台 DSH Host 当前使用的团队，保留其他团队的成员身份和共享账号；团队密钥保存在 Host 凭据存储，页面只显示团队和成员名称。当前仅支持同一配置服务器上的团队，其他设备需要单独加入；有待恢复的加入、授权或团队终止清理时，先完成对应流程再切换。
+
+
 自托管模板在一台中央服务器上运行 four long-running processes：PostgreSQL、仅监听回环地址的 stock DSH Team Host、Credential Broker，以及窄接口的 Team API Edge；另有 one-shot database migrator 在应用负载启动前完成迁移并退出：
 
 ```sh

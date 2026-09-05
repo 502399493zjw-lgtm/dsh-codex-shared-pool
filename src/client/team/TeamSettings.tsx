@@ -1,6 +1,7 @@
 /** Invite-only Team capacity management inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { TeamConnections } from './TeamConnections.tsx'
 import { SubscriptionEstimate, subscriptionEstimateLabels } from '../SubscriptionEstimate.tsx'
 import { subscriptionFromUsage } from '../../shared/subscription.ts'
 import type { CodexSubscription } from '../../shared/subscription.ts'
@@ -618,6 +619,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [dissolutionConfirmationName, setDissolutionConfirmationName] = useState('')
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [leaveAuthorizationContext, setLeaveAuthorizationContext] = useState<string>()
+  const [joiningOtherTeam, setJoiningOtherTeam] = useState(false)
+  const [joinExpectedContext, setJoinExpectedContext] = useState<TeamManagementExpectedContext>()
   const [teamSettingsOpen, setTeamSettingsOpen] = useState(false)
   const [workspaceView, setWorkspaceView] = useState<TeamWorkspaceView>('usage')
   const [addAccountOpen, setAddAccountOpen] = useState(false)
@@ -1590,11 +1593,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
   const joinTeam = () => run('join', async () => {
     if (invitePreview === undefined) throw new Error('invitation must be previewed before joining')
-    await api.join(invitePreview.joinHandle, displayName)
-    setInviteToken('')
-    setInvitePreview(undefined)
-    previewRequestId.current += 1
-    await refresh(false)
+    try {
+      if (joiningOtherTeam) {
+        if (joinExpectedContext === undefined) throw new Error('Team context is unavailable')
+        await api.join(invitePreview.joinHandle, displayName, joinExpectedContext)
+      } else {
+        await api.join(invitePreview.joinHandle, displayName)
+      }
+      setJoiningOtherTeam(false)
+    } finally {
+      setInviteToken('')
+      setInvitePreview(undefined)
+      previewRequestId.current += 1
+      await refresh(false)
+    }
   })
 
   const activeDissolution = dissolution ?? status?.dissolution
@@ -1737,7 +1749,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
-  if (status.keyConfigured && overview === undefined) {
+  if (status.keyConfigured && overview === undefined && !status.pendingJoinConfigured) {
     if (loading && connectionIssue === undefined) {
       return (
         <main className={styles.page}>
@@ -1769,15 +1781,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
-  if (!status.keyConfigured) {
+  if (!status.keyConfigured || joiningOtherTeam || status.pendingJoinConfigured) {
     return (
       <main className={styles.page}>
         {embedded ? null : <PageHeading t={t} />}
         {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
         <section className={styles.section}>
           <div className={styles.sectionCopy}>
-            <h2 className={styles.sectionTitle}>{t('notConnected')}</h2>
-            <p className={styles.hint}>{t('notConnectedHint')}</p>
+            <h2 className={styles.sectionTitle}>{t(status.keyConfigured ? 'joinOtherTeam' : 'notConnected')}</h2>
+            <p className={styles.hint}>{t(status.keyConfigured ? 'joinOtherHint' : 'notConnectedHint')}</p>
+            {status.keyConfigured && !status.pendingJoinConfigured ? <Button variant="ghost" disabled={busy !== undefined} onClick={() => {
+              setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); previewRequestId.current += 1
+            }}>{t('returnToTeam')}</Button> : null}
+            {!status.keyConfigured && !status.pendingJoinConfigured ? <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable} onChanged={async () => { await refresh(true) }} /> : null}
           </div>
           {status.pendingJoinConfigured ? (
             <Notice tone="warning" title={t('pendingJoinTitle')} detail={t('pendingJoinHint')}>
@@ -1785,12 +1801,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 <Button size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void run('recover-join', async () => {
                   try {
                     await api.recoverJoin()
+                    setJoiningOtherTeam(false)
                   } finally {
                     await refresh(false)
                   }
                 }) }}>{busy === 'recover-join' ? t('working') : t('recoverJoin')}</Button>
                 <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { void run('discard-join', async () => {
                   await api.discardPendingJoin()
+                  setJoiningOtherTeam(false)
                   await refresh(false)
                 }) }}>{t('discardPendingJoin')}</Button>
               </div>
@@ -2425,6 +2443,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   return (
     <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
+      <TeamConnections api={api} t={t} expectedContext={teamExpectedContext ?? null}
+        disabled={busy !== undefined || !status.keyWritable || teamExpectedContext === undefined || overview.pendingBrowserAuthorization !== undefined}
+        onJoin={() => { setJoinExpectedContext(teamExpectedContext); setJoiningOtherTeam(true); setInviteToken(''); setInvitePreview(undefined); setError(undefined) }}
+        onChanged={async () => { setTeamSettingsOpen(false); setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); await refresh(true) }} />
       {error === undefined || teamSettingsOpen ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
       {!teamContextChanged || teamSettingsOpen ? null : (
         <Notice tone="warning" title={t('teamContextChangedTitle')} detail={t('teamContextChangedHint')} live="polite" />
