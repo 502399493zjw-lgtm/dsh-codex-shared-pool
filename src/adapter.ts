@@ -2,7 +2,7 @@
 
 import { TEAM_LIMIT_REASONS_HEADER, teamLimitMessage } from './team/gateway-errors.ts'
 import { supplementCodexModels } from './codex-model-catalog.ts'
-import { createModels } from '@earendil-works/pi-ai'
+import { createAssistantMessageEventStream, createModels } from '@earendil-works/pi-ai'
 import type { MutableModels, Provider } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { ReasoningEffortId, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
@@ -100,17 +100,31 @@ export function createTeamClientProvider(provider: Provider, baseUrl: string): P
     ...provider,
     baseUrl: resolvedBaseUrl,
     getModels: () => provider.getModels().map(model => ({ ...model, baseUrl: resolvedBaseUrl })),
-    streamSimple: (model, context, options) => provider.streamSimple(model, context, {
-      ...options,
-      onResponse: async (response, responseModel) => {
-        await options?.onResponse?.(response, responseModel)
-        // pi-ai maps every HTTP 429 to ChatGPT quota exhaustion. Team admission
-        // also uses 429; retain the HTTP status and give it a Team-specific error.
-        if (response.status === 429) {
-          throw new Error(teamLimitMessage(response.headers[TEAM_LIMIT_REASONS_HEADER]))
+    streamSimple: (model, context, options) => {
+      let limitMessage: string | undefined
+      const source = provider.streamSimple(model, context, {
+        ...options,
+        onResponse: async (response, responseModel) => {
+          limitMessage = response.status === 429
+            ? teamLimitMessage(response.headers[TEAM_LIMIT_REASONS_HEADER])
+            : undefined
+          await options?.onResponse?.(response, responseModel)
+        },
+      })
+      const target = createAssistantMessageEventStream()
+      // Leave body consumption, Retry-After, cancellation and network failures
+      // with pi-ai. Only replace its misleading final HTTP-429 quota message.
+      void (async () => {
+        for await (const event of source) {
+          target.push(event.type === 'error' && event.reason === 'error' && limitMessage !== undefined
+            && event.error.errorMessage?.includes('ChatGPT usage limit')
+            ? { ...event, error: { ...event.error, errorMessage: limitMessage } }
+            : event)
         }
-      },
-    }),
+        target.end()
+      })()
+      return target
+    },
   }
 }
 

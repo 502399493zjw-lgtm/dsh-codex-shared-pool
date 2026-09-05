@@ -48,6 +48,22 @@ describe('Team client Codex adapter', () => {
     expect(onResponse).toHaveBeenCalledOnce()
   })
 
+  it('drains a Team rejection body and preserves provider Retry-After policy', async () => {
+    const rejection = new Response(JSON.stringify({ error: 'Team limit' }), {
+      status: 429, headers: { 'retry-after': '120', 'x-dsh-team-limit-reasons': 'rate_limit' },
+    })
+    const fetch = vi.fn(async () => rejection)
+    vi.stubGlobal('fetch', fetch)
+    const provider = createTeamClientProvider(openaiCodexProvider(), `https://pool.example.test${TEAM_PATH_PREFIX}`)
+    const result = await provider.streamSimple(provider.getModels()[0]!, { messages: [] }, {
+      apiKey: createTeamCodexBearer('dsh_team_member-secret-1234567890'),
+      transport: 'sse', maxRetries: 1, maxRetryDelayMs: 1,
+    }).result()
+    expect(rejection.bodyUsed).toBe(true)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(result.errorMessage).toContain('retry delay')
+  })
+
   it('forces SSE when Team mode is active even if live preferences enable WebSocket reuse', () => {
     const source = openaiCodexProvider()
     const streamSimple = vi.fn(() => {
