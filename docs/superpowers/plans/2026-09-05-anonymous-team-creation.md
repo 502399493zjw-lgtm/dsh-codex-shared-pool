@@ -60,15 +60,17 @@ exportRecoveryCode(expectedContext: TeamManagementExpectedContext): Promise<{ re
 - [x] Run `node node_modules/vitest/vitest.mjs run tests`, prototype tests, `pnpm run build` and `pnpm run verify:package`.
 - [x] Pack and install into an isolated stock DSH profile; exercise anonymous create, retry, recovery, switching and menu layout with disposable test data.
 - [x] Open a draft PR and obtain independent change-scoped review; fix findings and re-review.
-- [ ] Confirm final-head CI, merge to main, and update local 3181 with backup and restart notice. Remote shared deployment requires separate authorization.
+- [x] Confirm final-head CI, merge to main, and update local 3181 with backup and restart notice. Remote shared deployment requires separate authorization.
 - [ ] Report exact Git state, verification layers and any remote deployment limitation.
 
 ## Verification record (2026-09-05)
 
 - Final implementation: 1,101 unit/DOM tests passed; 26 PostgreSQL tests skipped locally because no test database was configured. Prototype suite: 33 passed. Build and package verification passed.
-- PostgreSQL 17 concurrency and self-hosted Docker multi-Team invite/data-isolation checks passed in CI; the final menu focus change awaits its own CI run.
+- Final-head CI passed, including PostgreSQL 17 concurrency and self-hosted Docker multi-Team invite/data-isolation checks.
 - The packed artifact installed and started successfully with the published stock DSH 0.1.0-rc.8 CLI in an isolated profile; the browser bundle was served successfully.
 - Browser acceptance with disposable data: anonymous creation of two Teams, switching between them, explicit recovery-code export, and recovery of the original Team into a fresh Host profile. Retry and ambiguous-commit recovery were verified by focused Host/server regression tests.
 - Menu boundaries remained within 768px and 390px viewports. Final-package keyboard acceptance confirmed ArrowDown moves into menu items and Escape closes only the menu, preserving Settings and returning focus to the trigger.
 - Independent review findings fixed: unknown server persistence failures return retryable 503; invalid owner-recovery codes retain the recovery form and accurate message; menu focus waits until positioning makes it visible. Whole-change review and the final focus-change review have no blocking findings.
 - No live provider OAuth was performed. Remote Team service deployment and migration 23 remain separate from local UI installation.
+
+- PR #53 merged into main as `3cfb148`. Local 3181 was backed up and updated; its existing Team connection and accounts remained available. A final screenshot exposed the Team-name trigger losing 10px to negative horizontal margins; a focused layout follow-up preserves single-line names and bounded ellipsis.

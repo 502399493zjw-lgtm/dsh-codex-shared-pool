@@ -49,8 +49,8 @@ export function TeamConnections({ api, t, expectedContext, disabled, teamName, m
   }
   return <span ref={anchorRef} className={styles.teamSelector}>
     <button type="button" className={styles.teamSelectorTrigger} data-prominent={prominent} disabled={disabled || switching}
-      aria-label={teamName ?? t('savedTeams')} aria-haspopup="menu" aria-expanded={open} onClick={() => { void show() }}>
-      <span>{teamName ?? t('savedTeams')}</span><span className={styles.teamSelectorChevron} aria-hidden="true">⌄</span>
+      aria-label={teamName ?? t('savedTeams')} title={teamName ?? t('savedTeams')} aria-haspopup="menu" aria-expanded={open} onClick={() => { void show() }}>
+      <span className={styles.teamSelectorName}>{teamName ?? t('savedTeams')}</span><span className={styles.teamSelectorChevron} aria-hidden="true">⌄</span>
     </button>
     {open ? <TeamFloatingMenu anchorRef={anchorRef} label={t('switchTeam')} className={styles.teamConnectionsMenu!} onClose={() => { if (!switching) setOpen(false) }}>
       <p className={styles.teamMenuLabel}>{t('savedTeams')}</p>

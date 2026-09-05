@@ -3995,6 +3995,19 @@ it('shows recovery immediately after an uncertain join while keeping the origina
 })
 
 
+it.each(['周末造物局', '这是一个很长的团队名称用来验证省略后仍然可以访问完整名称'])('preserves the full name and heading style for the %s team trigger in both views', async teamName => {
+  overviewState = { ...overviewState, team: { ...overviewState.team, name: teamName } }
+  render(<TeamSettings t={translate} embedded />)
+  const trigger = await screen.findByRole('button', { name: teamName })
+  expect(trigger.title).toBe(teamName)
+  expect(trigger.querySelector(`.${styles.teamSelectorName}`)?.textContent).toBe(teamName)
+  expect(trigger.closest('h2')?.className).toBe(styles.teamName)
+  const settings = await openTeamSettings()
+  const settingsTrigger = within(settings).getByRole('button', { name: teamName })
+  expect(settingsTrigger.title).toBe(teamName)
+  expect(settingsTrigger.closest('h2')?.className).toBe(styles.workspaceTeamName)
+})
+
 it('places the selected Team and bottom join/create actions in the Team-name dropdown in both views', async () => {
   render(<TeamSettings t={translate} embedded />)
   expect(screen.queryByRole('button', { name: zh.switchTeam })).toBeNull()

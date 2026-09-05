@@ -252,6 +252,7 @@
 }
 
 .workspaceIdentity {
+  max-width: 100%;
   min-width: 0;
 }
 
@@ -263,6 +264,8 @@
 }
 
 .workspaceTeamName {
+  max-width: 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--team-ink);
@@ -477,6 +480,8 @@
 }
 
 .teamName {
+  max-width: 100%;
+  min-width: 0;
   margin: 0;
   color: var(--team-ink);
   font-size: 13px;
@@ -3118,12 +3123,13 @@
 .teamSelectorTrigger {
   display: inline-flex;
   max-width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   border: 0;
   border-radius: 6px;
   padding: 4px 5px;
-  margin: -4px -5px;
+  margin: -4px 0;
   color: inherit;
   background: transparent;
   font: inherit;
@@ -3131,9 +3137,11 @@
   cursor: pointer;
 }
 
-.teamSelectorTrigger > span:first-child {
+.teamSelectorName {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .teamSelectorTrigger:hover,
