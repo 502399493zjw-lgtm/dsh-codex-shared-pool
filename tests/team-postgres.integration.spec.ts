@@ -1689,6 +1689,52 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
+  it('settles shared reservations without measured usage after upgrading v24', async () => {
+    const connectionString = requiredDatabaseUrl()
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString })
+    const pool = new Pool({ connectionString, options: `-c search_path=${schema},public` })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const store = testStore({ pool })
+      const boot = await store.bootstrap('Reservation Team', 'Owner')
+      const owner = (await store.authenticateApiKey(boot.apiKey))!
+      const invite = await store.createInvite(owner, 60_000)
+      const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+      const friend = (await store.authenticateApiKey(joined.apiKey))!
+      const account = await store.createContributionAccount(owner, 'Owner Codex')
+      await store.updateContributionAccount(owner, account.id, { weeklySharedEstimatedApiCostLimitMicros: 10_000_000 })
+      await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+      await store.beginUsageEvent(friend, 'pending', account.id, 'gpt-5.6-sol')
+      await pool.query(`
+        ALTER TABLE team_usage_events DROP CONSTRAINT team_usage_events_estimated_cost_metadata_check;
+        ALTER TABLE team_usage_events ADD CONSTRAINT team_usage_events_estimated_cost_metadata_check
+          CHECK (estimated_cost_usd_micros IS NULL OR (total_tokens IS NOT NULL AND pricing_catalog_version IS NOT NULL));
+        DELETE FROM team_schema_migrations WHERE version > 24;
+      `)
+      const upgraded = testStore({ pool })
+      await upgraded.initialize()
+      for (const status of ['succeeded', 'failed', 'cancelled'] as const) {
+        const id = status === 'succeeded' ? 'pending' : status
+        if (id !== 'pending') await upgraded.beginUsageEvent(friend, id, account.id, 'gpt-5.6-sol')
+        await expect(upgraded.settleUsageEvent(owner.teamId, id, status)).resolves.toMatchObject({ status })
+        await expect(upgraded.settleUsageEvent(owner.teamId, id, status)).resolves.toMatchObject({ status })
+        const row = (await pool.query('SELECT total_tokens, reserved_estimated_cost_usd_micros, estimated_cost_usd_micros, pricing_catalog_version FROM team_usage_events WHERE id = $1', [id])).rows[0]
+        expect(row).toEqual({ total_tokens: null, reserved_estimated_cost_usd_micros: '0',
+          estimated_cost_usd_micros: status === 'cancelled' ? null : '250000',
+          pricing_catalog_version: status === 'cancelled' ? null : 'admission-reservation-v1' })
+      }
+      await expect(pool.query("UPDATE team_usage_events SET pricing_catalog_version = 'measured-v1' WHERE id = 'pending'"))
+        .rejects.toThrow(/estimated_cost_metadata_check/)
+      await expect(pool.query("UPDATE team_usage_events SET pricing_catalog_version = NULL WHERE id = 'pending'"))
+        .rejects.toThrow(/estimated_cost_metadata_check/)
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  }, 20_000)
+
   it('upgrades legacy required usage heartbeats without blocking member requests or losing history', async () => {
     const connectionString = requiredDatabaseUrl()
     const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`

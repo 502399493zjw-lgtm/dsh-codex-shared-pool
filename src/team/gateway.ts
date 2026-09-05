@@ -1,3 +1,4 @@
+import { TEAM_LIMIT_REASONS_HEADER, teamLimitReasonsHeader } from './gateway-errors.ts'
 /** Authenticated Codex Responses gateway backed by Team contribution accounts. */
 
 import { randomUUID } from 'node:crypto'
@@ -97,9 +98,10 @@ export function createTeamGatewayHandler(
       trafficLease = await traffic.acquire(auth.keyId)
     } catch (error: unknown) {
       if (error instanceof TeamTrafficGuardError) {
-        const headers = error.retryAfterSeconds === undefined
-          ? undefined
-          : { 'retry-after': String(error.retryAfterSeconds) }
+        const headers = {
+          [TEAM_LIMIT_REASONS_HEADER]: teamLimitReasonsHeader([error.reason]),
+          ...(error.retryAfterSeconds === undefined ? {} : { 'retry-after': String(error.retryAfterSeconds) }),
+        }
         writeJson(res, error.status, { error: error.message, code: error.code }, headers)
         return
       }
@@ -193,7 +195,9 @@ export function createTeamGatewayHandler(
         return
       }
       if (error instanceof TeamRouteCapacityError) {
-        writeJson(res, 429, { error: 'no Team capacity is available', code: error.code, reasons: error.reasons })
+        writeJson(res, 429, { error: 'no Team capacity is available', code: error.code, reasons: error.reasons }, {
+          [TEAM_LIMIT_REASONS_HEADER]: teamLimitReasonsHeader([...(providerAttempted ? ['upstream_hard_limit'] : []), ...error.reasons]),
+        })
         return
       }
       if (error instanceof ClientInputError) {

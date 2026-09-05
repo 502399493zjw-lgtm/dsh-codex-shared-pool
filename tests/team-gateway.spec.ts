@@ -219,6 +219,7 @@ describe('Team Responses gateway', () => {
     }, { authorization: `Bearer ${joined.apiKey}`, 'content-type': 'application/json' }))
 
     expect(result.status).toBe(429)
+    expect(result.headers['x-dsh-team-limit-reasons']).toBe('daily_shared_credits_reached')
     expect(JSON.parse(result.body)).toMatchObject({
       code: 'TEAM_CAPACITY_UNAVAILABLE',
       reasons: ['daily_shared_credits_reached'],
@@ -521,6 +522,7 @@ describe('Team Responses gateway', () => {
     const second = await response(handler, request('POST', { model: 'gpt-5-codex', input: [], stream: true }, headers))
     expect(second.status).toBe(429)
     expect(second.headers['retry-after']).toBeDefined()
+    expect(second.headers['x-dsh-team-limit-reasons']).toBe('concurrency')
     release?.(new Response('ok', { status: 200 }))
     await expect(first).resolves.toMatchObject({ status: 200 })
   })

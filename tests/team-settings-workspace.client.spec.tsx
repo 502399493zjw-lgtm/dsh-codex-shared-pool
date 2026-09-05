@@ -1560,12 +1560,12 @@ describe('Team subscription-pool workspace', () => {
     })
 
     expect(within(teammateAccount).getByText(contributionLabel)).toBeDefined()
-    expect(teammateAccount.querySelector('[data-state]')?.getAttribute('data-state')).toBe('ongoing')
+    expect(teammateAccount.querySelector('[data-state]')?.getAttribute('data-state')).toBe('done')
     fireEvent.click(teammateAccount)
 
     const account = within(details).getByRole('heading', { name: friend.label }).closest('article')!
     expect(account).toBeDefined()
-    expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('ongoing')
+    expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('done')
     expect(within(details).getByText(`${contributionLabel} · ${zh.teamShared}`)).toBeDefined()
     expect(within(details).queryByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(details).getByText(zh.sharedAccountReadonlyHint)).toBeDefined()
