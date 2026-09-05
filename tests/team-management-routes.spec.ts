@@ -4945,3 +4945,112 @@ describe('local Team management routes', () => {
     cleanups.shift()
   })
 })
+
+describe('saved Team connections', () => {
+  const config = { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }
+  const connectionsPath = '/plugins/dsh-codex-shared-pool/team-client/connections'
+  const switchPath = `${connectionsPath}/switch`
+  const oldKey = `dsh_team_${'a'.repeat(43)}`
+  const otherTeam = { ...team(), id: 'team-2', name: 'Other Team' }
+  const otherMember = { ...member(), id: 'member-2', teamId: 'team-2' }
+  const otherContext = { ...EXPECTED_CONTEXT, teamId: 'team-2', currentMemberId: 'member-2' }
+  function fixture() {
+    const credentials = new FakeCredentials()
+    credentials.value = oldKey
+    let rejectOther = false
+    let failJoin = false
+    let joinedKey: string | undefined
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const path = String(input)
+      if (path.endsWith('/invites/preview')) return Response.json({ teamName: 'Other Team', label: 'test', expiresAt: Date.now() + 60_000, teamStatus: 'active' })
+      if (path.endsWith('/join')) {
+        joinedKey = JSON.parse(String(init?.body)).apiKey as string
+        if (failJoin) throw new Error('network interrupted')
+        return Response.json({ team: otherTeam, member: otherMember }, { status: 201 })
+      }
+      if (!path.endsWith('/overview')) throw new Error('unexpected remote mutation')
+      const key = new Headers(init?.headers).get('authorization')
+      if (key === `Bearer ${oldKey}`) return Response.json(overview())
+      if (rejectOther) return Response.json({ error: 'unavailable' }, { status: 503 })
+      return Response.json(overview({ team: otherTeam, currentMember: otherMember, members: [otherMember], apiKeys: [] }))
+    })
+    const env = setup(config, credentials, fetch)
+    const call = (path: string, body?: unknown) => response(route(env.routes, path).handler, request(body === undefined ? 'GET' : 'POST', body))
+    const joinOther = async () => {
+      const preview = await call(TEAM_MANAGEMENT_INVITES_PREVIEW_PATH, { inviteToken: 'dsh_invite_test-1234567890' })
+      return call(TEAM_MANAGEMENT_JOIN_PATH, { joinHandle: preview.body.joinHandle, displayName: 'Edison', expectedContext: EXPECTED_CONTEXT })
+    }
+    return { ...env, call, joinOther, rejectOther: () => { rejectOther = true }, failJoin: () => { failJoin = true }, joinedKey: () => joinedKey }
+  }
+
+  it('joins another Team, survives restart, and switches back without revoking anything or exposing keys', async () => {
+    const env = fixture()
+    expect((await env.joinOther()).status).toBe(201)
+    const secondKey = env.credentials.value
+    expect(secondKey).not.toBe(oldKey)
+    const restarted = setup(config, env.credentials, env.fetch)
+    const listed = await response(route(restarted.routes, connectionsPath).handler, request('GET'))
+    expect(listed.status).toBe(200)
+    expect(JSON.stringify(listed.body)).not.toMatch(/dsh_team_|apiKey|tokenHash/)
+    const saved = (listed.body.connections as Array<{ id: string; teamId: string }>).find(item => item.teamId === 'team-1')!
+    expect(saved).toBeDefined()
+    const switched = await response(route(restarted.routes, switchPath).handler, request('POST', { connectionId: saved.id, expectedContext: otherContext }))
+    expect(switched.status).toBe(200)
+    expect(env.credentials.value).toBe(oldKey)
+    expect(JSON.stringify(switched.body)).not.toContain(secondKey)
+    const listAgain = await env.call(connectionsPath)
+    const second = (listAgain.body.connections as Array<{ id: string; teamId: string }>).find(item => item.teamId === 'team-2')!
+    expect((await env.call(switchPath, { connectionId: second.id, expectedContext: EXPECTED_CONTEXT })).status).toBe(200)
+    expect(env.credentials.value).toBe(secondKey)
+  })
+
+  it('keeps the original connection on an uncertain join and recovers after restart', async () => {
+    const env = fixture()
+    env.failJoin()
+    expect((await env.joinOther()).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+    const restarted = setup(config, env.credentials, env.fetch)
+    const recovered = await response(route(restarted.routes, TEAM_MANAGEMENT_JOIN_RECOVER_PATH).handler, request('POST', {}))
+    expect(recovered.status).toBe(200)
+    expect(env.credentials.value).toBe(env.joinedKey())
+  })
+
+  it('rejects stale context and unavailable destinations without replacing the active key', async () => {
+    const env = fixture()
+    expect((await env.joinOther()).status).toBe(201)
+    const listed = await env.call(connectionsPath)
+    const saved = (listed.body.connections as Array<{ id: string }>)[0]!
+    expect((await env.call(switchPath, { connectionId: saved.id, expectedContext: EXPECTED_CONTEXT })).status).toBe(409)
+    const secondKey = env.credentials.value
+    expect(env.credentials.value).toBe(secondKey)
+    expect((await env.call(switchPath, { connectionId: saved.id, expectedContext: otherContext })).status).toBe(200)
+    const second = ((await env.call(connectionsPath)).body.connections as Array<{ id: string; teamId: string }>).find(item => item.teamId === 'team-2')!
+    env.rejectOther()
+    expect((await env.call(switchPath, { connectionId: second.id, expectedContext: EXPECTED_CONTEXT })).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+  })
+
+  it('blocks switching and joining when the active credential is readonly', async () => {
+    const env = fixture()
+    await env.joinOther()
+    const saved = ((await env.call(connectionsPath)).body.connections as Array<{ id: string }>)[0]!
+    const currentKey = env.credentials.value
+    env.credentials.readonlyRefs.add(TEAM_KEY_REF)
+    expect((await env.call(switchPath, { connectionId: saved.id, expectedContext: otherContext })).status).toBeGreaterThanOrEqual(400)
+    expect((await env.joinOther()).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(currentKey)
+  })
+
+  it('blocks switching while a join is uncertain and scopes saved identities to the server', async () => {
+    const env = fixture()
+    env.failJoin()
+    await env.joinOther()
+    const saved = ((await env.call(connectionsPath)).body.connections as Array<{ id: string }>)[0]!
+    expect((await env.call(switchPath, { connectionId: saved.id, expectedContext: EXPECTED_CONTEXT })).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+    const otherServer = setup({ ...config, baseUrl: 'https://other.example/plugins/dsh-codex-shared-pool/team' }, env.credentials, env.fetch)
+    const listed = await response(route(otherServer.routes, connectionsPath).handler, request('GET'))
+    expect(listed.body.connections).toEqual([])
+  })
+
+})

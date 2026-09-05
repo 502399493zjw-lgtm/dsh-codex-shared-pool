@@ -4,6 +4,8 @@ import { parseSubscription } from '../../shared/subscription.ts'
 
 import {
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
+  TEAM_MANAGEMENT_CONNECTIONS_PATH,
+  TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH,
@@ -35,6 +37,7 @@ import {
   TEAM_MANAGEMENT_USAGE_PATH,
 } from '../../shared/team-management.ts'
 import type {
+  TeamSavedConnection,
   TeamDissolutionClearResult,
   TeamDissolutionInput,
   TeamDissolutionView,
@@ -690,8 +693,24 @@ export class TeamManagementApi {
     return this.request(TEAM_MANAGEMENT_STATUS_PATH, {}, parseTeamManagementStatus)
   }
 
-  join(joinHandle: string, displayName: string): Promise<TeamManagementConnectionResult> {
-    return this.request(TEAM_MANAGEMENT_JOIN_PATH, { method: 'POST', body: { joinHandle, displayName } }, parseConnection)
+  connections(): Promise<readonly TeamSavedConnection[]> {
+    return this.request(TEAM_MANAGEMENT_CONNECTIONS_PATH, {}, value => {
+      const items = object(value, 'saved connections').connections
+      if (!Array.isArray(items) || items.length > 100) throw new Error('saved connections are invalid')
+      return items.map(value => {
+        const item = object(value, 'saved connection')
+        return { id: stringField(item, 'id'), teamId: stringField(item, 'teamId'), teamName: stringField(item, 'teamName'),
+          currentMemberId: stringField(item, 'currentMemberId'), memberName: stringField(item, 'memberName') }
+      })
+    })
+  }
+
+  switchConnection(connectionId: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH, { method: 'POST', body: { connectionId, expectedContext } }, parseConnection)
+  }
+
+  join(joinHandle: string, displayName: string, expectedContext?: TeamManagementExpectedContext): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_JOIN_PATH, { method: 'POST', body: { joinHandle, displayName, ...(expectedContext === undefined ? {} : { expectedContext }) } }, parseConnection)
   }
 
   recoverJoin(): Promise<TeamManagementConnectionResult> {

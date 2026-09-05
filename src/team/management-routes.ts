@@ -19,6 +19,8 @@ import {
   TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
   TEAM_LOCAL_ACCOUNT_ALREADY_SHARED_CODE,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
+  TEAM_MANAGEMENT_CONNECTIONS_PATH,
+  TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_REVOKE_PATH,
   TEAM_MANAGEMENT_CONTRIBUTION_UPDATE_PATH,
@@ -52,6 +54,7 @@ import {
   TEAM_MANAGEMENT_USAGE_PATH,
 } from '../shared/team-management.ts'
 import type {
+  TeamSavedConnection,
   TeamManagementConnectionResult,
   TeamAuthorizationFailureCode,
   TeamConnectionTerminalClearResult,
@@ -159,7 +162,13 @@ interface InvitePreviewSession {
   readonly expiresAt: number
 }
 
+interface SavedConnection extends TeamSavedConnection {
+  readonly apiKey: string
+  readonly serverUrl: string
+}
+
 interface PendingJoinRecord {
+  readonly previousKey?: string
   readonly version: 1
   readonly apiKey: string
   readonly inviteToken: string
@@ -1444,7 +1453,7 @@ class TeamManagementProxy {
       return account !== undefined && account.status !== 'revoked'
     })
     if (retainedBindings.length !== bindings.length) {
-      await this.pruneLocalContributionBindings(bindings, retainedBindings).catch((error: unknown) => {
+      await this.pruneLocalContributionBindings(bindings, [...bindings.filter(binding => !sameTeamManagementContext(binding.expectedContext, actualContext)), ...retainedBindings]).catch((error: unknown) => {
         this.onBackgroundError(new Error('failed to prune stale local contribution bindings', { cause: error }))
       })
     }
@@ -1539,10 +1548,96 @@ class TeamManagementProxy {
     )
   }
 
-  async join(joinHandle: string, displayName: string): Promise<TeamManagementConnectionResult> {
-    return this.withCredentialTransition(async () => {
+  private savedConnectionsRef(): CredentialRef {
+    return credentialRef(`${String(this.keyRef())}_SAVED_CONNECTIONS`)
+  }
+
+  private async savedConnections(): Promise<readonly SavedConnection[]> {
+    const raw = (await this.credentials.resolve(this.savedConnectionsRef()))?.value
+    if (raw === undefined) return []
+    try {
+      const parsed = JSON.parse(raw) as { version: unknown; connections: unknown }
+      if (parsed.version !== 1 || !Array.isArray(parsed.connections) || parsed.connections.length > 100) throw new Error()
+      return parsed.connections.map(value => {
+        const item = record(value, 'saved connection')
+        const connection = {
+          id: requiredString(item, 'id'), serverUrl: requiredString(item, 'serverUrl'),
+          teamId: requiredString(item, 'teamId'), teamName: requiredString(item, 'teamName'),
+          currentMemberId: requiredString(item, 'currentMemberId'), memberName: requiredString(item, 'memberName'),
+          apiKey: requiredString(item, 'apiKey'),
+        }
+        validateTeamKey(connection.apiKey)
+        return connection
+      })
+    } catch { throw new Error('saved Team connections are invalid') }
+  }
+
+  private async writeConnections(connections: readonly SavedConnection[]): Promise<void> {
+    if (connections.length > 100) throw new Error('saved Team connection limit reached')
+    await this.credentials.set(this.savedConnectionsRef(), JSON.stringify({ version: 1, connections }))
+  }
+
+  private async saveConnection(apiKey: string, overview: TeamManagementOverview): Promise<void> {
+    const serverUrl = this.requireEnabled()
+    const connections = await this.savedConnections()
+    const existing = connections.find(item => item.serverUrl === serverUrl && item.teamId === overview.team.id && item.currentMemberId === overview.currentMember.id)
+    await this.writeConnections([
+      ...connections.filter(item => item !== existing),
+      { id: existing?.id ?? randomUUID(), serverUrl, apiKey, teamId: overview.team.id,
+        teamName: overview.team.name, currentMemberId: overview.currentMember.id, memberName: overview.currentMember.displayName },
+    ])
+  }
+
+  async connections(): Promise<readonly TeamSavedConnection[]> {
+    const serverUrl = this.requireEnabled()
+    return (await this.savedConnections()).filter(item => item.serverUrl === serverUrl).map(item => ({
+      id: item.id, teamId: item.teamId, teamName: item.teamName,
+      currentMemberId: item.currentMemberId, memberName: item.memberName,
+    }))
+  }
+
+  private async requireConnectionTransitionReady(): Promise<void> {
+    await this.requireWritable()
+    if (!(await this.credentials.describe(this.savedConnectionsRef())).writable) throw new Error('saved Team connections are not writable')
+    for (const ref of [this.pendingJoinRef(), this.pendingDissolutionRef(), this.terminalDissolutionRef(), this.connectionTerminalRef()]) {
+      if ((await this.credentials.describe(ref)).configured) throw new Error('finish pending Team recovery before switching')
+    }
+    if (this.browserOAuth.size > 0 || (await this.pendingBrowserOAuthJournal()).length > 0) {
+      throw new Error('finish or cancel Team authorization before switching')
+    }
+  }
+
+  async switchConnection(connectionId: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
+      await this.requireConnectionTransitionReady()
+      const active = await this.credentials.resolve(this.keyRef())
+      if (active !== undefined) {
+        if (expectedContext === null) throw new TeamManagementContextMismatchError()
+        const current = await this.expectedMutationContext(expectedContext)
+        await this.saveConnection(current.key, current.overview)
+      } else if (expectedContext !== null) throw new TeamManagementContextMismatchError()
+      const saved = (await this.savedConnections()).find(item => item.id === connectionId && item.serverUrl === this.requireEnabled())
+      if (saved === undefined) throw new Error('saved Team connection not found')
+      const overview = projectOverview(await this.remote(TEAM_OVERVIEW_PATH, { key: saved.apiKey, diagnoseTerminal: false }))
+      if (overview.team.id !== saved.teamId || overview.currentMember.id !== saved.currentMemberId) throw new TeamManagementContextMismatchError()
+      if ((await this.credentials.resolve(this.keyRef()))?.value !== active?.value) throw new TeamManagementContextMismatchError()
+      await this.saveConnection(saved.apiKey, overview)
+      await this.credentials.set(this.keyRef(), saved.apiKey)
+      return { team: overview.team, member: overview.currentMember }
+    }))
+  }
+
+  async join(joinHandle: string, displayName: string, expectedContext?: TeamManagementExpectedContext): Promise<TeamManagementConnectionResult> {
+    return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
       const active = await this.requireWritable()
-      if (active.configured) throw new Error('Team API key is already configured')
+      let previousKey: string | undefined
+      if (active.configured) {
+        if (expectedContext === undefined) throw new Error('Team API key is already configured')
+        await this.requireConnectionTransitionReady()
+        const current = await this.expectedMutationContext(expectedContext)
+        await this.saveConnection(current.key, current.overview)
+        previousKey = current.key
+      } else if (expectedContext !== undefined) throw new TeamManagementContextMismatchError()
       if (
         (await this.credentials.describe(this.connectionTerminalRef())).configured
         || (await this.credentials.describe(this.terminalDissolutionRef())).configured
@@ -1554,6 +1649,7 @@ class TeamManagementProxy {
       const session = this.invitePreviewSession(joinHandle)
       const pending: PendingJoinRecord = {
         version: 1,
+        ...(previousKey === undefined ? {} : { previousKey }),
         apiKey: `dsh_team_${randomBytes(32).toString('base64url')}`,
         inviteToken: session.inviteToken,
         displayName,
@@ -1568,7 +1664,7 @@ class TeamManagementProxy {
         if (this.isDefiniteJoinRejection(error)) await this.credentials.unset(this.pendingJoinRef())
         throw error
       }
-    })
+    }))
   }
 
   async recoverJoin(): Promise<TeamManagementConnectionResult> {
@@ -1576,11 +1672,11 @@ class TeamManagementProxy {
       const active = await this.requireWritable()
       const pending = await this.pendingJoin()
       const activeKey = active.configured ? (await this.credentials.resolve(this.keyRef()))?.value : undefined
-      if (active.configured && activeKey !== pending.apiKey) {
+      if (active.configured && activeKey !== pending.apiKey && activeKey !== pending.previousKey) {
         throw new Error('pending Team join belongs to a different active Team connection')
       }
       try {
-        const overview = await this.overview(pending.apiKey)
+        const overview = projectOverview(await this.remote(TEAM_OVERVIEW_PATH, { key: pending.apiKey, diagnoseTerminal: false }))
         await this.promotePendingJoin(pending)
         return { team: overview.team, member: overview.currentMember }
       } catch (error: unknown) {
@@ -1617,14 +1713,16 @@ class TeamManagementProxy {
       }
       if (active.configured) {
         const activeKey = (await this.credentials.resolve(this.keyRef()))?.value
-        if (activeKey !== pending.apiKey) {
+        if (activeKey !== pending.apiKey && activeKey !== pending.previousKey) {
           throw new Error('pending Team join belongs to a different active Team connection')
         }
-        await this.credentials.unset(this.pendingJoinRef())
-        return { discarded: true }
+        if (activeKey === pending.apiKey) {
+          await this.credentials.unset(this.pendingJoinRef())
+          return { discarded: true }
+        }
       }
       try {
-        await this.overview(pending.apiKey)
+        await this.remote(TEAM_OVERVIEW_PATH, { key: pending.apiKey, diagnoseTerminal: false })
       } catch (error: unknown) {
         if (!this.isMissingRemoteIdentity(error)) throw error
         await this.credentials.unset(this.pendingJoinRef())
@@ -3182,15 +3280,17 @@ class TeamManagementProxy {
       throw new Error('pending Team join is invalid')
     }
     const item = record(candidate, 'pending Team join')
-    exactKeys(item, ['version', 'apiKey', 'inviteToken', 'displayName'])
+    exactKeys(item, ['version', 'apiKey', 'inviteToken', 'displayName', 'previousKey'])
     if (item.version !== 1) throw new Error('pending Team join is invalid')
     const pending: PendingJoinRecord = {
       version: 1,
       apiKey: requiredString(item, 'apiKey'),
+      ...(item.previousKey === undefined ? {} : { previousKey: requiredString(item, 'previousKey') }),
       inviteToken: requiredString(item, 'inviteToken'),
       displayName: requiredUnmodifiedString(item, 'displayName'),
     }
     validateTeamKey(pending.apiKey)
+    if (pending.previousKey !== undefined) validateTeamKey(pending.previousKey)
     if (!pending.inviteToken.startsWith('dsh_invite_')) throw new Error('pending Team join is invalid')
     return pending
   }
@@ -3227,10 +3327,10 @@ class TeamManagementProxy {
 
   private async promotePendingJoin(pending: PendingJoinRecord): Promise<void> {
     const active = await this.credentials.resolve(this.keyRef())
-    if (active !== undefined && active.value !== pending.apiKey) {
+    if (active !== undefined && active.value !== pending.apiKey && active.value !== pending.previousKey) {
       throw new Error('pending Team join belongs to a different active Team connection')
     }
-    if (active === undefined) await this.credentials.set(this.keyRef(), pending.apiKey)
+    if (active?.value !== pending.apiKey) await this.credentials.set(this.keyRef(), pending.apiKey)
     await this.credentials.unset(this.pendingJoinRef())
   }
 
@@ -3341,6 +3441,8 @@ class TeamManagementProxy {
   /** Do not delete a credential another process or tab has already replaced. */
   private async unsetKeyIfCurrent(expectedKey: string): Promise<void> {
     const current = await this.credentials.resolve(this.keyRef())
+    const saved = await this.savedConnections()
+    if (saved.some(item => item.apiKey === expectedKey)) await this.writeConnections(saved.filter(item => item.apiKey !== expectedKey))
     if (current?.value === expectedKey) await this.credentials.unset(this.keyRef())
   }
 
@@ -3496,7 +3598,12 @@ export function registerTeamManagementRoutes(
           }
         },
       }),
-      register(TEAM_MANAGEMENT_STATUS_PATH, 'GET', async () => ({ value: await proxy.status() })),
+      register(TEAM_MANAGEMENT_CONNECTIONS_PATH, 'GET', async () => ({ value: { connections: await proxy.connections() } })),
+      register(TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH, 'POST', async body => {
+        exactKeys(body, ['connectionId', 'expectedContext'])
+        return { value: await proxy.switchConnection(requiredString(body, 'connectionId'), body.expectedContext === null ? null : requiredExpectedContext(body)) }
+      }),
+      register(TEAM_MANAGEMENT_STATUS_PATH, 'GET' , async () => ({ value: await proxy.status() })),
       register(TEAM_MANAGEMENT_OVERVIEW_PATH, 'GET', async () => ({ value: await proxy.overview() })),
       register(TEAM_MANAGEMENT_DISPLAY_NAME_MIGRATION_ACK_PATH, 'POST', async (body) => {
         exactKeys(body, ['migrationVersion', 'expectedContext'])
@@ -3508,10 +3615,10 @@ export function registerTeamManagementRoutes(
         }
       }),
       register(TEAM_MANAGEMENT_JOIN_PATH, 'POST', async (body) => {
-        exactKeys(body, ['joinHandle', 'displayName'])
+        exactKeys(body, ['joinHandle', 'displayName', 'expectedContext'])
         return {
           status: 201,
-          value: await proxy.join(requiredString(body, 'joinHandle'), requiredUnmodifiedString(body, 'displayName')),
+          value: await proxy.join(requiredString(body, 'joinHandle'), requiredUnmodifiedString(body, 'displayName'), body.expectedContext === undefined ? undefined : requiredExpectedContext(body)),
         }
       }),
       register(TEAM_MANAGEMENT_JOIN_RECOVER_PATH, 'POST', async (body) => {
