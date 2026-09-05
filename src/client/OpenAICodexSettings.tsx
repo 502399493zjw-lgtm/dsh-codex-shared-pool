@@ -244,8 +244,10 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
   const hasData = usage.rateLimits.length > 0 || usage.credits !== undefined || usage.individualLimit !== undefined
   return (
     <div style={quotaListStyle}>
-      <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
-      <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} />
+      <div style={quotaGroupStyle}>
+        <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
+        <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} style={{ marginBlock: 0 }} />
+      </div>
       {usage.rateLimits.map(limit => (
         <div key={limit.id} style={quotaGroupStyle}>
           <h4 style={quotaTitleStyle}>{limit.name ?? limit.id}</h4>
@@ -715,11 +717,15 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-default p { margin: 8px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
         .dsh-codex-default p[role='alert'] { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-quota { margin-top: 20px; padding: 20px 0 24px; border-top: 1px solid var(--dsw-alias-border-l2); }
-        .dsh-codex-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 0; margin-top: auto; border-top: 1px solid var(--dsw-alias-border-l2); }
-        .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; gap: 6px; min-height: 36px; padding: 8px 12px; overflow-wrap: anywhere; border: 0; border-radius: 8px; font-size: 13px; line-height: 20px; color: var(--dsw-alias-state-business-primary, #3964fe); background: transparent; cursor: pointer; }
+        .dsh-codex-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 16px 0; margin-top: auto; border-top: 1px solid var(--dsw-alias-border-l2); }
+        .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; gap: 6px; min-height: 36px; padding: 7px 14px; overflow-wrap: anywhere; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; font-size: 13px; font-weight: 500; line-height: 20px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.04)); cursor: pointer; }
         .dsh-codex-detail-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
         .dsh-codex-detail-actions button:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover); }
-        .dsh-codex-detail-actions .danger { color: var(--dsw-alias-state-error-primary); }
+        .dsh-codex-detail-actions button:not(:disabled):active { background: color-mix(in srgb, currentColor 14%, transparent); }
+        .dsh-codex-detail-actions button svg { flex-shrink: 0; }
+        .dsh-codex-detail-actions .danger { color: var(--dsw-alias-state-error-primary); border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 38%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent); }
+        .dsh-codex-detail-actions .danger:not(:disabled):hover { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent); }
+        .dsh-codex-detail-actions .danger:not(:disabled):active { background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 20%, transparent); }
         .dsh-codex-dialog-field { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
         .dsh-codex-dialog-field > span { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; font-weight: 500; }
         .dsh-codex-dialog-error { margin: 10px 0 0; color: var(--dsw-alias-state-error-primary); font-size: 13px; line-height: 20px; }
