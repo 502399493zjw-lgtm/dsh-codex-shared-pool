@@ -1,5 +1,7 @@
 /** Runtime-validated same-origin client for the Host-owned Team management proxy. */
 
+import { parseSubscription } from '../../shared/subscription.ts'
+
 import {
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH,
@@ -627,6 +629,7 @@ function parseCapacity(value: unknown): TeamContributionCapacitySummary {
 
 function parseCapacityBucket(value: unknown): TeamContributionCapacityBucketSummary {
   const item = object(value, 'capacity bucket')
+  const subscription = parseSubscription(item.subscription)
   const remainingPercent = item.remainingPercent === undefined
     ? undefined
     : boundedNumberField(item, 'remainingPercent', 0, 100)
@@ -639,6 +642,7 @@ function parseCapacityBucket(value: unknown): TeamContributionCapacityBucketSumm
   return {
     id: unionField(item, 'id', ['codex', 'codex_spark'] as const),
     reason: unionField(item, 'reason', CAPACITY_REASONS),
+    ...(subscription === undefined ? {} : { subscription }),
     ...(remainingPercent === undefined ? {} : { remainingPercent }),
     ...(resetAt === undefined ? {} : { resetAt }),
     ...(sharedRequestsUsed === undefined ? {} : { sharedRequestsUsed }),

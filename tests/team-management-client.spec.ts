@@ -304,6 +304,22 @@ describe('Team management browser API', () => {
     expect(JSON.stringify(parsed)).not.toContain('must-not-survive')
   })
 
+  it.each([
+    [{ planType: 'pro', weeklyEstimatedUsd: 99999, accessToken: 'must-not-survive' }, { planType: 'pro', weeklyEstimatedUsd: 2100 }],
+    [{ planType: 'future-plan' }, { planType: 'unknown' }],
+    [undefined, undefined],
+    [{ planType: 123 }, undefined],
+  ])('preserves only validated subscription metadata from capacity', (subscription, expected) => {
+    const parsed = parseTeamManagementOverview({
+      ...overview(),
+      contributions: [{ ...contribution(), capacity: { buckets: [{
+        id: 'codex', reason: 'ready', remainingPercent: 50, subscription,
+      }] } }],
+    })
+    expect(parsed.contributions[0]?.capacity?.buckets[0]?.subscription).toEqual(expected)
+    expect(JSON.stringify(parsed)).not.toContain('must-not-survive')
+  })
+
   it('rejects an unknown live-capacity reason', () => {
     expect(() => parseTeamManagementOverview({
       ...overview(),
