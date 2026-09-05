@@ -9,7 +9,7 @@ type Translate = (key: TeamSettingsKey, params?: Record<string, unknown>) => str
 export type TeamSetupMode = 'create' | 'recover'
 const RECOVERY_CODE_PATTERN = /^dsh_recovery_[A-Za-z0-9_-]{43}$/u
 
-export function TeamSetup({ api, t, mode, expectedContext, pending, disabled, onBack, onConnected, onRefresh }: {
+export function TeamSetup({ api, t, mode, expectedContext, pending, disabled, onBack, onConnected, onFailed, onRefresh }: {
   api: TeamManagementApi
   t: Translate
   mode: TeamSetupMode
@@ -18,6 +18,7 @@ export function TeamSetup({ api, t, mode, expectedContext, pending, disabled, on
   disabled: boolean
   onBack: () => void
   onConnected: (result: TeamManagementConnectionResult) => Promise<void>
+  onFailed: () => void
   onRefresh: () => Promise<void>
 }) {
   const [teamName, setTeamName] = useState('')
@@ -35,7 +36,9 @@ export function TeamSetup({ api, t, mode, expectedContext, pending, disabled, on
       setRecoveryCode('')
       await onConnected(result)
     } catch (failure) {
-      setError(typeof failure === 'object' && failure !== null && 'status' in failure && failure.status === 404 ? t('teamSetupUnavailable') : t('teamSetupFailed'))
+      const notFound = typeof failure === 'object' && failure !== null && 'status' in failure && failure.status === 404
+      setError(t(notFound ? mode === 'recover' ? 'recoveryCodeInvalid' : 'teamSetupUnavailable' : 'teamSetupFailed'))
+      onFailed()
     } finally {
       setRecoveryCode('')
       await onRefresh()

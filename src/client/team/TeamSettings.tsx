@@ -1769,6 +1769,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       <TeamSetup api={api} t={t} mode={mode} expectedContext={setupExpectedContext}
         pending={status.pendingTeamSetup !== undefined} disabled={!status.keyWritable}
         onBack={() => { setSetupMode(undefined); setJoiningOtherTeam(false) }}
+        onFailed={() => {
+          // A definitive rejection clears the Host journal. Keep its explanation visible.
+          if (setupMode === undefined) {
+            setSetupMode(mode)
+            setSetupExpectedContext(teamExpectedContextRef.current ?? null)
+          }
+        }}
         onConnected={async result => {
           setSetupMode(undefined); setJoiningOtherTeam(false); setTeamSettingsOpen(false)
           if (mode === 'create' && status.serverOrigin !== undefined) setRecoveryExportContext({

@@ -4115,3 +4115,30 @@ it('shows an honest unavailable message when an existing owner has no local reco
   fireEvent.click(within(dialog).getByRole('button', { name: zh.showRecoveryCode }))
   expect(await within(dialog).findByText(zh.recoveryCodeUnavailable)).toBeDefined()
 })
+
+it.each([false, true])('explains rejected owner recovery without blaming a server upgrade (resume: %s)', async pending => {
+  const rejected = Object.assign(new Error('Recovery code not found'), { status: 404 })
+  if (pending) {
+    managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, pendingTeamSetup: 'recover', serverOrigin: 'https://team.example.test' })
+    managementApi.resumeTeamSetup.mockImplementationOnce(async () => {
+      // Definite server rejections clear the Host journal, even after a restart.
+      managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, serverOrigin: 'https://team.example.test' })
+      throw rejected
+    })
+  } else managementApi.recoverOwner.mockRejectedValueOnce(rejected)
+  render(<TeamSettings t={translate} embedded />)
+  if (pending) {
+    fireEvent.click(await screen.findByRole('button', { name: zh.resumeTeamSetup }))
+  } else {
+    fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: zh.recoverOwner }))
+    fireEvent.change(screen.getByLabelText(zh.recoveryCode), { target: { value: `dsh_recovery_${'d'.repeat(43)}` } })
+    fireEvent.click(screen.getByRole('button', { name: zh.recoverAndSwitch }))
+  }
+  expect(await screen.findByText('恢复码无效或已失效，请确认使用原来的团队服务器。')).toBeDefined()
+  expect(screen.queryByText(zh.teamSetupUnavailable)).toBeNull()
+  expect((screen.getByLabelText(zh.recoveryCode) as HTMLInputElement).value).toBe('')
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: zh.returnToTeam }))
+  expect(await screen.findByRole('button', { name: '周末造物局' })).toBeDefined()
+})
