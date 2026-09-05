@@ -1689,6 +1689,51 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
+  it('upgrades legacy required usage heartbeats without blocking member requests or losing history', async () => {
+    const connectionString = requiredDatabaseUrl()
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString })
+    const pool = new Pool({ connectionString, options: `-c search_path=${schema},public` })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const oldStore = testStore({ pool })
+      await oldStore.initialize()
+      const boot = await oldStore.bootstrap('Upgrade Team', 'Owner')
+      const owner = (await oldStore.authenticateApiKey(boot.apiKey))!
+      const invite = await oldStore.createInvite(owner, 60_000)
+      const joined = await oldStore.acceptInvite(invite.inviteToken, 'Friend')
+      const friend = (await oldStore.authenticateApiKey(joined.apiKey))!
+      const contribution = await oldStore.createContributionAccount(owner, 'Owner Codex')
+      await oldStore.setContributionAccountStatus(owner.teamId, contribution.id, 'active')
+      await oldStore.beginUsageEvent(owner, 'historical', contribution.id, 'gpt-5-codex')
+      await oldStore.settleUsageEvent(owner.teamId, 'historical', 'succeeded')
+      // Reproduce the deployed v23 schema: an obsolete required column remains
+      // from an earlier accounting implementation, with no INSERT default.
+      await pool.query(`
+        ALTER TABLE team_usage_events ADD COLUMN IF NOT EXISTS last_heartbeat_at bigint;
+        UPDATE team_usage_events SET last_heartbeat_at = 123456;
+        ALTER TABLE team_usage_events ALTER COLUMN last_heartbeat_at SET NOT NULL;
+        ALTER TABLE team_usage_events ALTER COLUMN last_heartbeat_at DROP DEFAULT;
+        DELETE FROM team_schema_migrations WHERE version > 23;
+      `)
+      const upgraded = testStore({ pool })
+      await upgraded.initialize()
+      const event = await upgraded.beginUsageEvent(friend, 'member-request', contribution.id, 'gpt-5-codex', 50_000)
+      expect(event).toMatchObject({ consumerMemberId: friend.memberId, upstreamOwnerMemberId: owner.memberId })
+      await expect(upgraded.settleUsageEvent(owner.teamId, event.id, 'succeeded')).resolves.toMatchObject({ status: 'succeeded' })
+      expect((await pool.query("SELECT last_heartbeat_at FROM team_usage_events WHERE id = 'historical'")).rows)
+        .toEqual([{ last_heartbeat_at: '123456' }])
+      expect((await pool.query("SELECT last_heartbeat_at FROM team_usage_events WHERE id = 'member-request'")).rows)
+        .toEqual([{ last_heartbeat_at: null }])
+      await testStore({ pool }).initialize()
+      expect((await pool.query('SELECT id FROM team_usage_events')).rowCount).toBe(2)
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  }, 20_000)
+
   it('atomically admits only one shared request at the contributor daily Credits boundary', async () => {
     const connectionString = requiredDatabaseUrl()
     const suffix = randomUUID().replaceAll('-', '')

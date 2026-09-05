@@ -939,6 +939,16 @@ export const POSTGRES_TEAM_MIGRATIONS: readonly PostgresTeamMigration[] = [{
       attempt_count integer NOT NULL CHECK (attempt_count > 0)
     );
   `,
+}, {
+  version: 24,
+  // Older deployments retained a required heartbeat column from the previous
+  // accounting implementation. Route leases now own liveness; keep historical
+  // timestamps but allow current usage INSERTs to omit the obsolete field.
+  // Adding it when absent makes this repair work for fresh schemas as well.
+  sql: `
+    ALTER TABLE team_usage_events ADD COLUMN IF NOT EXISTS last_heartbeat_at bigint;
+    ALTER TABLE team_usage_events ALTER COLUMN last_heartbeat_at DROP NOT NULL;
+  `,
 }]
 
 interface AnonymousCreationRow extends QueryResultRow {
