@@ -47,8 +47,8 @@ function validateAggregate(aggregate: TeamUsageAggregateInput): void {
   if (aggregate.tokenMeasuredRequestCount > aggregate.requestCount) {
     throw new RangeError('tokenMeasuredRequestCount cannot exceed requestCount')
   }
-  if (aggregate.pricedRequestCount > aggregate.tokenMeasuredRequestCount) {
-    throw new RangeError('pricedRequestCount cannot exceed tokenMeasuredRequestCount')
+  if (aggregate.pricedRequestCount > aggregate.requestCount) {
+    throw new RangeError('pricedRequestCount cannot exceed requestCount')
   }
 
   const totalTokens = aggregate.totalTokens === null
@@ -75,7 +75,7 @@ function validateAggregate(aggregate: TeamUsageAggregateInput): void {
 
 function deriveState(aggregate: TeamUsageAggregateInput): TeamUsageState {
   if (aggregate.requestCount === 0) return 'zero'
-  if (aggregate.tokenMeasuredRequestCount === 0) return 'unmeasured'
+  if (aggregate.tokenMeasuredRequestCount === 0) return aggregate.pricedRequestCount > 0 ? 'partial' : 'unmeasured'
   if (aggregate.tokenMeasuredRequestCount < aggregate.requestCount) return 'partial'
   if (aggregate.pricedRequestCount === 0) return 'unpriced'
   if (aggregate.pricedRequestCount < aggregate.requestCount) return 'partial'

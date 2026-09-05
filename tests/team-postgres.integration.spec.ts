@@ -1724,6 +1724,13 @@ describePostgres('real PostgreSQL Team concurrency', () => {
           estimated_cost_usd_micros: status === 'cancelled' ? null : '250000',
           pricing_catalog_version: status === 'cancelled' ? null : 'admission-reservation-v1' })
       }
+      const aggregate = { requestCount: 3, tokenMeasuredRequestCount: 0, pricedRequestCount: 2,
+        totalTokens: null, estimatedCostUsdMicros: '500000' }
+      await expect(upgraded.readUsageProjection(owner)).resolves.toMatchObject({
+        role: 'owner', team: aggregate, ownedAccounts: [{ accountId: account.id, aggregate,
+          currentUtcWeek: { aggregate }, last24Hours: { aggregate } }],
+      })
+      await expect(upgraded.readUsageProjection(friend)).resolves.toMatchObject({ role: 'member', mine: aggregate })
       await expect(pool.query("UPDATE team_usage_events SET pricing_catalog_version = 'measured-v1' WHERE id = 'pending'"))
         .rejects.toThrow(/estimated_cost_metadata_check/)
       await expect(pool.query("UPDATE team_usage_events SET pricing_catalog_version = NULL WHERE id = 'pending'"))

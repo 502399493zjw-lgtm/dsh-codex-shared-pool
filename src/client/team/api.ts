@@ -669,7 +669,7 @@ function parseUsageAggregate(value: unknown, label: string): TeamUsageAggregateS
   const totalTokens = nullableDecimalString(item.totalTokens, 'totalTokens')
   const estimatedCostUsdMicros = nullableDecimalString(item.estimatedCostUsdMicros, 'estimatedCostUsdMicros')
   if (tokenMeasuredRequestCount > requestCount) throw new Error('tokenMeasuredRequestCount exceeds requestCount')
-  if (pricedRequestCount > tokenMeasuredRequestCount) throw new Error('pricedRequestCount exceeds tokenMeasuredRequestCount')
+  if (pricedRequestCount > requestCount) throw new Error('pricedRequestCount exceeds requestCount')
   if (requestCount === 0) {
     if (tokenMeasuredRequestCount !== 0 || pricedRequestCount !== 0 || totalTokens !== '0' || estimatedCostUsdMicros !== '0') {
       throw new Error('empty usage aggregate is invalid')

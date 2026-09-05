@@ -4010,7 +4010,7 @@ function summaryUsageAggregate(row: UsageProjectionAggregateRow): TeamUsageAggre
     || tokenMeasuredRequestCount < 0
     || pricedRequestCount < 0
     || tokenMeasuredRequestCount > requestCount
-    || pricedRequestCount > tokenMeasuredRequestCount
+    || pricedRequestCount > requestCount
   ) {
     throw new Error('stored usage aggregate counts are invalid')
   }

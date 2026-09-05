@@ -1120,7 +1120,8 @@ function validateUsageAggregate(
   if (tokenMeasuredRequestCount > requestCount) {
     throw new Error('remote Team returned invalid tokenMeasuredRequestCount')
   }
-  if (pricedRequestCount > tokenMeasuredRequestCount) {
+  // Admission-reservation estimates may exist without provider Token measurements.
+  if (pricedRequestCount > requestCount) {
     throw new Error('remote Team returned invalid pricedRequestCount')
   }
   if (requestCount === 0) {
