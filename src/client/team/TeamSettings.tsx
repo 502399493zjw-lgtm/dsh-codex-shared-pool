@@ -218,11 +218,15 @@ function parseLocalRemainingPercent(value: Record<string, unknown>): number | un
   )) ?? usage.rateLimits[0]
   if (typeof rateLimit !== 'object' || rateLimit === null) return undefined
   const windows = (rateLimit as Record<string, unknown>).windows
-  if (!Array.isArray(windows) || typeof windows[0] !== 'object' || windows[0] === null) return undefined
-  const remainingPercent = (windows[0] as Record<string, unknown>).remainingPercent
-  return typeof remainingPercent === 'number' && Number.isFinite(remainingPercent)
-    ? Math.min(100, Math.max(0, remainingPercent))
-    : undefined
+  const individual = typeof usage.individualLimit === 'object' && usage.individualLimit !== null
+    ? (usage.individualLimit as Record<string, unknown>).remainingPercent : undefined
+  const values = [individual, ...(Array.isArray(windows) ? windows.map(window => (
+    typeof window === 'object' && window !== null
+      ? (window as Record<string, unknown>).remainingPercent : undefined
+  )) : [])].filter((value): value is number => (
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+  ))
+  return values.length === 0 ? undefined : Math.min(...values)
 }
 
 function parseLocalProfiles(value: unknown): readonly LocalCodexProfileSummary[] {
@@ -1292,6 +1296,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         const accounts = new Map(next.contributions.map(account => [account.id, account]))
         setOverview(current => current === undefined || !isCurrent() ? current : {
           ...current,
+          activeSharedAccounts: next.activeSharedAccounts,
           contributions: current.contributions.map(account => {
             const { capacity: _previous, ...rest } = account
             const capacity = accounts.get(account.id)?.capacity
@@ -1308,6 +1313,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         // as current or tearing down the rest of the account workspace.
         setOverview(current => current === undefined || !isCurrent() ? current : {
           ...current,
+          activeSharedAccounts: current.activeSharedAccounts.map(({ capacity: _previous, ...account }) => account),
           contributions: current.contributions.map(({ capacity: _previous, ...account }) => account),
         })
       } finally {
@@ -2232,6 +2238,29 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <span className={styles.statusText}>{contributionLabel} · {t('teamShared')}</span>
             </span>
           </header>
+          <section className={`${styles.prototypeSection} ${styles.memberCapacity}`} role="region" aria-label={t('accountRemainingCapacity')}>
+            <h3 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h3>
+            <p className={styles.memberQuotaHint}>{t('memberQuotaBasis')}</p>
+            {account.capacity === undefined ? <p>{t('capacityQuotaUnavailable')}</p> : account.capacity.buckets.map(bucket => (
+              <div className={styles.memberQuotaBucket} key={bucket.id} data-available={bucket.remainingPercent !== undefined}>
+                <div className={styles.memberQuotaHeading}>
+                  <span>{bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}</span>
+                  <strong>{bucket.remainingPercent === undefined ? '—' : `${bucket.remainingPercent}%`}</strong>
+                </div>
+                {bucket.remainingPercent === undefined ? null : <div className={styles.quotaTrack}
+                  role="progressbar" aria-label={bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}
+                  aria-valuenow={bucket.remainingPercent} aria-valuemin={0} aria-valuemax={100}>
+                  <span style={{ width: `${bucket.remainingPercent}%` }} />
+                </div>}
+                <div className={styles.memberQuotaMeta}>
+                  <span data-ready={bucket.reason === 'ready'}>{t(CAPACITY_REASON_LOCALE_KEYS[bucket.reason])}</span>
+                  {bucket.resetAt === undefined ? null : <span>{t('capacityResetAt', { time: new Date(bucket.resetAt).toLocaleString() })}</span>}
+                  {bucket.sharedRequestsUsed === undefined ? null : <span>{t('capacityRequestsUsed', { count: bucket.sharedRequestsUsed, cap: sharing?.maxSharedRequestsPerWindow ?? '∞' })}</span>}
+                </div>
+              </div>
+            ))}
+            {account.capacity?.sharedInFlight === undefined ? null : <p className={styles.memberQuotaHint}>{t('capacityInFlight', { count: account.capacity.sharedInFlight })}</p>}
+          </section>
           <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
             <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
             <dl className={styles.compactSummaryList}>
@@ -2241,22 +2270,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <div><dt>{t('sharedConcurrencyLabel')}</dt><dd>{sharing?.maxSharedConcurrency ?? '—'}</dd></div>
               <div><dt>{t('allowedModelsLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.allowedModels.length === 0 ? t('allModels') : sharing.allowedModels.join(', ')}</dd></div>
             </dl>
-            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
           </section>
-          <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('accountRemainingCapacity')}>
-            <h4 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h4>
-            {account.capacity === undefined ? <p>{t('capacityQuotaUnavailable')}</p> : account.capacity.buckets.map(bucket => (
-              <div key={bucket.id}>
-                <dl className={styles.compactSummaryList}>
-                  <div><dt>{bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}</dt><dd>{bucket.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}</dd></div>
-                </dl>
-                <p>{t(CAPACITY_REASON_LOCALE_KEYS[bucket.reason])}</p>
-                {bucket.sharedRequestsUsed === undefined ? null : <p>{t('capacityRequestsUsed', { count: bucket.sharedRequestsUsed, cap: sharing?.maxSharedRequestsPerWindow ?? '∞' })}</p>}
-                {bucket.resetAt === undefined ? null : <p>{t('capacityResetAt', { time: new Date(bucket.resetAt).toLocaleString() })}</p>}
-              </div>
-            ))}
-            {account.capacity?.sharedInFlight === undefined ? null : <p>{t('capacityInFlight', { count: account.capacity.sharedInFlight })}</p>}
-          </section>
+          <div className={styles.memberSubscription}><SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} /></div>
           <section className={styles.teamActionPanel} aria-label={t('sharedAccountReadonlyTitle')}>
             <p>{t('sharedAccountReadonlyHint')}</p>
           </section>
