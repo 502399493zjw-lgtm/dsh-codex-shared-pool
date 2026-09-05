@@ -5,6 +5,10 @@ import styles from '../src/client/team/TeamSettings.module.css'
 
 const { managementApi } = vi.hoisted(() => ({
   managementApi: {
+    createTeam: vi.fn(),
+    recoverOwner: vi.fn(),
+    resumeTeamSetup: vi.fn(),
+    exportRecoveryCode: vi.fn(),
     connections: vi.fn(),
     switchConnection: vi.fn(),
     status: vi.fn(),
@@ -342,6 +346,10 @@ beforeEach(() => {
     teamName: '周末造物局', label: '周末协作', expiresAt: NOW + 86_400_000, teamStatus: 'active',
     joinHandle: `dsh_join_${'a'.repeat(43)}`,
   })
+  managementApi.createTeam.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
+  managementApi.recoverOwner.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
+  managementApi.resumeTeamSetup.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
+  managementApi.exportRecoveryCode.mockResolvedValue({ recoveryCode: `dsh_recovery_${"a".repeat(43)}` })
   managementApi.connections.mockResolvedValue([])
   managementApi.switchConnection.mockResolvedValue({})
   managementApi.join.mockResolvedValue({ team: overviewState.team, member: overviewState.currentMember })
@@ -427,7 +435,7 @@ async function openTeamSettings(view?: 'usage' | 'members' | 'invitations') {
 
 function openTeamManagement(settings: HTMLElement) {
   fireEvent.click(within(settings).getByRole('button', { name: /团队管理/u }))
-  return within(settings).getByRole('menu', { name: zh.teamManagement })
+  return screen.getByRole('menu', { name: zh.teamManagement })
 }
 
 async function openDissolutionDialog() {
@@ -3943,22 +3951,23 @@ describe('Team subscription-pool workspace', () => {
 
 it('lets a connected owner preview another invitation without disconnecting the current Team', async () => {
   render(<TeamSettings t={translate} embedded />)
-  fireEvent.click(await screen.findByRole('button', { name: '加入其他团队' }))
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '加入团队' }))
   fireEvent.change(screen.getByLabelText('邀请 Token'), { target: { value: `dsh_invite_${'a'.repeat(32)}` } })
   fireEvent.click(screen.getByRole('button', { name: '查看邀请' }))
   await screen.findByText('邀请已验证')
   expect(managementApi.disconnect).not.toHaveBeenCalled()
   expect(managementApi.leaveTeam).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: '返回当前团队' }))
-  expect(await screen.findByRole('button', { name: '加入其他团队' })).toBeDefined()
+  expect(await screen.findByRole('button', { name: '周末造物局' })).toBeDefined()
 })
 
 it('switches to a saved Team using the displayed context and refreshes its identity', async () => {
   managementApi.connections.mockResolvedValue([{ id: 'saved-b', teamId: 'team-2', teamName: '第二团队', currentMemberId: 'member-b', memberName: 'Edison' }])
   managementApi.switchConnection.mockResolvedValue({})
   render(<TeamSettings t={translate} embedded />)
-  fireEvent.click(await screen.findByRole('button', { name: '切换团队' }))
-  fireEvent.click(await screen.findByRole('button', { name: '第二团队 · Edison' }))
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: '第二团队 · Edison' }))
   await waitFor(() => expect(managementApi.switchConnection).toHaveBeenCalledWith('saved-b', {
     serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
   }))
@@ -3971,7 +3980,8 @@ it('shows recovery immediately after an uncertain join while keeping the origina
     throw new Error('network interrupted')
   })
   render(<TeamSettings t={translate} embedded />)
-  fireEvent.click(await screen.findByRole('button', { name: zh.joinOtherTeam }))
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '加入团队' }))
   fireEvent.change(screen.getByLabelText(zh.inviteToken), { target: { value: 'dsh_invite_secret-1234567890' } })
   fireEvent.click(screen.getByRole('button', { name: zh.previewInvitation }))
   await screen.findByText(zh.invitationVerified)
@@ -3982,4 +3992,126 @@ it('shows recovery immediately after an uncertain join while keeping the origina
     serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
   })
   expect(managementApi.disconnect).not.toHaveBeenCalled()
+})
+
+
+it('places the selected Team and bottom join/create actions in the Team-name dropdown in both views', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  expect(screen.queryByRole('button', { name: zh.switchTeam })).toBeNull()
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  let menu = screen.getByRole('menu', { name: zh.switchTeam })
+  expect(within(menu).getByRole('menuitemradio', { name: /周末造物局/u }).getAttribute('aria-checked')).toBe('true')
+  expect(within(menu).getAllByRole('menuitem').slice(-2).map(item => item.textContent)).toEqual(['加入团队', '创建团队'])
+  fireEvent.keyDown(menu, { key: 'Escape' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  const settings = await openTeamSettings()
+  fireEvent.click(within(settings).getByRole('button', { name: '周末造物局' }))
+  menu = screen.getByRole('menu', { name: zh.switchTeam })
+  expect(settings.contains(menu)).toBe(false)
+  expect(within(menu).getByRole('menuitem', { name: '创建团队' })).toBeDefined()
+})
+
+it('creates from the name dropdown and only reveals the recovery code after explicit export', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '创建团队' }))
+  fireEvent.change(screen.getByLabelText('团队名称'), { target: { value: ' 新团队 ' } })
+  fireEvent.change(screen.getByLabelText('你的昵称'), { target: { value: ' Edison ' } })
+  fireEvent.click(screen.getByRole('button', { name: '创建并切换' }))
+  await waitFor(() => expect(managementApi.createTeam).toHaveBeenCalledWith('新团队', 'Edison', {
+    serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
+  }))
+  const dialog = await screen.findByRole('dialog', { name: '保存团队恢复码' })
+  expect(managementApi.exportRecoveryCode).not.toHaveBeenCalled()
+  fireEvent.click(within(dialog).getByRole('button', { name: '显示恢复码' }))
+  expect(await within(dialog).findByDisplayValue(`dsh_recovery_${'a'.repeat(43)}`)).toBeDefined()
+  expect(managementApi.exportRecoveryCode).toHaveBeenCalledWith({ serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me' })
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+})
+
+it('offers pending setup recovery immediately after an uncertain create', async () => {
+  managementApi.createTeam.mockImplementationOnce(async () => {
+    managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, pendingTeamSetup: 'create', serverOrigin: 'https://team.example.test' })
+    throw new Error('network interrupted')
+  })
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '创建团队' }))
+  fireEvent.change(screen.getByLabelText('团队名称'), { target: { value: '新团队' } })
+  fireEvent.change(screen.getByLabelText('你的昵称'), { target: { value: 'Edison' } })
+  fireEvent.click(screen.getByRole('button', { name: '创建并切换' }))
+  expect(await screen.findByRole('button', { name: '继续完成' })).toBeDefined()
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+})
+
+it('allows an unconnected user to restore ownership with a recovery code', async () => {
+  managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: false, keyWritable: true, serverOrigin: 'https://team.example.test' })
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '使用恢复码' }))
+  fireEvent.change(screen.getByLabelText('团队恢复码'), { target: { value: `dsh_recovery_${'b'.repeat(43)}` } })
+  fireEvent.click(screen.getByRole('button', { name: '恢复并切换' }))
+  await waitFor(() => expect(managementApi.recoverOwner).toHaveBeenCalledWith(`dsh_recovery_${'b'.repeat(43)}`, null))
+})
+
+it('portals management menus outside the clipped settings workspace', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  const settings = await openTeamSettings()
+  const menu = openTeamManagement(settings)
+  expect(settings.contains(menu)).toBe(false)
+  expect(menu.style.position).toBe('fixed')
+  fireEvent.keyDown(menu, { key: 'Escape' })
+  expect(screen.queryByRole('menu', { name: zh.teamManagement })).toBeNull()
+})
+
+it('keeps the original Team usable when an older server rejects self-service creation', async () => {
+  managementApi.createTeam.mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }))
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: '创建团队' }))
+  fireEvent.change(screen.getByLabelText('团队名称'), { target: { value: '新团队' } })
+  fireEvent.change(screen.getByLabelText('你的昵称'), { target: { value: 'Edison' } })
+  fireEvent.click(screen.getByRole('button', { name: '创建并切换' }))
+  expect(await screen.findByText(zh.teamSetupUnavailable)).toBeDefined()
+  fireEvent.click(screen.getByRole('button', { name: zh.returnToTeam }))
+  expect(await screen.findByRole('button', { name: '周末造物局' })).toBeDefined()
+  expect(managementApi.disconnect).not.toHaveBeenCalled()
+  expect(managementApi.exportRecoveryCode).not.toHaveBeenCalled()
+})
+
+it('resumes an interrupted creation without issuing a second create request', async () => {
+  managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, pendingTeamSetup: 'create', serverOrigin: 'https://team.example.test' })
+  managementApi.resumeTeamSetup.mockImplementationOnce(async () => {
+    managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: true, keyWritable: true, serverOrigin: 'https://team.example.test' })
+    return { team: overviewState.team, member: overviewState.currentMember }
+  })
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: zh.resumeTeamSetup }))
+  expect(await screen.findByRole('dialog', { name: zh.saveRecoveryCode })).toBeDefined()
+  expect(managementApi.resumeTeamSetup).toHaveBeenCalledOnce()
+  expect(managementApi.createTeam).not.toHaveBeenCalled()
+  expect(managementApi.exportRecoveryCode).not.toHaveBeenCalled()
+})
+
+it('makes owner recovery available in the connected Team dropdown', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: zh.recoverOwner }))
+  const codeInput = screen.getByLabelText(zh.recoveryCode)
+  expect(codeInput.getAttribute('type')).toBe('password')
+  fireEvent.change(codeInput, { target: { value: `dsh_recovery_${'c'.repeat(43)}` } })
+  fireEvent.click(screen.getByRole('button', { name: zh.recoverAndSwitch }))
+  await waitFor(() => expect(managementApi.recoverOwner).toHaveBeenCalledWith(`dsh_recovery_${'c'.repeat(43)}`, {
+    serverOrigin: 'https://team.example.test', teamId: 'team-1', currentMemberId: 'member-me',
+  }))
+})
+
+it('shows an honest unavailable message when an existing owner has no local recovery code', async () => {
+  managementApi.exportRecoveryCode.mockRejectedValueOnce(new Error('No stored recovery code'))
+  render(<TeamSettings t={translate} embedded />)
+  const settings = await openTeamSettings()
+  fireEvent.click(within(openTeamManagement(settings)).getByRole('menuitem', { name: zh.saveRecoveryCode }))
+  const dialog = screen.getByRole('dialog', { name: zh.saveRecoveryCode })
+  expect(managementApi.exportRecoveryCode).not.toHaveBeenCalled()
+  fireEvent.click(within(dialog).getByRole('button', { name: zh.showRecoveryCode }))
+  expect(await within(dialog).findByText(zh.recoveryCodeUnavailable)).toBeDefined()
 })

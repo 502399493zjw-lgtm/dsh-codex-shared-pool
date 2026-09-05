@@ -251,3 +251,9 @@ describe('invitation visual layout', () => {
     expect(css).toMatch(/\.workspaceBody > \.workspaceSection:first-child\s*\{[^}]*border-top:\s*0;/s)
   })
 })
+
+it('keeps portaled menus scrollable without narrow-screen left anchoring', () => {
+  expect(css).toMatch(/\.floatingMenu\s*\{[^}]*overflow-y:\s*auto;[^}]*overscroll-behavior:\s*contain;/s)
+  expect(css).not.toMatch(/\.teamMenuPopover\s*\{[^}]*left:\s*0;/s)
+  expect(css).toMatch(/\.teamConnectionsFooter\s*\{[^}]*grid-template-columns:\s*1fr 1fr;/s)
+})

@@ -315,11 +315,7 @@
 }
 
 .teamMenuPopover {
-  position: absolute;
-  z-index: 8;
-  top: calc(100% + 7px);
-  right: 0;
-  width: min(276px, calc(100vw - 32px));
+  position: fixed;
   border: 1px solid var(--team-line);
   border-radius: 10px;
   padding: 6px;
@@ -2759,12 +2755,6 @@
     align-self: flex-start;
   }
 
-  .teamMenuPopover {
-    right: auto;
-    left: 0;
-    width: min(276px, calc(100vw - 36px));
-  }
-
   .inviteActions {
     max-width: none;
     align-items: flex-start;
@@ -3102,4 +3092,132 @@
 .inviteDialog :focus-visible {
   outline: 2px solid var(--team-blue);
   outline-offset: 2px;
+}
+
+/* Menus live above the Host settings scroller and remain bounded by the viewport. */
+.floatingMenu {
+  box-sizing: border-box;
+  z-index: 1000;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 10px;
+  padding: 6px;
+  background: var(--team-layer);
+  color: var(--team-ink);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .2);
+  outline: none;
+}
+
+.teamSelector {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.teamSelectorTrigger {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 5px;
+  margin: -4px -5px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.teamSelectorTrigger > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.teamSelectorTrigger:hover,
+.teamSelectorTrigger:focus-visible {
+  background: var(--team-selected-layer);
+  outline: 2px solid var(--team-blue-strong);
+  outline-offset: 2px;
+}
+
+.teamSelectorTrigger:disabled {
+  cursor: default;
+  opacity: .65;
+}
+
+.teamSelectorChevron {
+  flex: 0 0 auto;
+  color: var(--team-muted);
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.teamConnectionsMenu button {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 10px;
+  background: transparent;
+  color: var(--team-ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.teamConnectionsMenu button:hover,
+.teamConnectionsMenu button:focus-visible,
+.teamConnectionsMenu button[aria-checked='true'] {
+  background: var(--team-selected-layer);
+}
+
+.teamConnectionsMenu button:disabled:not([aria-checked='true']) {
+  opacity: .45;
+  cursor: default;
+}
+
+.savedTeamIdentity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.savedTeamIdentity small {
+  color: var(--team-muted);
+  font-size: 12px;
+}
+
+.teamConnectionsFooter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  border-top: 1px solid var(--team-line);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+
+.teamConnectionsFooter button {
+  justify-content: center;
+}
+
+.teamSetup,
+.recoveryCodePanel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.teamSetup {
+  width: min(100%, 520px);
 }
