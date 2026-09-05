@@ -1,3 +1,4 @@
+import { zstdDecompressSync } from 'node:zlib'
 import {
   createAssistantMessageEventStream,
 } from '@earendil-works/pi-ai'
@@ -79,7 +80,7 @@ describe('Team client Codex adapter', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe(responsesUrl)
   })
 
-  it('streams a Harness request with the Team credential and never allocates a local OAuth profile', async () => {
+  it.each(['gpt-5.4', 'gpt-6-astra'])('streams %s with the Team credential and never allocates a local OAuth profile', async (model) => {
     const baseUrl = `https://pool.example.test${TEAM_PATH_PREFIX}`
     const fetch = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'test stop' } }), {
       status: 401,
@@ -100,7 +101,7 @@ describe('Team client Codex adapter', () => {
       const chunks = []
       for await (const chunk of adapter.stream({
         provider: 'openai-codex',
-        model: 'gpt-5.4',
+        model,
         messages: [createUserMessage({ content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })],
         sessionId: 'session-1' as never,
       })) chunks.push(chunk)
@@ -118,5 +119,7 @@ describe('Team client Codex adapter', () => {
     const headers = new Headers(fetch.mock.calls[0]?.[1]?.headers)
     expect(headers.get('authorization')).toMatch(/^Bearer\s+[^\s]+\.[^\s]+\.[^\s]+$/u)
     expect(headers.get('content-encoding')).toBe('zstd')
+    const body = JSON.parse(zstdDecompressSync(fetch.mock.calls[0]![1]!.body as Uint8Array).toString())
+    expect(body.model).toBe(model)
   })
 })

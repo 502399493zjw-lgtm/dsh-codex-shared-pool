@@ -200,3 +200,5 @@ pnpm pack
 ## 许可证
 
 [MIT](LICENSE)
+
+模型目录兼容：插件为固定版本 DSH 的 Codex 目录补充 `gpt-6-astra`（GPT-6-Astra），本地账号和 Team 共享模式均可选择，并支持 Fast。推理档位为 `low`、`medium`（默认）、`high`、`xhigh`、`max`；rc.8 不提供 `ultra`。目录可选不代表每个共享账号都有该模型的上游权限。Astra 尚未加入 Team 的已验证价格表，费用沿用未知价格处理，不套用其他模型的单价。
