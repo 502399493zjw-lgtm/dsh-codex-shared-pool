@@ -593,6 +593,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [localProfilesQuotaLoading, setLocalProfilesQuotaLoading] = useState(false)
   const [localProfilesUnavailable, setLocalProfilesUnavailable] = useState(false)
   const [selectedAccountId, setSelectedAccountId] = useState<string>()
+  const [capacityRefreshing, setCapacityRefreshing] = useState(false)
+  const refreshCapacityRef = useRef<(() => Promise<void>) | undefined>(undefined)
   const overviewRequestId = useRef(0)
   const usageRequestId = useRef(0)
   const localProfileDirectoryRequestId = useRef(0)
@@ -1273,14 +1275,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [oauth, overview, projectedBrowserAuthorization, status, t])
 
   useEffect(() => {
+    setCapacityRefreshing(false)
     if (overview === undefined) return
     let disposed = false
     let pending = false
     // Capacity belongs to the overview, but its background read must not reset
     // authorization state or dismiss an open invitation dialog.
     const poll = async () => {
-      if (pending) return
+      if (disposed || pending) return
       pending = true
+      setCapacityRefreshing(true)
       const requestId = overviewRequestId.current
       const isCurrent = () => !disposed && requestId === overviewRequestId.current
       try {
@@ -1318,13 +1322,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         })
       } finally {
         pending = false
+        if (!disposed) setCapacityRefreshing(false)
       }
     }
+    refreshCapacityRef.current = poll
     const timer = globalThis.setInterval(() => {
       void poll()
       void refreshUsage()
     }, USAGE_REFRESH_MS)
-    return () => { disposed = true; globalThis.clearInterval(timer) }
+    return () => {
+      disposed = true
+      refreshCapacityRef.current = undefined
+      globalThis.clearInterval(timer)
+    }
   }, [overview, status, refresh, refreshUsage])
 
   useEffect(() => {
@@ -2232,7 +2242,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const subscription = capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
       return <>
           <section className={`${styles.prototypeSection} ${styles.accountCapacity}`} role="region" aria-label={t('accountRemainingCapacity')}>
-            <h3 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h3>
+            <div className={styles.accountQuotaHeading}>
+              <h3 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h3>
+              <button type="button" className={styles.inlineLimitButton}
+                aria-label={t('refreshQuota')} title={t(capacityRefreshing ? 'refreshingQuota' : 'refreshQuota')}
+                aria-busy={capacityRefreshing} disabled={capacityRefreshing || loading}
+                onClick={() => { void refreshCapacityRef.current?.() }}>
+                {capacityRefreshing
+                  ? <span className={styles.actionSpinner} aria-hidden="true" />
+                  : <IconRefreshOutline16 aria-hidden="true" />}
+              </button>
+            </div>
             <p className={styles.accountQuotaHint}>{t('memberQuotaBasis')}</p>
             {capacity === undefined ? <p>{t('capacityQuotaUnavailable')}</p> : capacity.buckets.map(bucket => (
               <div className={styles.accountQuotaBucket} key={bucket.id} data-available={bucket.remainingPercent !== undefined}>

@@ -1704,6 +1704,40 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
+  it('manually refreshes account quota and prevents duplicate requests while pending', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const account = heading.closest('article')!
+    const button = within(account).getByRole('button', { name: '刷新额度' })
+    let resolveOverview!: (value: typeof overviewState) => void
+    managementApi.overview.mockImplementationOnce(() => new Promise(resolve => { resolveOverview = resolve }))
+    const calls = managementApi.overview.mock.calls.length
+    fireEvent.click(button)
+    expect(button).toHaveProperty('disabled', true)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    fireEvent.click(button)
+    expect(managementApi.overview).toHaveBeenCalledTimes(calls + 1)
+    await act(async () => resolveOverview({ ...overviewState, contributions: [{ ...mine,
+      capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 25 }] },
+    }] }))
+    expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('25')
+    expect(button).toHaveProperty('disabled', false)
+    expect(button.getAttribute('aria-busy')).toBe('false')
+  })
+
+  it('allows retrying a manual quota refresh after a transient failure', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const account = heading.closest('article')!
+    const button = within(account).getByRole('button', { name: '刷新额度' })
+    managementApi.overview.mockRejectedValueOnce(new Error('offline'))
+    fireEvent.click(button)
+    await waitFor(() => expect(within(account).getByText(zh.capacityQuotaUnavailable)).toBeDefined())
+    expect(button).toHaveProperty('disabled', false)
+    fireEvent.click(button)
+    await waitFor(() => expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74'))
+  })
+
   it('refreshes provider capacity while the account detail remains open', async () => {
     overviewState = { ...overviewState, contributions: [{ ...mine,
       capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 98 }] },
