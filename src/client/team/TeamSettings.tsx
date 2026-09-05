@@ -1270,10 +1270,56 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
   useEffect(() => {
     if (overview === undefined) return
-    // Capacity belongs to the overview; refreshing only usage leaves its quota frozen.
-    const timer = globalThis.setInterval(() => { void refresh(false) }, USAGE_REFRESH_MS)
-    return () => { globalThis.clearInterval(timer) }
-  }, [overview, refresh])
+    let disposed = false
+    let pending = false
+    // Capacity belongs to the overview, but its background read must not reset
+    // authorization state or dismiss an open invitation dialog.
+    const poll = async () => {
+      if (pending) return
+      pending = true
+      const requestId = overviewRequestId.current
+      const isCurrent = () => !disposed && requestId === overviewRequestId.current
+      try {
+        const next = await api.overview()
+        if (!isCurrent()) return
+        if (!isSameTeamExpectedContext(
+          createTeamExpectedContext(status, overview), createTeamExpectedContext(status, next),
+        ) || createOwnerAuthorizationContext(status, overview) !== createOwnerAuthorizationContext(status, next)
+          || createMemberAuthorizationContext(status, overview) !== createMemberAuthorizationContext(status, next)) {
+          void refresh(false)
+          return
+        }
+        const accounts = new Map(next.contributions.map(account => [account.id, account]))
+        setOverview(current => current === undefined || !isCurrent() ? current : {
+          ...current,
+          contributions: current.contributions.map(account => {
+            const { capacity: _previous, ...rest } = account
+            const capacity = accounts.get(account.id)?.capacity
+            return capacity === undefined ? rest : { ...rest, capacity }
+          }),
+        })
+      } catch (cause: unknown) {
+        if (!isCurrent()) return
+        if ([401, 403, 404, 410].includes(errorStatus(cause) ?? 0)) {
+          void refresh(false)
+          return
+        }
+        // Keep polling after a transient outage, without presenting old quota
+        // as current or tearing down the rest of the account workspace.
+        setOverview(current => current === undefined || !isCurrent() ? current : {
+          ...current,
+          contributions: current.contributions.map(({ capacity: _previous, ...account }) => account),
+        })
+      } finally {
+        pending = false
+      }
+    }
+    const timer = globalThis.setInterval(() => {
+      void poll()
+      void refreshUsage()
+    }, USAGE_REFRESH_MS)
+    return () => { disposed = true; globalThis.clearInterval(timer) }
+  }, [overview, status, refresh, refreshUsage])
 
   useEffect(() => {
     if (overview?.viewerRole !== 'owner') return

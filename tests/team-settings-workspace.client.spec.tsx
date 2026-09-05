@@ -1641,6 +1641,36 @@ describe('Team subscription-pool workspace', () => {
     expect(remaining()).toBe('25%')
   })
 
+  it('retries capacity polling after a transient overview failure', async () => {
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    await screen.findByRole('heading', { name: mine.label })
+    const poll = () => intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000).at(-1)![0] as () => void
+    managementApi.overview.mockRejectedValueOnce(new Error('temporary failure'))
+    await act(async () => { await poll()() })
+    expect(screen.getByRole('heading', { name: mine.label })).toBeDefined()
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent)
+      .toBe(zh.capacityQuotaUnavailable)
+    await act(async () => { await poll()() })
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+  })
+
+  it('preserves an open invite reveal during a background capacity read', async () => {
+    overviewState = { ...overviewState, invites: [pendingInvite('invite-1', '新邀请', true)] }
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.revealInvite }))
+    await screen.findByText(REVEALED_INVITE_TOKEN)
+    let resolveOverview!: (value: typeof overviewState) => void
+    managementApi.overview.mockImplementationOnce(() => new Promise(resolve => { resolveOverview = resolve }))
+    const poll = intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000).at(-1)![0] as () => void
+    await act(async () => { void poll() })
+    expect(screen.getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
+    await act(async () => { resolveOverview(overviewState) })
+    expect(screen.getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
+  })
+
   it('places subscription details below remaining capacity in the weekly summary', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
