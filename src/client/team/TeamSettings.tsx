@@ -2280,6 +2280,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <div><dt>{t('sharedConcurrencyLabel')}</dt><dd>{sharing?.maxSharedConcurrency ?? '—'}</dd></div>
             <div><dt>{t('allowedModelsLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.allowedModels.length === 0 ? t('allModels') : sharing.allowedModels.join(', ')}</dd></div>
           </dl>
+          {capacity?.buckets.map(item => <div key={item.id} className={styles.capacityDetail}>
+            <strong>{item.id === 'codex' ? 'Codex' : 'Codex Spark'} · {item.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${item.remainingPercent}%`}</strong>
+            <span>{t(CAPACITY_REASON_LOCALE_KEYS[item.reason])}</span>
+            {item.resetAt === undefined ? null : <span>{t('capacityResetAt', { time: new Date(item.resetAt).toLocaleString() })}</span>}
+            {item.sharedRequestsUsed === undefined ? null : <span>{t('capacityRequestsUsed', { count: item.sharedRequestsUsed, cap: sharing?.maxSharedRequestsPerWindow ?? '∞' })}</span>}
+          </div>)}
+          {capacity?.sharedInFlight === undefined ? null : <p>{t('capacityInFlight', { count: capacity.sharedInFlight })}</p>}
         </details>
       </section>
     }

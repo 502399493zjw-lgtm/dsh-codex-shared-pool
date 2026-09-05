@@ -3300,3 +3300,5 @@
 .sharingDetails { margin-top: 16px; color: var(--team-muted); font-size: 12px; }
 .sharingDetails > summary { cursor: pointer; }
 .sharingDetails[open] > summary { margin-bottom: 12px; }
+
+.capacityDetail { display: grid; gap: 6px; margin-top: 12px; }

@@ -1598,6 +1598,23 @@ describe('Team subscription-pool workspace', () => {
     }
   })
 
+  it('keeps secondary quota and admission diagnostics in the compact disclosure', async () => {
+    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
+      capacity: { sharedInFlight: 2, buckets: [
+        { id: 'codex', reason: 'request_cap_reached', remainingPercent: 74, sharedRequestsUsed: 100 },
+        { id: 'codex-spark', reason: 'ready', remainingPercent: 31 },
+      ] },
+    }] }
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
+    const account = within(panel).getByRole('heading', { name: friend.label }).closest('article')!
+    fireEvent.click(within(account).getByText(zh.editProtection))
+    expect(within(account).getByText(/Codex Spark.*31%/)).toBeDefined()
+    expect(within(account).getByText(zh.capacityRequestCapReached)).toBeDefined()
+    expect(within(account).getByText(translate('capacityInFlight', { count: 2 }))).toBeDefined()
+  })
+
   it('shows teammate quota and limits as read-only details', async () => {
     overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
       sharing: { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
