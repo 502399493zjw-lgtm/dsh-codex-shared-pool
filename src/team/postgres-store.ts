@@ -949,6 +949,20 @@ export const POSTGRES_TEAM_MIGRATIONS: readonly PostgresTeamMigration[] = [{
     ALTER TABLE team_usage_events ADD COLUMN IF NOT EXISTS last_heartbeat_at bigint;
     ALTER TABLE team_usage_events ALTER COLUMN last_heartbeat_at DROP NOT NULL;
   `,
+}, {
+  version: 25,
+  // A reservation fallback is explicitly an estimate, not measured Token usage.
+  // Keep requiring Token metadata for all actual pricing catalogs.
+  sql: `
+    ALTER TABLE team_usage_events DROP CONSTRAINT team_usage_events_estimated_cost_metadata_check;
+    ALTER TABLE team_usage_events ADD CONSTRAINT team_usage_events_estimated_cost_metadata_check
+      CHECK (
+        estimated_cost_usd_micros IS NULL
+        OR (pricing_catalog_version IS NOT NULL AND (
+          total_tokens IS NOT NULL OR pricing_catalog_version = 'admission-reservation-v1'
+        ))
+      );
+  `,
 }]
 
 interface AnonymousCreationRow extends QueryResultRow {

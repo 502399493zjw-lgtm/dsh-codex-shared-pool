@@ -1,5 +1,6 @@
 /** OpenAI Codex adapter assembled from public dsh-llm-pi-ai extension points. */
 
+import { TEAM_LIMIT_REASONS_HEADER, teamLimitMessage } from './team/gateway-errors.ts'
 import { supplementCodexModels } from './codex-model-catalog.ts'
 import { createModels } from '@earendil-works/pi-ai'
 import type { MutableModels, Provider } from '@earendil-works/pi-ai'
@@ -99,6 +100,17 @@ export function createTeamClientProvider(provider: Provider, baseUrl: string): P
     ...provider,
     baseUrl: resolvedBaseUrl,
     getModels: () => provider.getModels().map(model => ({ ...model, baseUrl: resolvedBaseUrl })),
+    streamSimple: (model, context, options) => provider.streamSimple(model, context, {
+      ...options,
+      onResponse: async (response, responseModel) => {
+        await options?.onResponse?.(response, responseModel)
+        // pi-ai maps every HTTP 429 to ChatGPT quota exhaustion. Team admission
+        // also uses 429; retain the HTTP status and give it a Team-specific error.
+        if (response.status === 429) {
+          throw new Error(teamLimitMessage(response.headers[TEAM_LIMIT_REASONS_HEADER]))
+        }
+      },
+    }),
   }
 }
 

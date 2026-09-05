@@ -2181,7 +2181,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <header className={styles.detailHeading}>
             <h2 className={styles.detailTitle}>{account.label}</h2>
             <span className={styles.connectionStatus}>
-              <StateDot state="ongoing" />
+              <StateDot state="done" />
               <span className={styles.statusText}>{contributionLabel} · {t('teamShared')}</span>
             </span>
           </header>
@@ -2384,7 +2384,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           onClick={() => { setSelectedAccountId(sharedDirectorySelectionKey(account.id)) }}
           key={account.id}
         >
-          <StateDot state="ongoing" />
+          <StateDot state="done" />
           <span className={styles.accountNavCopy}>
             <span className={styles.accountNavLabel}>{accountAliases.get(sharedDirectorySelectionKey(account.id))}</span>
             <span className={styles.accountNavOwner}>{account.label}</span>

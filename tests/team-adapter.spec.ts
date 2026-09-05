@@ -25,6 +25,29 @@ describe('Team client Codex adapter', () => {
     expect(provider.getModels().every(model => model.baseUrl === base)).toBe(true)
   })
 
+  it.each([
+    [undefined, 'Team 请求受限'],
+    ['shared_concurrency_reached', '共享并发'],
+    ['weekly_shared_cost_reached', '每周共享预算'],
+    ['untrusted-provider-secret', 'Team 请求受限'],
+  ])('keeps Team 429 diagnostics distinct from ChatGPT quota (%s)', async (reason, expected) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'no Team capacity is available' }), {
+      status: 429,
+      headers: reason ? { 'x-dsh-team-limit-reasons': reason } : {},
+    })))
+    const provider = createTeamClientProvider(openaiCodexProvider(), `https://pool.example.test${TEAM_PATH_PREFIX}`)
+    const onResponse = vi.fn()
+    const stream = provider.streamSimple(provider.getModels()[0]!, { messages: [] }, {
+      apiKey: createTeamCodexBearer('dsh_team_member-secret-1234567890'),
+      transport: 'sse', maxRetries: 0, onResponse,
+    })
+    const result = await stream.result()
+    expect(result.stopReason).toBe('error')
+    expect(result.errorMessage).toContain(expected)
+    expect(result.errorMessage).not.toMatch(/ChatGPT usage limit|untrusted-provider-secret/i)
+    expect(onResponse).toHaveBeenCalledOnce()
+  })
+
   it('forces SSE when Team mode is active even if live preferences enable WebSocket reuse', () => {
     const source = openaiCodexProvider()
     const streamSimple = vi.fn(() => {
