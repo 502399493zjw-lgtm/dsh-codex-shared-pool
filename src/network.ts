@@ -1,7 +1,9 @@
+import { createProxyBypassMatcher } from './proxy-bypass.ts'
 import { readMacOSSystemProxy } from './system-proxy.ts'
 /** Environment-driven outbound HTTP(S) transport for the DSH process. */
 
 import {
+  Agent,
   EnvHttpProxyAgent,
   getGlobalDispatcher,
   setGlobalDispatcher,
@@ -96,11 +98,17 @@ export class OutboundNetwork {
     if (!this.status().enabled) return async () => {}
 
     const previous = getGlobalDispatcher()
-    const dispatcher = new EnvHttpProxyAgent({
+    const proxyDispatcher = new EnvHttpProxyAgent({
       // Empty values prevent this captured configuration from rereading process.env.
       httpProxy: this.environment.httpProxy ?? '',
       httpsProxy: this.environment.httpsProxy ?? '',
       noProxy: this.environment.noProxy ?? '',
+    })
+    const direct = new Agent()
+    const bypass = createProxyBypassMatcher(this.environment.noProxy ?? '')
+    const dispatcher = proxyDispatcher.compose(dispatch => (options, handler) => {
+      const hostname = new URL(String(options.origin)).hostname
+      return bypass(hostname) ? direct.dispatch(options, handler) : dispatch(options, handler)
     })
     setGlobalDispatcher(dispatcher)
 
@@ -109,7 +117,7 @@ export class OutboundNetwork {
       if (disposed) return
       disposed = true
       if (getGlobalDispatcher() === dispatcher) setGlobalDispatcher(previous)
-      await dispatcher.close()
+      await Promise.all([proxyDispatcher.close(), direct.close()])
       this.cleanup = undefined
     }
     return this.cleanup

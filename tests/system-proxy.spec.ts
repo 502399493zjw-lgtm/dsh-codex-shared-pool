@@ -17,7 +17,7 @@ describe('macOS system proxy', () => {
 }`)
     expect(readMacOSSystemProxy(read)).toEqual({
       httpProxy: 'http://127.0.0.1:8080', httpsProxy: 'http://proxy.test:443',
-      noProxy: 'localhost,127.0.0.1,::1,*.internal.test,10.0.0.0/8',
+      noProxy: 'localhost,127.0.0.1,[::1],*.internal.test,10.0.0.0/8',
     })
     expect(read).toHaveBeenCalledOnce()
   })
@@ -28,5 +28,29 @@ describe('macOS system proxy', () => {
     expect(readMacOSSystemProxy(() => { throw new Error('scutil unavailable') })).toBeUndefined()
     expect(readMacOSSystemProxy(() => 'HTTPEnable : 1\nHTTPProxy : user:secret@proxy.test\nHTTPPort : 8080')).toBeUndefined()
     expect(readMacOSSystemProxy(() => 'HTTPEnable : 1\nHTTPProxy : proxy.test\nHTTPPort : 65536')).toBeUndefined()
+  })
+})
+
+describe('system proxy scope', () => {
+  it('ignores scoped proxies and scoped exceptions', () => {
+    const value = readMacOSSystemProxy(() => `<dictionary> {
+ HTTPEnable : 1
+ HTTPProxy : global.test
+ HTTPPort : 8080
+ ExcludeSimpleHostnames : 1
+ __SCOPED__ : <dictionary> {
+  en0 : <dictionary> {
+   HTTPEnable : 1
+   HTTPProxy : scoped.test
+   HTTPPort : 9999
+   ExceptionsList : <array> {
+    0 : *.scoped.test
+   }
+  }
+ }
+}`)
+    expect(value?.httpProxy).toBe('http://global.test:8080')
+    expect(value?.noProxy).toContain('<local>')
+    expect(value?.noProxy).not.toContain('scoped')
   })
 })

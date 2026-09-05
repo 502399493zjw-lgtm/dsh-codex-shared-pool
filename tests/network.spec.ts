@@ -90,7 +90,28 @@ describe('OutboundNetwork', () => {
     expect(getGlobalDispatcher()).toBe(later)
   })
 
-  it('lets built-in fetch bypass an unreachable proxy for a NO_PROXY host', async () => {
+  it('bypasses an unreachable discovered proxy for IPv6 loopback', async () => {
+    const server = createServer((_request, response) => { response.end('direct-ipv6') })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '::1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const { readMacOSSystemProxy } = await import('../src/system-proxy.ts')
+    const proxy = readMacOSSystemProxy(() => 'HTTPEnable : 1\nHTTPProxy : 127.0.0.1\nHTTPPort : 1')!
+    const dispose = new OutboundNetwork({ HTTP_PROXY: proxy.httpProxy, NO_PROXY: proxy.noProxy }).install()
+    try {
+      const response = await fetch(`http://[::1]:${address.port}`)
+      expect(await response.text()).toBe('direct-ipv6')
+    } finally {
+      await dispose()
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => { if (error === undefined) resolve(); else reject(error) })
+      })
+    }
+  })
+
+  it.each(['127.0.0.1', '127.0.0.0/8'])('lets built-in fetch bypass an unreachable proxy for %s', async (noProxy) => {
     const server = createServer((_request, response) => { response.end('direct') })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -99,7 +120,7 @@ describe('OutboundNetwork', () => {
     const address = server.address() as AddressInfo
     const dispose = new OutboundNetwork({
       HTTP_PROXY: 'http://127.0.0.1:1',
-      NO_PROXY: '127.0.0.1',
+      NO_PROXY: noProxy,
     }).install()
 
     try {

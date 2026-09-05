@@ -12,9 +12,23 @@ export function readMacOSSystemProxy(
   try {
     const output = read()
     const values = new Map<string, string>()
+    const hosts: string[] = []
+    const rootDepth = output.trimStart().startsWith('<dictionary>') ? 1 : 0
+    let depth = 0
+    let inExceptions = false
     for (const line of output.split('\n')) {
       const match = /^\s*(\w+)\s*:\s*(.*?)\s*$/.exec(line)
-      if (match !== null) values.set(match[1]!, match[2]!)
+      if (depth === rootDepth && match !== null) {
+        if (match[1] === 'ExceptionsList' && match[2] === '<array> {') inExceptions = true
+        else if (!match[2]!.endsWith('{')) values.set(match[1]!, match[2]!)
+      } else if (depth === rootDepth + 1 && inExceptions && match !== null) {
+        if (/^[\w.*:/<>\[\]-]+$/.test(match[2]!)) hosts.push(match[2]!)
+      }
+      if (line.trimEnd().endsWith('{')) depth += 1
+      if (line.trim() === '}') {
+        depth -= 1
+        if (depth === rootDepth) inExceptions = false
+      }
     }
     const proxy = (prefix: string): string | undefined => {
       if (values.get(`${prefix}Enable`) !== '1') return undefined
@@ -28,12 +42,8 @@ export function readMacOSSystemProxy(
     const httpProxy = proxy('HTTP')
     const httpsProxy = proxy('HTTPS')
     if (httpProxy === undefined && httpsProxy === undefined) return undefined
-    const exceptions = /ExceptionsList\s*:\s*<array>\s*\{([^}]*)\}/.exec(output)?.[1] ?? ''
-    const hosts = exceptions.split('\n').flatMap(line => {
-      const host = /^\s*\d+\s*:\s*([\w.*:/-]+)\s*$/.exec(line)?.[1]
-      return host === undefined ? [] : [host]
-    })
-    return { httpProxy, httpsProxy, noProxy: ['localhost', '127.0.0.1', '::1', ...hosts].join(',') }
+    if (values.get('ExcludeSimpleHostnames') === '1') hosts.push('<local>')
+    return { httpProxy, httpsProxy, noProxy: ['localhost', '127.0.0.1', '[::1]', ...hosts].join(',') }
   } catch {
     return undefined
   }
