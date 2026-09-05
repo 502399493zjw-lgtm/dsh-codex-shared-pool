@@ -9,6 +9,7 @@ import type { TeamResponsesForwardRequest } from './credentials.ts'
 import { parseTeamProviderTokenUsage } from './credits.ts'
 import type { TeamProviderTokenUsage } from './credits.ts'
 import { TeamRouteCapacityError } from './routing.ts'
+import { waitForTeamAdmission } from './admission-wait.ts'
 import type { TeamRouteLease, TeamRouteSettleResult } from './routing.ts'
 import type { TeamService } from './service.ts'
 import { PostgresTeamStore } from './postgres-store.ts'
@@ -135,11 +136,15 @@ export function createTeamGatewayHandler(
       const excludedAccountIds = new Set<string>()
       let upstreamAttempts = 0
       while (true) {
-        admitted = await service.admitLiveRequest(auth, {
+        const admit = () => service.admitLiveRequest(auth, {
           sessionId,
           model,
           excludedAccountIds: [...excludedAccountIds],
         })
+        admitted = upstreamAttempts === 0
+          ? await waitForTeamAdmission(admit, abort.signal)
+          : await admit()
+        abort.signal.throwIfAborted()
 
         const forward: TeamResponsesForwardRequest = {
           model,

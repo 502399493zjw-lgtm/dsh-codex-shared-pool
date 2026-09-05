@@ -28,6 +28,31 @@ function candidate(accountValue: TeamContributionAccountSummary, remainingPercen
 }
 
 describe('Team request routing', () => {
+  it('distinguishes temporary quota failures from occupied shared capacity', () => {
+    const router = new TeamRequestRouter()
+    const request = {
+      teamId: 'team-1', teamStatus: 'active' as const,
+      consumerMemberId: 'friend', sessionId: 'first', model: 'gpt-5.6-sol',
+      candidates: [candidate(account())],
+    }
+    const reasons = (operation: () => unknown) => {
+      try { operation() } catch (error) {
+        expect(error).toBeInstanceOf(TeamRouteCapacityError)
+        return (error as TeamRouteCapacityError).reasons
+      }
+      throw new Error('expected capacity rejection')
+    }
+    expect(reasons(() => router.route({ ...request, candidates: [{ account: account(), quota: { healthy: false } }] })))
+      .toContain('quota_unavailable')
+    expect(reasons(() => router.route({ ...request, candidates: [candidate(account(), 20)] })))
+      .toContain('reserve_reached')
+    const first = router.route(request)
+    expect(reasons(() => router.route({ ...request, sessionId: 'second' })))
+      .toContain('shared_concurrency_reached')
+    router.settle(first.lease, 'success')
+    expect(router.route({ ...request, sessionId: 'second' }).source).toBe('shared')
+  })
+
   it('prefers the requester account and then keeps a healthy session binding', () => {
     const router = new TeamRequestRouter({ id: (() => { let i = 0; return () => `lease-${++i}` })() })
     const own = account({ id: 'own', ownerMemberId: 'member-requester' })

@@ -137,25 +137,27 @@ export class PostgresTeamRequestRouter implements TeamRequestAdmissionRouter {
         SELECT account_id FROM team_session_bindings
         WHERE team_id = $1 AND consumer_member_id = $2 AND session_id = $3
       `, [request.teamId, request.consumerMemberId, sessionId])
+      const reasons = new Set<string>()
       const boundId = binding.rows[0]?.account_id
       let selected: { candidate: LockedCandidate; source: TeamRouteSource } | undefined
       if (boundId !== undefined) {
         const bound = locked.find(candidate => candidate.account.id === boundId)
-        if (bound !== undefined && await this.hasCapacity(client, bound, request.consumerMemberId, model)) {
+        if (bound !== undefined && await this.hasCapacity(client, bound, request.consumerMemberId, model, reasons)) {
           selected = { candidate: bound, source: 'session' }
         }
       }
 
       selected ??= await this.pick(client, locked
         .filter(candidate => candidate.account.ownerMemberId === request.consumerMemberId)
-        .sort(compareCandidates), request.consumerMemberId, model, 'own')
+        .sort(compareCandidates), request.consumerMemberId, model, 'own', reasons)
       selected ??= await this.pick(client, locked
         .filter(candidate => candidate.account.ownerMemberId !== request.consumerMemberId)
-        .sort(compareCandidates), request.consumerMemberId, model, 'shared')
+        .sort(compareCandidates), request.consumerMemberId, model, 'shared', reasons)
       if (selected === undefined) {
         throw new TeamRouteCapacityError('no shared capacity is available for this request', [
           boundId === undefined ? 'session_unbound' : 'session_bound_unavailable',
           'own_unavailable',
+          ...reasons,
           'shared_unavailable',
         ])
       }
@@ -283,9 +285,10 @@ export class PostgresTeamRequestRouter implements TeamRequestAdmissionRouter {
     consumerMemberId: string,
     model: string,
     source: 'own' | 'shared',
+    reasons: Set<string>,
   ): Promise<{ candidate: LockedCandidate; source: TeamRouteSource } | undefined> {
     for (const candidate of candidates) {
-      if (await this.hasCapacity(client, candidate, consumerMemberId, model)) return { candidate, source }
+      if (await this.hasCapacity(client, candidate, consumerMemberId, model, reasons)) return { candidate, source }
     }
     return undefined
   }
@@ -295,17 +298,20 @@ export class PostgresTeamRequestRouter implements TeamRequestAdmissionRouter {
     candidate: LockedCandidate,
     consumerMemberId: string,
     model: string,
+    reasons: Set<string>,
   ): Promise<boolean> {
+    const reject = (reason: string): false => { reasons.add(reason); return false }
     const account = candidate.account
     const quota = candidate.quota
     const shared = account.ownerMemberId !== consumerMemberId
-    if (account.status !== 'active' || !quota.healthy) return false
-    if (account.allowedModels.length > 0 && !account.allowedModels.includes(model)) return false
+    if (account.status !== 'active') return reject('account_unavailable')
+    if (!quota.healthy) return reject('quota_unavailable')
+    if (account.allowedModels.length > 0 && !account.allowedModels.includes(model)) return reject('model_unavailable')
     const remaining = validPercent(quota.remainingPercent)
     if (remaining === undefined) {
-      if (shared) return false
+      if (shared) return reject('quota_unavailable')
     } else if (remaining <= 0 || (shared && remaining <= account.personalReservePercent)) {
-      return false
+      return reject(remaining <= 0 ? 'quota_exhausted' : 'reserve_reached')
     }
     if (!shared) return true
 
@@ -315,15 +321,15 @@ export class PostgresTeamRequestRouter implements TeamRequestAdmissionRouter {
       WHERE account_id = $1 AND is_shared = true
         AND status = 'in_progress' AND expires_at > $2
     `, [account.id, now])
-    if (countValue(active.rows[0]) >= account.maxSharedConcurrency) return false
+    if (countValue(active.rows[0]) >= account.maxSharedConcurrency) return reject('shared_concurrency_reached')
     if (account.maxSharedRequestsPerWindow === null) return true
     const resetAt = validResetAt(quota.resetAt)
-    if (resetAt === undefined) return false
+    if (resetAt === undefined) return reject('quota_unavailable')
     const used = await client.query<CountRow>(`
       SELECT COUNT(*) AS count FROM team_route_leases
       WHERE account_id = $1 AND is_shared = true AND reset_at = $2
     `, [account.id, resetAt])
-    return countValue(used.rows[0]) < account.maxSharedRequestsPerWindow
+    return countValue(used.rows[0]) < account.maxSharedRequestsPerWindow || reject('request_cap_reached')
   }
 
   private async transaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
