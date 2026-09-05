@@ -24,11 +24,14 @@ import type {
   TeamStore,
   TeamUsageCostEstimate,
 } from './store.ts'
+import { anonymousSecret, normalizeAnonymousCreation, TEAM_ANONYMOUS_LIMITS, TeamAnonymousCreationConflictError, TeamAnonymousRateLimitError, TeamOwnerRecoveryUnavailableError, type TeamAnonymousAction } from './anonymous.ts'
 import { safeTeamErrorMessage } from './safe-message.ts'
 import type {
   TeamApiKeySummary,
   TeamAccountUsage24HourSummary,
   TeamBootstrapResult,
+  TeamAnonymousCreationInput,
+  TeamAnonymousOwnerResult,
   TeamContributionAccountPatch,
   TeamContributionAccountSummary,
   TeamContributionStatus,
@@ -918,7 +921,34 @@ export const POSTGRES_TEAM_MIGRATIONS: readonly PostgresTeamMigration[] = [{
     ALTER TABLE team_invites
       ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT 'Team invitation';
   `,
+}, {
+  version: 23,
+  sql: `
+    CREATE TABLE IF NOT EXISTS team_anonymous_creations (
+      creation_hash text PRIMARY KEY,
+      binding_hash text NOT NULL,
+      recovery_hash text NOT NULL UNIQUE,
+      team_id text NOT NULL UNIQUE REFERENCES teams(id) ON DELETE CASCADE,
+      member_id text NOT NULL REFERENCES team_members(id),
+      created_at bigint NOT NULL,
+      recovery_revoked_at bigint
+    );
+    CREATE TABLE IF NOT EXISTS team_anonymous_rate_limits (
+      action text PRIMARY KEY CHECK (action IN ('create', 'recover-owner')),
+      window_started_at bigint NOT NULL,
+      attempt_count integer NOT NULL CHECK (attempt_count > 0)
+    );
+  `,
 }]
+
+interface AnonymousCreationRow extends QueryResultRow {
+  creation_hash: string
+  binding_hash: string
+  recovery_hash: string
+  team_id: string
+  member_id: string
+  recovery_revoked_at: string | number | null
+}
 
 interface TeamRow extends QueryResultRow {
   id: string
@@ -1299,6 +1329,91 @@ export class PostgresTeamStore implements TeamStore {
       // below remains the authoritative error path for missing privileges.
       return false
     }
+  }
+
+  async createAnonymousTeam(input: TeamAnonymousCreationInput): Promise<TeamAnonymousOwnerResult> {
+    const normalized = normalizeAnonymousCreation(input)
+    await this.initialize()
+    return this.transaction(async client => {
+      // Low-volume provisioning is serialized across all replicas before checking
+      // unique credentials. No caller-controlled headers participate in identity.
+      await client.query('SELECT pg_advisory_xact_lock($1, $2)', [62497, 2301])
+      const found = await client.query<AnonymousCreationRow>('SELECT * FROM team_anonymous_creations WHERE creation_hash = $1', [normalized.creationHash])
+      const previous = found.rows[0]
+      if (previous !== undefined) {
+        if (!sameHash(previous.binding_hash, normalized.bindingHash)) throw new TeamAnonymousCreationConflictError()
+        const result = await this.requireAnonymousOwner(client, previous)
+        const keys = await client.query<KeyRow>('SELECT * FROM team_api_keys WHERE token_hash = $1 FOR UPDATE', [normalized.keyHash])
+        const key = keys.rows[0]
+        if (key === undefined || key.revoked_at !== null || key.member_id !== previous.member_id) throw new TeamOwnerRecoveryUnavailableError()
+        return result
+      }
+      const recovery = await client.query('SELECT creation_hash FROM team_anonymous_creations WHERE recovery_hash = $1', [normalized.recoveryHash])
+      const collision = await client.query('SELECT id FROM team_api_keys WHERE token_hash = $1', [normalized.keyHash])
+      if (recovery.rows.length > 0 || collision.rows.length > 0) throw new TeamAnonymousCreationConflictError()
+      const now = this.now()
+      const team: TeamRow = { id: this.id(), name: normalized.teamName, status: 'active', lifecycle_revision: 1, dissolved_at: null, created_at: now }
+      const member: MemberRow = { id: this.id(), team_id: team.id, display_name: normalized.owner.displayName, display_name_key: normalized.owner.displayNameKey, role: 'owner', status: 'active', joined_at: now }
+      await client.query(`INSERT INTO teams (id, name, status, lifecycle_revision, dissolved_at, created_at) VALUES ($1, $2, 'active', 1, NULL, $3)`, [team.id, team.name, now])
+      await client.query(`INSERT INTO team_members (id, team_id, display_name, display_name_key, role, status, joined_at) VALUES ($1, $2, $3, $4, 'owner', 'active', $5)`, [member.id, team.id, member.display_name, member.display_name_key, now])
+      await this.createKey(client, team.id, member.id, 'owner device', now, input.apiKey)
+      await client.query(`INSERT INTO team_anonymous_creations (creation_hash, binding_hash, recovery_hash, team_id, member_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)`, [normalized.creationHash, normalized.bindingHash, normalized.recoveryHash, team.id, member.id, now])
+      return { team: summaryTeam(team), member: summaryMember(member) }
+    })
+  }
+
+  async recoverAnonymousTeamOwner(recoveryCode: string, apiKey: string): Promise<TeamAnonymousOwnerResult> {
+    const recoveryHash = anonymousSecret(recoveryCode, 'dsh_recovery')
+    const keyHash = anonymousSecret(apiKey, 'dsh_team')
+    await this.initialize()
+    return this.transaction(async client => {
+      const found = await client.query<AnonymousCreationRow>('SELECT * FROM team_anonymous_creations WHERE recovery_hash = $1', [recoveryHash])
+      const record = found.rows[0]
+      if (record === undefined) throw new TeamOwnerRecoveryUnavailableError()
+      const result = await this.requireAnonymousOwner(client, record)
+      const existing = await client.query<KeyRow>('SELECT * FROM team_api_keys WHERE token_hash = $1 FOR UPDATE', [keyHash])
+      const key = existing.rows[0]
+      if (key !== undefined) {
+        if (key.member_id !== record.member_id || key.revoked_at !== null) throw new TeamOwnerRecoveryUnavailableError()
+      } else await this.createKey(client, record.team_id, record.member_id, 'recovered owner device', this.now(), apiKey)
+      return result
+    })
+  }
+
+  private async requireAnonymousOwner(client: PoolClient, record: AnonymousCreationRow): Promise<TeamAnonymousOwnerResult> {
+    // Same Team-first ordering as membership transfer, removal and dissolution.
+    // Re-read the recovery row after the Team lock so transfer invalidation wins.
+    const teams = await client.query<TeamRow>('SELECT * FROM teams WHERE id = $1 FOR UPDATE', [record.team_id])
+    const team = teams.rows[0]
+    const current = await client.query<AnonymousCreationRow>('SELECT * FROM team_anonymous_creations WHERE creation_hash = $1 FOR UPDATE', [record.creation_hash])
+    const members = await client.query<MemberRow>('SELECT * FROM team_members WHERE id = $1 AND team_id = $2 FOR UPDATE', [record.member_id, record.team_id])
+    const member = members.rows[0]
+    if (current.rows[0] === undefined || current.rows[0].recovery_revoked_at !== null || team === undefined || team.status === 'dissolved' || member === undefined || member.role !== 'owner' || member.status !== 'active') throw new TeamOwnerRecoveryUnavailableError()
+    return { team: summaryTeam(team), member: summaryMember(member) }
+  }
+
+  async consumeAnonymousTeamAttempt(action: TeamAnonymousAction): Promise<void> {
+    await this.initialize()
+    const limit = TEAM_ANONYMOUS_LIMITS[action]
+    const retryAfterSeconds = await this.transaction(async client => {
+      const timing = await client.query<{ observed_at: string | number }>('SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS observed_at')
+      const now = numberValue(requiredRow(timing.rows[0], 'PostgreSQL clock').observed_at)
+      const startedAt = Math.floor(now / limit.windowMs) * limit.windowMs
+      const updated = await client.query<{ window_started_at: string | number; attempt_count: number }>(`
+        INSERT INTO team_anonymous_rate_limits (action, window_started_at, attempt_count)
+        VALUES ($1, $2, 1)
+        ON CONFLICT (action) DO UPDATE SET
+          attempt_count = CASE
+            WHEN EXCLUDED.window_started_at > team_anonymous_rate_limits.window_started_at THEN 1
+            WHEN team_anonymous_rate_limits.attempt_count < $3 THEN team_anonymous_rate_limits.attempt_count + 1
+            ELSE team_anonymous_rate_limits.attempt_count END,
+          window_started_at = GREATEST(team_anonymous_rate_limits.window_started_at, EXCLUDED.window_started_at)
+        RETURNING window_started_at, attempt_count
+      `, [action, startedAt, limit.max + 1])
+      const row = requiredRow(updated.rows[0], 'anonymous rate limit')
+      return row.attempt_count > limit.max ? rateLimitRetryAfterSeconds(numberValue(row.window_started_at), now, limit.windowMs) : undefined
+    })
+    if (retryAfterSeconds !== undefined) throw new TeamAnonymousRateLimitError(retryAfterSeconds)
   }
 
   async bootstrap(teamName: string, ownerName: string): Promise<TeamBootstrapResult> {
@@ -1790,6 +1905,7 @@ export class PostgresTeamStore implements TeamStore {
         throw new Error('ownership transfer requester is no longer the Team owner')
       }
 
+      await client.query(`UPDATE team_anonymous_creations SET recovery_revoked_at = $1 WHERE team_id = $2 AND recovery_revoked_at IS NULL`, [now, team.id])
       const formerOwnerUpdate = await client.query<MemberRow>(`
         UPDATE team_members SET role = 'member'
         WHERE id = $1 AND team_id = $2 AND role = 'owner' AND status = 'active'

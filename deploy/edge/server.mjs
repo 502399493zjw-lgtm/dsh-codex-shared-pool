@@ -69,8 +69,9 @@ function downstreamHeaders(source) {
   return headers
 }
 
-function plain(res, status, message) {
+function plain(res, status, message, headers = {}) {
   res.writeHead(status, {
+    ...headers,
     'content-type': 'text/plain; charset=utf-8',
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
@@ -78,8 +79,43 @@ function plain(res, status, message) {
   res.end(message)
 }
 
+/**
+ * Use only the TCP peer observed by this edge. Forwarding headers are untrusted;
+ * deployments behind a proxy share its allowance rather than trusting claims.
+ * The durable Host budget still applies across edge restarts and replicas.
+ */
+export function createAnonymousTeamEdgeLimiter(now = Date.now) {
+  const buckets = new Map()
+  const limits = new Map([
+    [`${TEAM_PATH_PREFIX}/create`, { max: 5, windowMs: 3600000 }],
+    [`${TEAM_PATH_PREFIX}/recover-owner`, { max: 10, windowMs: 600000 }],
+  ])
+  return req => {
+    if (req.method !== 'POST') return undefined
+    const path = pathFromTarget(req.url)
+    const limit = limits.get(path)
+    if (limit === undefined) return undefined
+    const observedAt = now()
+    for (const [key, bucket] of buckets) {
+      if (bucket.expiresAt <= observedAt) buckets.delete(key)
+    }
+    const peer = (req.socket.remoteAddress ?? 'unknown').replace(/^::ffff:/u, '')
+    const key = `${path}:${peer}`
+    let bucket = buckets.get(key)
+    // Bound memory under high-cardinality peer traffic without clearing live limits.
+    if (bucket === undefined && buckets.size >= 10000) return 60
+    if (bucket === undefined) {
+      bucket = { count: 0, expiresAt: observedAt + limit.windowMs }
+      buckets.set(key, bucket)
+    }
+    bucket.count = Math.min(bucket.count + 1, limit.max + 1)
+    return bucket.count > limit.max ? Math.max(1, Math.ceil((bucket.expiresAt - observedAt) / 1000)) : undefined
+  }
+}
+
 /** Create the fixed-capability public sidecar without exposing stock DSH Web. */
 export function createTeamEdgeServer() {
+  const admitAnonymous = createAnonymousTeamEdgeLimiter()
   const server = createServer((req, res) => {
     const classification = classifyEdgeTarget(req.url)
     if (classification === 'health') {
@@ -89,6 +125,12 @@ export function createTeamEdgeServer() {
     }
     if (classification !== 'team' || req.headers.upgrade !== undefined) {
       plain(res, 404, 'not found\n')
+      return
+    }
+
+    const retryAfterSeconds = admitAnonymous(req)
+    if (retryAfterSeconds !== undefined) {
+      plain(res, 429, 'Team anonymous request rate limit exceeded\n', { 'retry-after': String(retryAfterSeconds) })
       return
     }
 

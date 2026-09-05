@@ -11,6 +11,8 @@ import {
 } from '../shared/team-management.ts'
 import {
   TEAM_BOOTSTRAP_PATH,
+  TEAM_CREATE_PATH,
+  TEAM_RECOVER_OWNER_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
@@ -51,6 +53,7 @@ import type {
 import type { TeamCredentialHandoffEnvelope } from './oauth-handoff.ts'
 import { TeamDissolutionRecoveryRateLimitError, TeamInviteRevealRateLimitError } from './store.ts'
 import type { TeamAuthContext } from './store.ts'
+import { TeamAnonymousCreationConflictError, TeamAnonymousInputError, TeamAnonymousRateLimitError, TeamOwnerRecoveryUnavailableError } from './anonymous.ts'
 import { safeTeamErrorMessage as safeMessage } from './safe-message.ts'
 
 export interface TeamRouteConfig {
@@ -96,34 +99,38 @@ function contentTypeIsJson(req: IncomingMessage): boolean {
   return typeof value === 'string' && value.toLowerCase().startsWith('application/json')
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  if (!contentTypeIsJson(req)) throw new Error('content-type must be application/json')
+type InputErrorFactory = (message: string) => Error
+const inputError: InputErrorFactory = message => new Error(message)
+const anonymousInputError: InputErrorFactory = message => new TeamAnonymousInputError(message)
+
+async function readJson(req: IncomingMessage, invalidInput: InputErrorFactory = inputError): Promise<Record<string, unknown>> {
+  if (!contentTypeIsJson(req)) throw invalidInput('content-type must be application/json')
   const chunks: Uint8Array[] = []
   let bytes = 0
   for await (const chunk of req) {
     const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     bytes += data.byteLength
-    if (bytes > MAX_BODY_BYTES) throw new Error('request body is too large')
+    if (bytes > MAX_BODY_BYTES) throw invalidInput('request body is too large')
     chunks.push(data)
   }
   let value: unknown
   try {
     value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
-    throw new Error('request body must be valid JSON')
+    throw invalidInput('request body must be valid JSON')
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('request body must be an object')
+    throw invalidInput('request body must be an object')
   }
   return value as Record<string, unknown>
 }
 
-function exactStrings<const Key extends string>(value: Record<string, unknown>, keys: readonly Key[]): Record<Key, string> {
-  if (Object.keys(value).some(key => !keys.includes(key as Key))) throw new Error('request contains an unknown field')
+function exactStrings<const Key extends string>(value: Record<string, unknown>, keys: readonly Key[], invalidInput: InputErrorFactory = inputError): Record<Key, string> {
+  if (Object.keys(value).some(key => !keys.includes(key as Key))) throw invalidInput('request contains an unknown field')
   const result = {} as Record<Key, string>
   for (const key of keys) {
     const candidate = value[key]
-    if (typeof candidate !== 'string' || candidate.trim().length === 0) throw new Error(`${key} must be a non-empty string`)
+    if (typeof candidate !== 'string' || candidate.trim().length === 0) throw invalidInput(`${key} must be a non-empty string`)
     result[key] = candidate.trim()
   }
   return result
@@ -369,6 +376,38 @@ function requireAuth(auth: TeamAuthContext | undefined): TeamAuthContext {
 export function registerTeamRoutes(ctx: Context, service: TeamService, config: TeamRouteConfig): void {
   ctx.effect(() => {
     const routes = [
+      ...([['create', TEAM_CREATE_PATH], ['recover-owner', TEAM_RECOVER_OWNER_PATH]] as const).map(([action, path]) => ctx.webServer.register({
+        kind: 'exact',
+        path,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            // A durable global budget protects direct deployments and replicas;
+            // the edge additionally applies limits based on its own peer socket.
+            await service.store.consumeAnonymousTeamAttempt(action)
+            const body = await readJson(req, anonymousInputError)
+            if (action === 'create') {
+              const input = exactStrings(body, ['creationToken', 'teamName', 'ownerName', 'apiKey', 'recoveryCode'], anonymousInputError)
+              json(res, 201, await service.store.createAnonymousTeam(input))
+            } else {
+              const { recoveryCode, apiKey } = exactStrings(body, ['recoveryCode', 'apiKey'], anonymousInputError)
+              json(res, 201, await service.store.recoverAnonymousTeamOwner(recoveryCode, apiKey))
+            }
+          } catch (error: unknown) {
+            if (error instanceof TeamAnonymousRateLimitError) {
+              json(res, 429, { error: safeMessage(error) }, { 'retry-after': String(error.retryAfterSeconds) })
+            } else if (error instanceof TeamAnonymousInputError
+              || error instanceof TeamAnonymousCreationConflictError
+              || error instanceof TeamOwnerRecoveryUnavailableError) {
+              json(res, error.status, { error: safeMessage(error) })
+            } else {
+              // A lost COMMIT response can mean provisioning already succeeded.
+              // Keep the Host's durable journal recoverable on every unknown fault.
+              json(res, 503, { error: 'Team service unavailable; retry the same request' })
+            }
+          }
+        },
+      })),
       ctx.webServer.register({
         kind: 'exact',
         path: TEAM_BOOTSTRAP_PATH,

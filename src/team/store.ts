@@ -5,6 +5,8 @@ import type {
   TeamApiKeySummary,
   TeamAccountUsage24HourSummary,
   TeamBootstrapResult,
+  TeamAnonymousCreationInput,
+  TeamAnonymousOwnerResult,
   TeamInviteResult,
   TeamInvitePreview,
   TeamInviteRevealAuditEventSummary,
@@ -45,6 +47,7 @@ import type { TeamProviderTokenUsage } from './credits.ts'
 import { TeamInviteCipher } from './invite-cipher.ts'
 import type { TeamInviteTokenEnvelope } from './invite-cipher.ts'
 import { Aes256GcmTeamInviteKeyEncryptionProvider } from './invite-key-encryption.ts'
+import { anonymousSecret, normalizeAnonymousCreation, TEAM_ANONYMOUS_LIMITS, TeamAnonymousCreationConflictError, TeamAnonymousRateLimitError, TeamOwnerRecoveryUnavailableError, type TeamAnonymousAction } from './anonymous.ts'
 import { normalizeTeamMemberDisplayName } from './member-display-name.ts'
 
 export interface TeamAuthContext {
@@ -138,6 +141,9 @@ export class TeamDisplayNameMigrationUnavailableError extends Error {
 }
 
 export interface TeamStore {
+  createAnonymousTeam(input: TeamAnonymousCreationInput): Promise<TeamAnonymousOwnerResult>
+  recoverAnonymousTeamOwner(recoveryCode: string, apiKey: string): Promise<TeamAnonymousOwnerResult>
+  consumeAnonymousTeamAttempt(action: TeamAnonymousAction): Promise<void>
   bootstrap(teamName: string, ownerName: string): Promise<TeamBootstrapResult>
   authenticateApiKey(token: string): Promise<TeamAuthContext | undefined>
   overview(auth: TeamAuthContext): Promise<TeamOverview>
@@ -679,6 +685,8 @@ function ownedAccountUsage(
  * Team deployment; no production claim is made for this store yet.
  */
 export class MemoryTeamStore implements TeamStore {
+  private readonly anonymousCreations = new Map<string, { teamId: string; memberId: string; bindingHash: string; recoveryHash: string; revoked?: boolean }>()
+  private readonly anonymousRateLimits = new Map<TeamAnonymousAction, { windowStartedAt: number; count: number }>()
   private readonly teams = new Map<string, TeamRecord>()
   private readonly members = new Map<string, MemberRecord>()
   private readonly invites = new Map<string, InviteRecord>()
@@ -715,6 +723,61 @@ export class MemoryTeamStore implements TeamStore {
         key.fill(0)
       }
     }
+  }
+
+  async createAnonymousTeam(input: TeamAnonymousCreationInput): Promise<TeamAnonymousOwnerResult> {
+    const normalized = normalizeAnonymousCreation(input)
+    const previous = this.anonymousCreations.get(normalized.creationHash)
+    if (previous !== undefined) {
+      if (!sameHash(previous.bindingHash, normalized.bindingHash)) throw new TeamAnonymousCreationConflictError()
+      const result = this.requireAnonymousOwner(previous)
+      const keyId = this.keyHashes.get(normalized.keyHash)
+      const key = keyId === undefined ? undefined : this.keys.get(keyId)
+      if (key === undefined || key.revokedAt !== undefined || key.memberId !== previous.memberId) throw new TeamOwnerRecoveryUnavailableError()
+      return result
+    }
+    if (this.keyHashes.has(normalized.keyHash) || [...this.anonymousCreations.values()].some(row => row.recoveryHash === normalized.recoveryHash)) throw new TeamAnonymousCreationConflictError()
+    const now = this.now()
+    const team: TeamRecord = { id: this.id(), name: normalized.teamName, status: 'active', lifecycleRevision: 1, createdAt: now, memberIds: [] }
+    const member: MemberRecord = { id: this.id(), teamId: team.id, displayName: normalized.owner.displayName, displayNameKey: normalized.owner.displayNameKey, role: 'owner', status: 'active', joinedAt: now }
+    const key = this.prepareKey(team.id, member.id, 'owner device', now, input.apiKey)
+    this.teams.set(team.id, team)
+    this.members.set(member.id, member)
+    team.memberIds.push(member.id)
+    this.commitKey(key)
+    this.anonymousCreations.set(normalized.creationHash, { teamId: team.id, memberId: member.id, bindingHash: normalized.bindingHash, recoveryHash: normalized.recoveryHash })
+    return { team: summaryTeam(team), member: summaryMember(member) }
+  }
+
+  async recoverAnonymousTeamOwner(recoveryCode: string, apiKey: string): Promise<TeamAnonymousOwnerResult> {
+    const recoveryHash = anonymousSecret(recoveryCode, 'dsh_recovery')
+    const keyHash = anonymousSecret(apiKey, 'dsh_team')
+    const record = [...this.anonymousCreations.values()].find(row => sameHash(row.recoveryHash, recoveryHash))
+    if (record === undefined) throw new TeamOwnerRecoveryUnavailableError()
+    const result = this.requireAnonymousOwner(record)
+    const existingId = this.keyHashes.get(keyHash)
+    if (existingId !== undefined) {
+      const key = this.keys.get(existingId)
+      if (key === undefined || key.memberId !== record.memberId || key.revokedAt !== undefined) throw new TeamOwnerRecoveryUnavailableError()
+    } else this.createKey(record.teamId, record.memberId, 'recovered owner device', this.now(), apiKey)
+    return result
+  }
+
+  private requireAnonymousOwner(record: { teamId: string; memberId: string; revoked?: boolean }): TeamAnonymousOwnerResult {
+    const team = this.teams.get(record.teamId)
+    const member = this.members.get(record.memberId)
+    if (record.revoked === true || team === undefined || team.status === 'dissolved' || member === undefined || member.role !== 'owner' || member.status !== 'active') throw new TeamOwnerRecoveryUnavailableError()
+    return { team: summaryTeam(team), member: summaryMember(member) }
+  }
+
+  async consumeAnonymousTeamAttempt(action: TeamAnonymousAction): Promise<void> {
+    const limit = TEAM_ANONYMOUS_LIMITS[action]
+    const now = this.now()
+    const windowStartedAt = Math.floor(now / limit.windowMs) * limit.windowMs
+    const previous = this.anonymousRateLimits.get(action)
+    const count = previous !== undefined && previous.windowStartedAt === windowStartedAt ? Math.min(previous.count + 1, limit.max + 1) : 1
+    this.anonymousRateLimits.set(action, { windowStartedAt, count })
+    if (count > limit.max) throw new TeamAnonymousRateLimitError(Math.max(1, Math.ceil((windowStartedAt + limit.windowMs - now) / 1000)))
   }
 
   async bootstrap(teamName: string, ownerName: string): Promise<TeamBootstrapResult> {
@@ -1083,6 +1146,9 @@ export class MemoryTeamStore implements TeamStore {
       'owner',
       now,
     )
+    for (const creation of this.anonymousCreations.values()) {
+      if (creation.teamId === target.teamId) creation.revoked = true
+    }
     formerOwner.role = 'member'
     target.role = 'owner'
     for (const invite of this.invites.values()) {

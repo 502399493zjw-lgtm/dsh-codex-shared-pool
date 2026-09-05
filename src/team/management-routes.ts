@@ -14,6 +14,10 @@ import { loginOpenAICodexProfile } from '../auth.ts'
 import { OpenAICodexCredentialStore } from '../store.ts'
 import type { CodexProfileSummary } from '../store.ts'
 import {
+  TEAM_MANAGEMENT_CREATE_PATH,
+  TEAM_MANAGEMENT_RECOVER_OWNER_PATH,
+  TEAM_MANAGEMENT_SETUP_RESUME_PATH,
+  TEAM_MANAGEMENT_RECOVERY_CODE_EXPORT_PATH,
   TEAM_BROWSER_AUTHORIZATION_ALREADY_PENDING_CODE,
   TEAM_AUTHORIZATION_FAILED_CODE,
   TEAM_AUTHORIZATION_NETWORK_UNAVAILABLE_CODE,
@@ -165,6 +169,26 @@ interface InvitePreviewSession {
 interface SavedConnection extends TeamSavedConnection {
   readonly apiKey: string
   readonly serverUrl: string
+}
+
+/** Host-owned replay journal: none of its credentials are ordinary Browser data. */
+interface PendingTeamSetup {
+  readonly version: 1
+  readonly kind: 'create' | 'recover'
+  readonly serverUrl: string
+  readonly previousKey?: string
+  readonly apiKey: string
+  readonly recoveryCode: string
+  readonly creationToken?: string
+  readonly teamName?: string
+  readonly ownerName?: string
+}
+
+interface SavedOwnerRecovery {
+  readonly serverUrl: string
+  readonly teamId: string
+  readonly memberId: string
+  readonly recoveryCode: string
 }
 
 interface PendingJoinRecord {
@@ -1414,6 +1438,9 @@ class TeamManagementProxy {
       keyConfigured: info.configured,
       keyWritable: info.writable,
       pendingJoinConfigured: pending.configured,
+      ...((await this.credentials.describe(this.pendingTeamSetupRef())).configured
+        ? { pendingTeamSetup: (await this.pendingTeamSetup()).kind }
+        : {}),
       ...info.source === undefined ? {} : { keySource: info.source },
       serverOrigin: new URL(baseUrl).origin,
       ...dissolution === undefined ? {} : { dissolution },
@@ -1552,6 +1579,158 @@ class TeamManagementProxy {
     return credentialRef(`${String(this.keyRef())}_SAVED_CONNECTIONS`)
   }
 
+  private pendingTeamSetupRef(): CredentialRef {
+    return credentialRef(`${String(this.keyRef())}_TEAM_SETUP_PENDING`)
+  }
+
+  private ownerRecoveryRef(): CredentialRef {
+    return credentialRef(`${String(this.keyRef())}_OWNER_RECOVERY`)
+  }
+
+  private async pendingTeamSetup(): Promise<PendingTeamSetup> {
+    const raw = (await this.credentials.resolve(this.pendingTeamSetupRef()))?.value
+    try {
+      const item = record(JSON.parse(raw ?? ''), 'pending Team setup')
+      if (item.version !== 1 || (item.kind !== 'create' && item.kind !== 'recover')) throw new Error()
+      const pending: PendingTeamSetup = {
+        version: 1, kind: item.kind, serverUrl: requiredString(item, 'serverUrl'),
+        apiKey: requiredString(item, 'apiKey'), recoveryCode: requiredString(item, 'recoveryCode'),
+        ...(item.previousKey === undefined ? {} : { previousKey: requiredString(item, 'previousKey') }),
+        ...(item.kind === 'recover' ? {} : {
+          creationToken: requiredString(item, 'creationToken'), teamName: requiredString(item, 'teamName'),
+          ownerName: requiredUnmodifiedString(item, 'ownerName'),
+        }),
+      }
+      validateTeamKey(pending.apiKey)
+      if (pending.previousKey !== undefined) validateTeamKey(pending.previousKey)
+      if (!/^dsh_recovery_[A-Za-z0-9_-]{43}$/u.test(pending.recoveryCode)) throw new Error()
+      if (pending.kind === 'create' && !/^dsh_create_[A-Za-z0-9_-]{43}$/u.test(pending.creationToken!)) throw new Error()
+      return pending
+    } catch { throw new Error('pending Team setup is invalid') }
+  }
+
+  private async ownerRecoveries(): Promise<readonly SavedOwnerRecovery[]> {
+    const raw = (await this.credentials.resolve(this.ownerRecoveryRef()))?.value
+    if (raw === undefined) return []
+    try {
+      const parsed = record(JSON.parse(raw), 'owner recovery')
+      if (parsed.version !== 1 || !Array.isArray(parsed.entries) || parsed.entries.length > 100) throw new Error()
+      return parsed.entries.map(value => {
+        const item = record(value, 'owner recovery')
+        const recoveryCode = requiredString(item, 'recoveryCode')
+        if (!/^dsh_recovery_[A-Za-z0-9_-]{43}$/u.test(recoveryCode)) throw new Error()
+        return { serverUrl: requiredString(item, 'serverUrl'), teamId: requiredString(item, 'teamId'), memberId: requiredString(item, 'memberId'), recoveryCode }
+      })
+    } catch { throw new Error('saved owner recovery is invalid') }
+  }
+
+  async exportRecoveryCode(expectedContext: TeamManagementExpectedContext): Promise<{ recoveryCode: string }> {
+    return this.withCredentialTransition(async () => {
+      await this.expectedMutationContext(expectedContext, 'owner')
+      const entry = (await this.ownerRecoveries()).find(item => item.serverUrl === this.requireEnabled()
+        && item.teamId === expectedContext.teamId && item.memberId === expectedContext.currentMemberId)
+      if (entry === undefined) throw new Error('no recovery code is saved on this device for this Team')
+      return { recoveryCode: entry.recoveryCode }
+    })
+  }
+
+  async createTeam(teamName: string, ownerName: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    if (teamName.trim().length === 0 || teamName.trim().length > 120 || ownerName.length > 480) throw new Error('Team or owner name is invalid')
+    return this.beginTeamSetup({
+      kind: 'create', teamName: teamName.trim(), ownerName,
+      creationToken: `dsh_create_${randomBytes(32).toString('base64url')}`,
+      recoveryCode: `dsh_recovery_${randomBytes(32).toString('base64url')}`,
+    }, expectedContext)
+  }
+
+  async recoverOwner(recoveryCode: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    if (!/^dsh_recovery_[A-Za-z0-9_-]{43}$/u.test(recoveryCode)) throw new Error('Team recovery code is invalid')
+    return this.beginTeamSetup({ kind: 'recover', recoveryCode }, expectedContext)
+  }
+
+  private async beginTeamSetup(input: Pick<PendingTeamSetup, 'kind' | 'teamName' | 'ownerName' | 'creationToken' | 'recoveryCode'>,
+    expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
+      await this.requireConnectionTransitionReady()
+      for (const ref of [this.pendingTeamSetupRef(), this.ownerRecoveryRef()]) {
+        if (!(await this.credentials.describe(ref)).writable) throw new Error('Team setup credentials are not writable')
+      }
+      // Validate existing journals before any irreversible server operation.
+      if ((await this.ownerRecoveries()).length >= 100) throw new Error('saved owner recovery limit reached')
+      const active = await this.credentials.resolve(this.keyRef())
+      if (active !== undefined) {
+        if (expectedContext === null) throw new TeamManagementContextMismatchError()
+        const current = await this.expectedMutationContext(expectedContext)
+        await this.saveConnection(current.key, current.overview)
+      } else if (expectedContext !== null) throw new TeamManagementContextMismatchError()
+      if ((await this.savedConnections()).length >= 100) throw new Error('saved Team connection limit reached')
+      const pending: PendingTeamSetup = {
+        version: 1, ...input, serverUrl: this.requireEnabled(),
+        apiKey: `dsh_team_${randomBytes(32).toString('base64url')}`,
+        ...(active === undefined ? {} : { previousKey: active.value }),
+      }
+      await this.credentials.set(this.pendingTeamSetupRef(), JSON.stringify(pending))
+      return this.completeTeamSetup(pending)
+    }))
+  }
+
+  async resumeTeamSetup(): Promise<TeamManagementConnectionResult> {
+    return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
+      await this.requireWritable()
+      await this.requireNoPendingBrowserOAuth()
+      for (const ref of [this.pendingJoinRef(), this.pendingDissolutionRef(), this.terminalDissolutionRef(), this.connectionTerminalRef()]) {
+        if ((await this.credentials.describe(ref)).configured) throw new Error('finish pending Team recovery before continuing setup')
+      }
+      return this.completeTeamSetup(await this.pendingTeamSetup())
+    }))
+  }
+
+  private async completeTeamSetup(pending: PendingTeamSetup): Promise<TeamManagementConnectionResult> {
+    for (const ref of [this.pendingTeamSetupRef(), this.ownerRecoveryRef(), this.savedConnectionsRef()]) {
+      if (!(await this.credentials.describe(ref)).writable) throw new Error('Team setup credentials are not writable')
+    }
+    await this.ownerRecoveries()
+    const saved = await this.savedConnections()
+    if (saved.length >= 100 && !saved.some(item => item.apiKey === pending.apiKey && item.serverUrl === pending.serverUrl)) {
+      throw new Error('saved Team connection limit reached')
+    }
+    if (pending.serverUrl !== this.requireEnabled()) throw new TeamManagementContextMismatchError()
+    const checkActive = async () => {
+      const active = (await this.credentials.resolve(this.keyRef()))?.value
+      if (active !== pending.previousKey && active !== pending.apiKey) throw new TeamManagementContextMismatchError()
+    }
+    await checkActive()
+    let connection: TeamManagementConnectionResult
+    try {
+      connection = projectConnection(await this.remote(`${TEAM_PATH_PREFIX}/${pending.kind === 'create' ? 'create' : 'recover-owner'}`, {
+        method: 'POST', authenticated: false,
+        body: pending.kind === 'create' ? {
+          creationToken: pending.creationToken, teamName: pending.teamName, ownerName: pending.ownerName,
+          apiKey: pending.apiKey, recoveryCode: pending.recoveryCode,
+        } : { recoveryCode: pending.recoveryCode, apiKey: pending.apiKey },
+      }))
+    } catch (error: unknown) {
+      if (this.isDefiniteRemoteRejection(error)) await this.credentials.unset(this.pendingTeamSetupRef())
+      throw error
+    }
+    // A successful HTTP response alone is not enough to replace the active credential.
+    const overview = projectOverview(await this.remote(TEAM_OVERVIEW_PATH, { key: pending.apiKey, diagnoseTerminal: false }))
+    if (overview.team.id !== connection.team.id || overview.currentMember.id !== connection.member.id
+      || overview.currentMember.role !== 'owner' || overview.currentMember.status !== 'active') throw new TeamManagementContextMismatchError()
+    await checkActive()
+    const entries = (await this.ownerRecoveries()).filter(item => item.serverUrl !== pending.serverUrl
+      || item.teamId !== connection.team.id || item.memberId !== connection.member.id)
+    if (entries.length >= 100) throw new Error('saved owner recovery limit reached')
+    await this.credentials.set(this.ownerRecoveryRef(), JSON.stringify({ version: 1, entries: [...entries, {
+      serverUrl: pending.serverUrl, teamId: connection.team.id, memberId: connection.member.id, recoveryCode: pending.recoveryCode,
+    }] }))
+    await this.saveConnection(pending.apiKey, overview)
+    await checkActive()
+    await this.credentials.set(this.keyRef(), pending.apiKey)
+    await this.credentials.unset(this.pendingTeamSetupRef())
+    return { team: overview.team, member: overview.currentMember }
+  }
+
   private async savedConnections(): Promise<readonly SavedConnection[]> {
     const raw = (await this.credentials.resolve(this.savedConnectionsRef()))?.value
     if (raw === undefined) return []
@@ -1599,7 +1778,7 @@ class TeamManagementProxy {
   private async requireConnectionTransitionReady(): Promise<void> {
     await this.requireWritable()
     if (!(await this.credentials.describe(this.savedConnectionsRef())).writable) throw new Error('saved Team connections are not writable')
-    for (const ref of [this.pendingJoinRef(), this.pendingDissolutionRef(), this.terminalDissolutionRef(), this.connectionTerminalRef()]) {
+    for (const ref of [this.pendingTeamSetupRef(), this.pendingJoinRef(), this.pendingDissolutionRef(), this.terminalDissolutionRef(), this.connectionTerminalRef()]) {
       if ((await this.credentials.describe(ref)).configured) throw new Error('finish pending Team recovery before switching')
     }
     await this.requireNoPendingBrowserOAuth()
@@ -1633,6 +1812,7 @@ class TeamManagementProxy {
 
   async join(joinHandle: string, displayName: string, expectedContext?: TeamManagementExpectedContext): Promise<TeamManagementConnectionResult> {
     return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
+      if ((await this.credentials.describe(this.pendingTeamSetupRef())).configured) throw new Error('finish pending Team setup before joining')
       const active = await this.requireWritable()
       let previousKey: string | undefined
       if (active.configured) {
@@ -2088,7 +2268,7 @@ class TeamManagementProxy {
   ): Promise<TeamManagementOAuthResult> {
     try {
       const start = async (): Promise<TeamManagementOAuthResult> => {
-        if ((await this.credentials.describe(this.pendingJoinRef())).configured) {
+        if ((await this.credentials.describe(this.pendingJoinRef())).configured || (await this.credentials.describe(this.pendingTeamSetupRef())).configured) {
           throw new Error('finish pending Team join recovery before authorization')
         }
         const { key, overview } = await this.expectedMutationContext(expectedContext)
@@ -2255,7 +2435,7 @@ class TeamManagementProxy {
   ): Promise<TeamManagementOAuthResult> {
     try {
       const reauthorize = async (): Promise<TeamManagementOAuthResult> => {
-        if ((await this.credentials.describe(this.pendingJoinRef())).configured) {
+        if ((await this.credentials.describe(this.pendingJoinRef())).configured || (await this.credentials.describe(this.pendingTeamSetupRef())).configured) {
           throw new Error('finish pending Team join recovery before authorization')
         }
         const { key, overview } = await this.expectedMutationContext(expectedContext)
@@ -3610,6 +3790,22 @@ export function registerTeamManagementRoutes(
         },
       }),
       register(TEAM_MANAGEMENT_CONNECTIONS_PATH, 'GET', async () => ({ value: { connections: await proxy.connections() } })),
+      register(TEAM_MANAGEMENT_CREATE_PATH, 'POST', async body => {
+        exactKeys(body, ['teamName', 'ownerName', 'expectedContext'])
+        return { status: 201, value: await proxy.createTeam(requiredString(body, 'teamName'), requiredUnmodifiedString(body, 'ownerName'), body.expectedContext === null ? null : requiredExpectedContext(body)) }
+      }),
+      register(TEAM_MANAGEMENT_RECOVER_OWNER_PATH, 'POST', async body => {
+        exactKeys(body, ['recoveryCode', 'expectedContext'])
+        return { value: await proxy.recoverOwner(requiredString(body, 'recoveryCode'), body.expectedContext === null ? null : requiredExpectedContext(body)) }
+      }),
+      register(TEAM_MANAGEMENT_SETUP_RESUME_PATH, 'POST', async body => {
+        exactKeys(body, [])
+        return { value: await proxy.resumeTeamSetup() }
+      }),
+      register(TEAM_MANAGEMENT_RECOVERY_CODE_EXPORT_PATH, 'POST', async body => {
+        exactKeys(body, ['expectedContext'])
+        return { value: await proxy.exportRecoveryCode(requiredExpectedContext(body)) }
+      }),
       register(TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH, 'POST', async body => {
         exactKeys(body, ['connectionId', 'expectedContext'])
         return { value: await proxy.switchConnection(requiredString(body, 'connectionId'), body.expectedContext === null ? null : requiredExpectedContext(body)) }

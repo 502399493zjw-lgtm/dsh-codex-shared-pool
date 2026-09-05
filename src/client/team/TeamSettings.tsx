@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TeamConnections } from './TeamConnections.tsx'
+import { TeamFloatingMenu } from './TeamFloatingMenu.tsx'
+import { TeamSetup, TeamRecoveryCode, type TeamSetupMode } from './TeamSetup.tsx'
 import { SubscriptionEstimate, subscriptionEstimateLabels } from '../SubscriptionEstimate.tsx'
 import { subscriptionFromUsage } from '../../shared/subscription.ts'
 import type { CodexSubscription } from '../../shared/subscription.ts'
@@ -619,6 +621,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [dissolutionConfirmationName, setDissolutionConfirmationName] = useState('')
   const [leaveOpen, setLeaveOpen] = useState(false)
   const [leaveAuthorizationContext, setLeaveAuthorizationContext] = useState<string>()
+  const [setupMode, setSetupMode] = useState<TeamSetupMode>()
+  const [setupExpectedContext, setSetupExpectedContext] = useState<TeamManagementExpectedContext | null>(null)
+  const [recoveryExportContext, setRecoveryExportContext] = useState<TeamManagementExpectedContext>()
   const [joiningOtherTeam, setJoiningOtherTeam] = useState(false)
   const [joinExpectedContext, setJoinExpectedContext] = useState<TeamManagementExpectedContext>()
   const [teamSettingsOpen, setTeamSettingsOpen] = useState(false)
@@ -635,6 +640,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [protectionEdit, setProtectionEdit] = useState<ContributionProtectionEdit>()
   const [recentUsageAccount, setRecentUsageAccount] = useState<RecentUsageTarget>()
   const [teamMenuOpen, setTeamMenuOpen] = useState(false)
+  const teamMenuAnchorRef = useRef<HTMLDivElement>(null)
   const teamSettingsTriggerRef = useRef<HTMLButtonElement>(null)
   const workspaceBackRef = useRef<HTMLButtonElement>(null)
   const restoreTeamSettingsTriggerFocus = useRef(false)
@@ -1749,6 +1755,37 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
+  const openSetup = (mode: TeamSetupMode) => {
+    setSetupExpectedContext(teamExpectedContext ?? null)
+    setSetupMode(mode)
+    setTeamMenuOpen(false)
+    setInviteToken(''); setInvitePreview(undefined); setError(undefined)
+  }
+
+  if (setupMode !== undefined || status.pendingTeamSetup !== undefined) {
+    const mode = status.pendingTeamSetup ?? setupMode!
+    return <main className={styles.page}>
+      {embedded ? null : <PageHeading t={t} />}
+      <TeamSetup api={api} t={t} mode={mode} expectedContext={setupExpectedContext}
+        pending={status.pendingTeamSetup !== undefined} disabled={!status.keyWritable}
+        onBack={() => { setSetupMode(undefined); setJoiningOtherTeam(false) }}
+        onFailed={() => {
+          // A definitive rejection clears the Host journal. Keep its explanation visible.
+          if (setupMode === undefined) {
+            setSetupMode(mode)
+            setSetupExpectedContext(teamExpectedContextRef.current ?? null)
+          }
+        }}
+        onConnected={async result => {
+          setSetupMode(undefined); setJoiningOtherTeam(false); setTeamSettingsOpen(false)
+          if (mode === 'create' && status.serverOrigin !== undefined) setRecoveryExportContext({
+            serverOrigin: status.serverOrigin, teamId: result.team.id, currentMemberId: result.member.id,
+          })
+        }}
+        onRefresh={async () => { await refresh(false) }} />
+    </main>
+  }
+
   if (status.keyConfigured && overview === undefined && !status.pendingJoinConfigured) {
     if (loading && connectionIssue === undefined) {
       return (
@@ -1793,7 +1830,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             {status.keyConfigured && !status.pendingJoinConfigured ? <Button variant="ghost" disabled={busy !== undefined} onClick={() => {
               setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); previewRequestId.current += 1
             }}>{t('returnToTeam')}</Button> : null}
-            {!status.keyConfigured && !status.pendingJoinConfigured ? <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable} onChanged={async () => { await refresh(true) }} /> : null}
+            {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.compactActions}>
+              <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable}
+                onCreate={() => openSetup('create')} onRecover={() => openSetup('recover')} onChanged={async () => { await refresh(true) }} />
+              <Button variant="ghost" disabled={busy !== undefined || !status.keyWritable} onClick={() => openSetup('create')}>{t('createTeam')}</Button>
+              <Button variant="ghost" disabled={busy !== undefined || !status.keyWritable} onClick={() => openSetup('recover')}>{t('recoverOwner')}</Button>
+            </div> : null}
           </div>
           {status.pendingJoinConfigured ? (
             <Notice tone="warning" title={t('pendingJoinTitle')} detail={t('pendingJoinHint')}>
@@ -2440,13 +2482,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     )
   }
 
+  const renderTeamSelector = (prominent = false) => <TeamConnections api={api} t={t}
+    teamName={team.name} memberName={overview.currentMember.displayName} prominent={prominent}
+    expectedContext={teamExpectedContext ?? null}
+    disabled={busy !== undefined || !status.keyWritable || teamExpectedContext === undefined || overview.pendingBrowserAuthorization !== undefined}
+    onJoin={() => { setJoinExpectedContext(teamExpectedContext); setJoiningOtherTeam(true); setInviteToken(''); setInvitePreview(undefined); setError(undefined) }}
+    onCreate={() => openSetup('create')} onRecover={() => openSetup('recover')}
+    onChanged={async () => { setTeamSettingsOpen(false); setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); await refresh(true) }} />
+
   return (
     <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
-      <TeamConnections api={api} t={t} expectedContext={teamExpectedContext ?? null}
-        disabled={busy !== undefined || !status.keyWritable || teamExpectedContext === undefined || overview.pendingBrowserAuthorization !== undefined}
-        onJoin={() => { setJoinExpectedContext(teamExpectedContext); setJoiningOtherTeam(true); setInviteToken(''); setInvitePreview(undefined); setError(undefined) }}
-        onChanged={async () => { setTeamSettingsOpen(false); setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); await refresh(true) }} />
       {error === undefined || teamSettingsOpen ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
       {!teamContextChanged || teamSettingsOpen ? null : (
         <Notice tone="warning" title={t('teamContextChangedTitle')} detail={t('teamContextChangedHint')} live="polite" />
@@ -2501,7 +2547,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <header className={styles.workspaceHeader}>
               <div className={styles.workspaceHeaderCopy}>
                 <div className={styles.workspaceIdentity}>
-                  <h2 className={styles.workspaceTeamName}>{team.name}</h2>
+                  <h2 className={styles.workspaceTeamName}>{renderTeamSelector(true)}</h2>
                   <div className={styles.workspaceMeta}>
                     <span className={styles.workspaceStatus}><StateDot state={team.status === 'active' ? 'done' : 'warning'} />{team.status === 'active' ? t('teamActive') : t('teamPaused')}</span>
                     <span>{overview.viewerRole === 'owner' ? t('teamOwnerRole') : t('teamMemberRole')}</span>
@@ -2510,7 +2556,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 </div>
               </div>
 
-              <div className={styles.teamMenu}>
+              <div className={styles.teamMenu} ref={teamMenuAnchorRef}>
                 <Button
                   size="sm"
                   variant="outline"
@@ -2523,7 +2569,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   onClick={() => { setTeamMenuOpen(open => !open) }}
                 ><span className={styles.teamMenuDots} aria-hidden="true">•••</span></Button>
                 {teamMenuOpen ? (
-                  <div className={styles.teamMenuPopover} role="menu" aria-label={t('teamManagement')}>
+                  <TeamFloatingMenu anchorRef={teamMenuAnchorRef} label={t('teamManagement')} className={styles.teamMenuPopover!} align="end" onClose={() => setTeamMenuOpen(false)}>
                     {canManageTeam ? (
                       <>
                         <span className={styles.teamMenuLabel}>{t('teamOperationGroup')}</span>
@@ -2540,6 +2586,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                           })
                         }}>{team.status === 'active' ? t('pauseTeam') : t('resumeTeam')}</button>
                         <span className={styles.teamMenuLabel}>{t('ownershipGroup')}</span>
+                        <button type="button" role="menuitem" onClick={() => {
+                          if (ownerExpectedContext === undefined) return
+                          setTeamMenuOpen(false); setRecoveryExportContext(ownerExpectedContext)
+                        }}>{t('saveRecoveryCode')}</button>
                         <button type="button" role="menuitem" disabled={eligibleOwnershipTargets.length === 0 || ownershipTransfer !== undefined} onClick={() => {
                           if (ownerAuthorizationContext === undefined) return
                           setTeamMenuOpen(false)
@@ -2573,7 +2623,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                         }}>{t('leaveTeam')}</button>
                       </>
                     )}
-                  </div>
+                  </TeamFloatingMenu>
                 ) : null}
               </div>
             </header>
@@ -2784,7 +2834,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <div className={styles.teamIdentity}>
               <StateDot state={team.status === 'active' ? 'done' : 'warning'} />
               <div>
-                <h2 className={styles.teamName}>{team.name}</h2>
+                <h2 className={styles.teamName}>{renderTeamSelector()}</h2>
                 <p className={styles.hint}>{t('membersCount', { count: activeMembers.length })}</p>
               </div>
             </div>
@@ -2801,6 +2851,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           {renderAccountsPanel()}
         </section>
       )}
+
+      {recoveryExportContext === undefined || teamExpectedContext === undefined
+        || JSON.stringify(recoveryExportContext) !== JSON.stringify(teamExpectedContext) ? null : <TeamRecoveryCode
+          key={JSON.stringify(recoveryExportContext)} api={api} t={t} expectedContext={recoveryExportContext} onClose={() => setRecoveryExportContext(undefined)} />}
 
       <Modal
         open={activePendingLocalAuthorization !== undefined}
