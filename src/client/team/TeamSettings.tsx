@@ -621,6 +621,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [removeMember, setRemoveMember] = useState<TeamManagementMemberSummary>()
   const [removeMemberAuthorizationContext, setRemoveMemberAuthorizationContext] = useState<string>()
   const [memberMenuId, setMemberMenuId] = useState<string>()
+  const memberMenuAnchorRef = useRef<HTMLElement | null>(null)
   const [teamStatusConfirmation, setTeamStatusConfirmation] = useState<TeamStatusConfirmation>()
   const [dissolution, setDissolution] = useState<TeamDissolutionView>()
   const [connectionTerminal, setConnectionTerminal] = useState<TeamConnectionTerminalView>()
@@ -2766,10 +2767,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                             aria-expanded={memberMenuId === member.id}
                             data-team-settings-focus={`member-menu:${member.id}`}
                             disabled={busy !== undefined}
-                            onClick={() => { setMemberMenuId(current => current === member.id ? undefined : member.id) }}
+                            onClick={event => {
+                              memberMenuAnchorRef.current = event.currentTarget.parentElement
+                              setMemberMenuId(current => current === member.id ? undefined : member.id)
+                            }}
                           >···</Button>
                           {memberMenuId === member.id ? (
-                            <div className={styles.memberMenuPopover} role="menu" aria-label={t('manageMember', { name: member.displayName })}>
+                            <TeamFloatingMenu anchorRef={memberMenuAnchorRef} label={t('manageMember', { name: member.displayName })} className={styles.memberMenuPopover!} align="end" onClose={() => setMemberMenuId(undefined)}>
                               <button type="button" role="menuitem" onClick={() => {
                                 if (ownerAuthorizationContext === undefined) return
                                 setMemberMenuId(undefined)
@@ -2777,7 +2781,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                                 setRemoveMemberAuthorizationContext(ownerAuthorizationContext)
                                 setRemoveMember(member)
                               }}>{t('removeMember')}</button>
-                            </div>
+                            </TeamFloatingMenu>
                           ) : null}
                         </div>
                       ) : null}
