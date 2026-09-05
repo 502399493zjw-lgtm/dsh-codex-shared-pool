@@ -736,7 +736,7 @@ export class MemoryTeamStore implements TeamStore {
       if (key === undefined || key.revokedAt !== undefined || key.memberId !== previous.memberId) throw new TeamOwnerRecoveryUnavailableError()
       return result
     }
-    if ([...this.anonymousCreations.values()].some(row => row.recoveryHash === normalized.recoveryHash)) throw new TeamAnonymousCreationConflictError()
+    if (this.keyHashes.has(normalized.keyHash) || [...this.anonymousCreations.values()].some(row => row.recoveryHash === normalized.recoveryHash)) throw new TeamAnonymousCreationConflictError()
     const now = this.now()
     const team: TeamRecord = { id: this.id(), name: normalized.teamName, status: 'active', lifecycleRevision: 1, createdAt: now, memberIds: [] }
     const member: MemberRecord = { id: this.id(), teamId: team.id, displayName: normalized.owner.displayName, displayNameKey: normalized.owner.displayNameKey, role: 'owner', status: 'active', joinedAt: now }

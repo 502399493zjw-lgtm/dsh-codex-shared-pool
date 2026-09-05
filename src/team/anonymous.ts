@@ -14,6 +14,9 @@ export class TeamAnonymousRateLimitError extends Error {
     this.name = 'TeamAnonymousRateLimitError'
   }
 }
+export class TeamAnonymousInputError extends Error {
+  readonly status = 400
+}
 export class TeamAnonymousCreationConflictError extends Error {
   readonly status = 409
   constructor() { super('Team creation request conflicts with an existing operation') }
@@ -24,7 +27,7 @@ export class TeamOwnerRecoveryUnavailableError extends Error {
 }
 export function anonymousSecret(value: string, prefix: 'dsh_create' | 'dsh_team' | 'dsh_recovery'): string {
   if (typeof value !== 'string' || !new RegExp(`^${prefix}_[A-Za-z0-9_-]{43}$`, 'u').test(value)) {
-    throw new Error('Team creation or recovery credential is invalid')
+    throw new TeamAnonymousInputError('Team creation or recovery credential is invalid')
   }
   return createHash('sha256').update(value).digest('hex')
 }
@@ -33,8 +36,16 @@ export function normalizeAnonymousCreation(input: TeamAnonymousCreationInput) {
   const keyHash = anonymousSecret(input.apiKey, 'dsh_team')
   const recoveryHash = anonymousSecret(input.recoveryCode, 'dsh_recovery')
   const teamName = input.teamName.trim()
-  if (teamName.length === 0 || teamName.length > 120) throw new Error('teamName must contain 1 to 120 characters')
-  const owner = normalizeTeamMemberDisplayName(input.ownerName, 'ownerName')
+  if (teamName.length === 0 || teamName.length > 120) throw new TeamAnonymousInputError('teamName must contain 1 to 120 characters')
+  let owner: ReturnType<typeof normalizeTeamMemberDisplayName>
+  try {
+    owner = normalizeTeamMemberDisplayName(input.ownerName, 'ownerName')
+  } catch (error: unknown) {
+    // This pure normalizer reports rejected names as TypeError. Storage and
+    // transport failures are deliberately never classified by message text.
+    if (error instanceof TypeError) throw new TeamAnonymousInputError(error.message)
+    throw error
+  }
   const bindingHash = createHash('sha256').update(JSON.stringify([teamName, owner.displayName, keyHash, recoveryHash])).digest('hex')
   return { creationHash, keyHash, recoveryHash, bindingHash, teamName, owner }
 }

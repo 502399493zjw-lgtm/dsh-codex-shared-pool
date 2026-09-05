@@ -1425,6 +1425,47 @@ describe('anonymous Team provisioning routes', () => {
     const recovered = await response(recover.handler, request('POST', { recoveryCode: body.recoveryCode, apiKey: `dsh_team_${'d'.repeat(43)}` }, { 'content-type': 'application/json' }, '203.0.113.9'))
     expect(recovered).toEqual(created)
   })
+  it.each(['create', 'recover-owner'] as const)('returns retryable 503 after %s commits but its response fails, then retries one identity', async action => {
+    const store = new MemoryTeamStore()
+    const created = action === 'recover-owner' ? await store.createAnonymousTeam(body) : undefined
+    const recoveryBody = { recoveryCode: body.recoveryCode, apiKey: `dsh_team_${'d'.repeat(43)}` }
+    let committed: Awaited<ReturnType<MemoryTeamStore['createAnonymousTeam']>> | undefined
+    if (action === 'create') {
+      const delegate = store.createAnonymousTeam.bind(store)
+      vi.spyOn(store, 'createAnonymousTeam').mockImplementationOnce(async input => {
+        committed = await delegate(input)
+        throw new Error('Connection terminated unexpectedly')
+      })
+    } else {
+      const delegate = store.recoverAnonymousTeamOwner.bind(store)
+      vi.spyOn(store, 'recoverAnonymousTeamOwner').mockImplementationOnce(async (code, key) => {
+        committed = await delegate(code, key)
+        throw new Error('Connection terminated unexpectedly')
+      })
+    }
+    const route = setup(new FakeCredentialBroker(), undefined, store).find(candidate => candidate.path === (action === 'create' ? TEAM_CREATE_PATH : TEAM_RECOVER_OWNER_PATH))!
+    const input = action === 'create' ? body : recoveryBody
+    const failed = await response(route.handler, request('POST', input, { 'content-type': 'application/json' }))
+    expect(failed.status).toBe(503)
+    expect(committed).toBeDefined()
+    const auth = await store.authenticateApiKey(input.apiKey)
+    expect(auth).toMatchObject({ teamId: committed!.team.id, memberId: committed!.member.id, role: 'owner' })
+    const retried = await response(route.handler, request('POST', input, { 'content-type': 'application/json' }))
+    expect(retried).toEqual({ status: 201, body: committed })
+    expect((await store.overview(auth!)).apiKeys).toHaveLength(action === 'create' ? 1 : 2)
+    if (created !== undefined) expect(committed).toEqual(created)
+  })
+
+  it('classifies unexpected storage failures as 503 even when errors carry a client status', async () => {
+    const store = new MemoryTeamStore()
+    const routes = setup(new FakeCredentialBroker(), undefined, store)
+    const create = routes.find(route => route.path === TEAM_CREATE_PATH)!
+    vi.spyOn(store, 'consumeAnonymousTeamAttempt').mockRejectedValueOnce(new Error('database unavailable'))
+    expect((await response(create.handler, request('POST', body, { 'content-type': 'application/json' }))).status).toBe(503)
+    vi.spyOn(store, 'createAnonymousTeam').mockRejectedValueOnce(Object.assign(new Error('storage outcome unknown'), { status: 409 }))
+    expect((await response(create.handler, request('POST', body, { 'content-type': 'application/json' }))).status).toBe(503)
+  })
+
   it('rejects unknown fields, non-POST methods and malformed secrets', async () => {
     const create = setup().find(route => route.path === TEAM_CREATE_PATH)!
     expect(create).toBeDefined()
@@ -1432,6 +1473,18 @@ describe('anonymous Team provisioning routes', () => {
     expect((await response(create.handler, request('POST', { ...body, role: 'owner' }, { 'content-type': 'application/json' }))).status).toBe(400)
     expect((await response(create.handler, request('POST', { ...body, recoveryCode: 'short' }, { 'content-type': 'application/json' }))).status).toBe(400)
   })
+  it('keeps known validation, creation conflict and recovery misses as definite 4xx rejections', async () => {
+    const routes = setup()
+    const create = routes.find(route => route.path === TEAM_CREATE_PATH)!
+    const recover = routes.find(route => route.path === TEAM_RECOVER_OWNER_PATH)!
+    for (const patch of [{ teamName: 'x'.repeat(121) }, { ownerName: '\u200b' }]) {
+      expect((await response(create.handler, request('POST', { ...body, ...patch }, { 'content-type': 'application/json' }))).status).toBe(400)
+    }
+    expect((await response(create.handler, request('POST', body, { 'content-type': 'application/json' }))).status).toBe(201)
+    expect((await response(create.handler, request('POST', { ...body, teamName: 'Different' }, { 'content-type': 'application/json' }))).status).toBe(409)
+    expect((await response(recover.handler, request('POST', { recoveryCode: `dsh_recovery_${'z'.repeat(43)}`, apiKey: body.apiKey }, { 'content-type': 'application/json' }))).status).toBe(404)
+  })
+
   it('rate limits anonymous attempts before parsing regardless of spoofed forwarding headers', async () => {
     const create = setup().find(route => route.path === TEAM_CREATE_PATH)!
     expect(create).toBeDefined()

@@ -93,6 +93,7 @@ for (const backend of ['memory', 'postgres'] as const) {
         await expect(store.createAnonymousTeam({ ...input, ...patch })).rejects.toThrow(/creation request conflicts/)
       }
       await expect(store.createAnonymousTeam({ ...input, creationToken: `dsh_create_${'f'.repeat(43)}` })).rejects.toThrow()
+      await expect(store.createAnonymousTeam({ ...input, creationToken: `dsh_create_${'g'.repeat(43)}`, recoveryCode: `dsh_recovery_${'h'.repeat(43)}` })).rejects.toMatchObject({ status: 409 })
       if (pool !== undefined) expect((await pool.query('SELECT * FROM teams')).rows).toHaveLength(1)
     })
 
