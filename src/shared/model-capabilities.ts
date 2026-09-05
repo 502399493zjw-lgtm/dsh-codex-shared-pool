@@ -1,5 +1,6 @@
 /** Models whose bundled Codex catalog advertises the priority Fast tier. */
 export const CODEX_FAST_MODEL_IDS = [
+  'gpt-6-astra',
   'gpt-5.4',
   'gpt-5.5',
   'gpt-5.6-luna',

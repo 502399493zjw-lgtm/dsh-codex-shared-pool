@@ -40,6 +40,16 @@ describe('OpenAI Codex model capabilities', () => {
       ])
   })
 
+  it.each([undefined, { baseUrl: 'https://pool.example.test/plugins/dsh-codex-shared-pool/team', resolveApiKey: async () => 'unused' }])('lists and resolves Astra in local and Team modes', async (team) => {
+    const adapter = createOpenAICodexAdapter(new OpenAICodexCredentialStore(), () => undefined, preferences, team)
+    expect(await adapter.listModels('openai-codex')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'gpt-6-astra', name: 'GPT-6-Astra' }),
+    ]))
+    const resolved = await adapter.resolveModel('openai-codex', 'gpt-6-astra')
+    expect(resolved.reasoning?.defaultEffort).toBe('medium')
+    expect(resolved.reasoning?.efforts.map(effort => effort.id)).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
   it('uses the Codex-native default for Terra', async () => {
     const adapter = createOpenAICodexAdapter(
       new OpenAICodexCredentialStore(),

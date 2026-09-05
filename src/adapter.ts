@@ -1,5 +1,6 @@
 /** OpenAI Codex adapter assembled from public dsh-llm-pi-ai extension points. */
 
+import { supplementCodexModels } from './codex-model-catalog.ts'
 import { createModels } from '@earendil-works/pi-ai'
 import type { MutableModels, Provider } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
@@ -51,6 +52,7 @@ interface CodexReasoningCatalogEntry {
 
 /** Mirror the selectable efforts in the bundled Codex 0.147 model catalog. */
 const CODEX_REASONING_CATALOG: Readonly<Record<string, CodexReasoningCatalogEntry>> = {
+  'gpt-6-astra': { defaultEffort: 'medium', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
   'gpt-5.4': { defaultEffort: 'medium', efforts: ['low', 'medium', 'high', 'xhigh'] },
   'gpt-5.4-mini': { defaultEffort: 'medium', efforts: ['low', 'medium', 'high', 'xhigh'] },
   'gpt-5.5': { defaultEffort: 'medium', efforts: ['low', 'medium', 'high', 'xhigh'] },
@@ -208,7 +210,7 @@ export function createOpenAICodexAdapter(
   const routingEvents = teamClient === undefined
     ? teamClientOrRoutingEvents as LocalRoutingEventLedger | undefined
     : routingEventsOverride
-  const localProvider = openaiCodexProvider()
+  const localProvider = supplementCodexModels(openaiCodexProvider())
   const provider = teamClient === undefined
     ? localProvider
     : createTeamClientProvider(localProvider, teamClient.baseUrl)
