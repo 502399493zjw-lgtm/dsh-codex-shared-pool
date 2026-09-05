@@ -2374,15 +2374,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             {contributionHint === undefined ? null : <p>{contributionHint}</p>}
           </section>
           <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
+            <dl className={styles.compactSummaryList}>
+              <div><dt>{t('weeklySharedAmount')}</dt><dd>{weeklyUsed} / {weeklyLimit}</dd></div>
+            </dl>
             <header className={styles.compactRecentHeader}>
               <h4 className={styles.compactSummaryTitle}>{t('recentUsageTitle')}</h4>
               <Button className={styles.viewSevenDaysButton} size="sm" variant="outline" onClick={() => {
                 setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
               }}>{t('viewSevenDays')}</Button>
             </header>
-            <dl className={styles.compactSummaryList}>
-              <div><dt>{t('weeklySharedAmount')}</dt><dd>{weeklyUsed} / {weeklyLimit}</dd></div>
-            </dl>
             {last24HoursAggregate === undefined
               ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
               : <p className={styles.compactRecentLine}>
