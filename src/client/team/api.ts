@@ -3,6 +3,10 @@
 import { parseSubscription } from '../../shared/subscription.ts'
 
 import {
+  TEAM_MANAGEMENT_CREATE_PATH,
+  TEAM_MANAGEMENT_RECOVER_OWNER_PATH,
+  TEAM_MANAGEMENT_SETUP_RESUME_PATH,
+  TEAM_MANAGEMENT_RECOVERY_CODE_EXPORT_PATH,
   TEAM_MANAGEMENT_CAPABILITY_HEADER,
   TEAM_MANAGEMENT_CONNECTIONS_PATH,
   TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH,
@@ -96,6 +100,7 @@ export function parseTeamManagementStatus(value: unknown): TeamManagementStatus 
     'keyConfigured',
     'keyWritable',
     'pendingJoinConfigured',
+    'pendingTeamSetup',
     'keySource',
     'serverOrigin',
     'dissolution',
@@ -122,6 +127,7 @@ export function parseTeamManagementStatus(value: unknown): TeamManagementStatus 
     keyConfigured,
     keyWritable,
     pendingJoinConfigured,
+    ...(item.pendingTeamSetup === undefined ? {} : { pendingTeamSetup: unionField(item, 'pendingTeamSetup', ['create', 'recover'] as const) }),
     ...(keySource === undefined ? {} : { keySource }),
     ...(serverOrigin === undefined ? {} : { serverOrigin }),
     ...(dissolution === undefined ? {} : { dissolution }),
@@ -707,6 +713,28 @@ export class TeamManagementApi {
 
   switchConnection(connectionId: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
     return this.request(TEAM_MANAGEMENT_CONNECTION_SWITCH_PATH, { method: 'POST', body: { connectionId, expectedContext } }, parseConnection)
+  }
+
+  createTeam(teamName: string, ownerName: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_CREATE_PATH, { method: 'POST', body: { teamName, ownerName, expectedContext } }, parseConnection)
+  }
+
+  recoverOwner(recoveryCode: string, expectedContext: TeamManagementExpectedContext | null): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_RECOVER_OWNER_PATH, { method: 'POST', body: { recoveryCode, expectedContext } }, parseConnection)
+  }
+
+  resumeTeamSetup(): Promise<TeamManagementConnectionResult> {
+    return this.request(TEAM_MANAGEMENT_SETUP_RESUME_PATH, { method: 'POST', body: {} }, parseConnection)
+  }
+
+  exportRecoveryCode(expectedContext: TeamManagementExpectedContext): Promise<{ recoveryCode: string }> {
+    return this.request(TEAM_MANAGEMENT_RECOVERY_CODE_EXPORT_PATH, { method: 'POST', body: { expectedContext } }, value => {
+      const item = object(value, 'Team recovery code')
+      exactKeys(item, ['recoveryCode'], 'Team recovery code')
+      const recoveryCode = stringField(item, 'recoveryCode')
+      if (!/^dsh_recovery_[A-Za-z0-9_-]{43}$/u.test(recoveryCode)) throw new Error('Team recovery code is invalid')
+      return { recoveryCode }
+    })
   }
 
   join(joinHandle: string, displayName: string, expectedContext?: TeamManagementExpectedContext): Promise<TeamManagementConnectionResult> {

@@ -30,6 +30,10 @@ export const TEAM_MANAGEMENT_CONTEXT_CHANGED_MESSAGE = 'Team connection changed;
 export const TEAM_MANAGEMENT_SESSION_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/session`
 export const TEAM_MANAGEMENT_CAPABILITY_HEADER = 'x-dsh-team-management-capability'
 export const TEAM_MANAGEMENT_STATUS_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/status`
+export const TEAM_MANAGEMENT_CREATE_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/create`
+export const TEAM_MANAGEMENT_RECOVER_OWNER_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/recover-owner`
+export const TEAM_MANAGEMENT_SETUP_RESUME_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/setup/resume`
+export const TEAM_MANAGEMENT_RECOVERY_CODE_EXPORT_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/recovery-code/export`
 export const TEAM_MANAGEMENT_JOIN_PATH = `${TEAM_MANAGEMENT_PATH_PREFIX}/join`
 export const TEAM_MANAGEMENT_JOIN_RECOVER_PATH = `${TEAM_MANAGEMENT_JOIN_PATH}/recover`
 export const TEAM_MANAGEMENT_JOIN_DISCARD_PATH = `${TEAM_MANAGEMENT_JOIN_PATH}/discard`
@@ -64,6 +68,7 @@ export interface TeamManagementStatus {
   readonly keyConfigured: boolean
   readonly keyWritable: boolean
   readonly pendingJoinConfigured: boolean
+  readonly pendingTeamSetup?: 'create' | 'recover'
   readonly keySource?: string
   readonly serverOrigin?: string
   readonly dissolution?: TeamDissolutionView

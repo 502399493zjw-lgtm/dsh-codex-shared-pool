@@ -1209,3 +1209,30 @@ it('projects saved identities and sends capability-protected context when switch
     body: JSON.stringify({ connectionId: identity.id, expectedContext: EXPECTED_CONTEXT }),
   }))
 })
+
+it('uses protected same-origin setup actions and exports only a validated recovery code on demand', async () => {
+  const recoveryCode = `dsh_recovery_${'r'.repeat(43)}`
+  const fetchMock = withManagementSession(async input => String(input).endsWith('/recovery-code/export')
+    ? Response.json({ recoveryCode })
+    : Response.json({ team: overview().team, member: overview().currentMember, apiKey: 'must-not-survive' }))
+  const api = createTeamManagementApi(fetchMock)
+  const result = await api.createTeam('New Team', 'Edison', null)
+  expect(JSON.stringify(result)).not.toContain('must-not-survive')
+  expect(fetchMock).toHaveBeenLastCalledWith('/plugins/dsh-codex-shared-pool/team-client/create', expect.objectContaining({
+    method: 'POST', headers: expect.objectContaining({ [TEAM_MANAGEMENT_CAPABILITY_HEADER]: MANAGEMENT_CAPABILITY }),
+    body: JSON.stringify({ teamName: 'New Team', ownerName: 'Edison', expectedContext: null }),
+  }))
+  await api.recoverOwner(recoveryCode, EXPECTED_CONTEXT)
+  expect(fetchMock).toHaveBeenLastCalledWith('/plugins/dsh-codex-shared-pool/team-client/recover-owner', expect.objectContaining({
+    body: JSON.stringify({ recoveryCode, expectedContext: EXPECTED_CONTEXT }),
+  }))
+  await api.resumeTeamSetup()
+  expect(await api.exportRecoveryCode(EXPECTED_CONTEXT)).toEqual({ recoveryCode })
+  expect(parseTeamManagementStatus({ enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false, pendingTeamSetup: 'create' }).pendingTeamSetup).toBe('create')
+  expect(() => parseTeamManagementStatus({ enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false, pendingTeamSetup: 'unknown' })).toThrow()
+})
+
+it.each([{ recoveryCode: 'invalid' }, { recoveryCode: `dsh_recovery_${'r'.repeat(43)}`, apiKey: 'secret' }])('rejects malformed recovery exports', async value => {
+  const api = createTeamManagementApi(withManagementSession(async () => Response.json(value)))
+  await expect(api.exportRecoveryCode(EXPECTED_CONTEXT)).rejects.toThrow()
+})

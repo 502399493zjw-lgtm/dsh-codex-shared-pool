@@ -4946,6 +4946,139 @@ describe('local Team management routes', () => {
   })
 })
 
+describe('anonymous Team setup through the local Host', () => {
+  const prefix = '/plugins/dsh-codex-shared-pool/team-client'
+  const pendingRef = `${TEAM_KEY_REF}_TEAM_SETUP_PENDING`
+  const config = { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }
+  const oldKey = `dsh_team_${'a'.repeat(43)}`
+  function fixture(connected = true) {
+    const credentials = new FakeCredentials()
+    if (connected) credentials.value = oldKey
+    let failed = false
+    const requests: Record<string, string>[] = []
+    const otherTeam = { ...team(), id: 'new-team', name: 'New Team' }
+    const otherMember = { ...member(), id: 'new-owner', teamId: 'new-team' }
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const path = String(input)
+      if (path.endsWith('/create') || path.endsWith('/recover-owner')) {
+        expect(credentials.get(pendingRef)).toBeDefined()
+        const body = JSON.parse(String(init?.body)) as Record<string, string>
+        requests.push(body)
+        expect(new Headers(init?.headers).has('authorization')).toBe(false)
+        if (failed) throw new Error('offline')
+        return Response.json({ team: otherTeam, member: otherMember, apiKey: 'must-not-leak' })
+      }
+      const isOld = new Headers(init?.headers).get('authorization') === `Bearer ${oldKey}`
+      return Response.json(isOld ? overview() : overview({ team: otherTeam, currentMember: otherMember, members: [otherMember], apiKeys: [] }))
+    })
+    const env = setup(config, credentials, fetch)
+    const call = (path: string, body?: unknown) => response(route(env.routes, `${prefix}/${path}`).handler, request(body === undefined ? 'GET' : 'POST', body))
+    return { ...env, call, requests, fail: (value: boolean) => { failed = value } }
+  }
+
+  it('journals anonymous creation, preserves the previous Team and reveals recovery only on explicit owner export', async () => {
+    const env = fixture()
+    const result = await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })
+    expect(result.status).toBe(201)
+    expect(result.body.team).toMatchObject({ id: 'new-team' })
+    expect(env.credentials.value).toBe(env.requests[0]!.apiKey)
+    expect(env.credentials.get(pendingRef)).toBeUndefined()
+    const summaries = [result.body, (await env.call('status')).body, (await env.call('connections')).body]
+    expect(JSON.stringify(summaries)).not.toContain(env.requests[0]!.recoveryCode)
+    expect(JSON.stringify(summaries)).not.toContain(env.requests[0]!.apiKey)
+    expect((await env.call('connections')).body.connections).toEqual(expect.arrayContaining([expect.objectContaining({ teamId: 'team-1' })]))
+    const exported = await env.call('recovery-code/export', { expectedContext: { ...EXPECTED_CONTEXT, teamId: 'new-team', currentMemberId: 'new-owner' } })
+    expect(exported.body).toEqual({ recoveryCode: env.requests[0]!.recoveryCode })
+  })
+
+  it('replays identical pending credentials after restart without replacing the original key on failure', async () => {
+    const env = fixture()
+    env.fail(true)
+    expect((await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+    expect((await env.call('status')).body.pendingTeamSetup).toBe('create')
+    env.fail(false)
+    const restarted = setup(config, env.credentials, env.fetch)
+    const result = await response(route(restarted.routes, `${prefix}/setup/resume`).handler, request('POST', {}))
+    expect(result.status).toBe(200)
+    expect(env.requests[1]).toEqual(env.requests[0])
+    expect(env.credentials.value).toBe(env.requests[0]!.apiKey)
+  })
+
+  it('restores an owner on a new device with a Host-generated key', async () => {
+    const env = fixture(false)
+    const recoveryCode = `dsh_recovery_${'r'.repeat(43)}`
+    const result = await env.call('recover-owner', { recoveryCode, expectedContext: null })
+    expect(result.status).toBe(200)
+    expect(env.requests[0]).toEqual({ recoveryCode, apiKey: expect.stringMatching(/^dsh_team_/u) })
+    expect(JSON.stringify(result.body)).not.toContain(recoveryCode)
+  })
+
+  it('rejects stale connected context and pending OAuth before creating any remote Team', async () => {
+    const env = fixture()
+    expect((await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: null })).status).toBeGreaterThanOrEqual(400)
+    expect(env.requests).toHaveLength(0)
+    env.credentials.put(BROWSER_OAUTH_PENDING_REF, JSON.stringify({ version: 1, operations: [{ expectedContext: EXPECTED_CONTEXT, pending: { accountId: 'account-1', method: 'browser', expiresAt: Date.now() + 900_000, discardInitial: true } }] }))
+    expect((await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })).status).toBeGreaterThanOrEqual(400)
+    expect(env.requests).toHaveLength(0)
+  })
+
+  it('blocks old-tab OAuth and switching while anonymous setup is awaiting recovery', async () => {
+    const env = fixture()
+    env.fail(true)
+    await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })
+    const before = env.fetch.mock.calls.length
+    const oauth = await env.call('contributions/oauth/start', { label: 'Shared', expectedContext: EXPECTED_CONTEXT })
+    expect(oauth.status).toBeGreaterThanOrEqual(400)
+    expect(env.fetch.mock.calls.length).toBe(before)
+    expect((await env.call('connections/switch', { connectionId: 'unknown', expectedContext: EXPECTED_CONTEXT })).status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+  })
+
+  it('refuses to replay a setup on another server or over a replacement active connection', async () => {
+    const env = fixture()
+    env.fail(true)
+    await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })
+    env.fail(false)
+    const otherServer = setup({ ...config, baseUrl: 'https://elsewhere.example/plugins/dsh-codex-shared-pool/team' }, env.credentials, env.fetch)
+    expect((await response(route(otherServer.routes, `${prefix}/setup/resume`).handler, request('POST', {}))).status).toBe(409)
+    env.credentials.value = `dsh_team_${'x'.repeat(43)}`
+    expect((await env.call('setup/resume', {})).status).toBe(409)
+    expect(env.requests).toHaveLength(1)
+    expect(env.credentials.get(pendingRef)).toBeDefined()
+  })
+
+  it.each(['_TEAM_SETUP_PENDING', '_OWNER_RECOVERY', '_SAVED_CONNECTIONS'])('does not replay remote setup when %s becomes read-only', async suffix => {
+    const env = fixture()
+    env.fail(true)
+    await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: EXPECTED_CONTEXT })
+    env.fail(false)
+    env.credentials.readonlyRefs.add(`${TEAM_KEY_REF}${suffix}`)
+    expect((await env.call('setup/resume', {})).status).toBeGreaterThanOrEqual(400)
+    expect(env.requests).toHaveLength(1)
+    expect(env.credentials.value).toBe(oldKey)
+    expect(env.credentials.get(pendingRef)).toBeDefined()
+  })
+
+  it('rejects a full saved connection vault before creating a remote Team', async () => {
+    const env = fixture(false)
+    env.credentials.put(`${TEAM_KEY_REF}_SAVED_CONNECTIONS`, JSON.stringify({ version: 1, connections: Array.from({ length: 100 }, (_, index) => ({
+      id: `saved-${index}`, serverUrl: config.baseUrl, teamId: `team-${index}`, teamName: 'Saved', currentMemberId: `member-${index}`, memberName: 'Saved', apiKey: oldKey,
+    })) }))
+    expect((await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: null })).status).toBeGreaterThanOrEqual(400)
+    expect(env.requests).toHaveLength(0)
+    expect(env.credentials.get(pendingRef)).toBeUndefined()
+  })
+
+  it('requires the browser session capability even when creating without an existing Team', async () => {
+    const env = fixture(false)
+    const req = request('POST', { teamName: 'New Team', ownerName: 'Edison', expectedContext: null })
+    delete req.headers[TEAM_MANAGEMENT_CAPABILITY_HEADER]
+    expect((await response(route(env.routes, `${prefix}/create`).handler, req)).status).toBe(403)
+    expect(env.requests).toHaveLength(0)
+  })
+})
+
 describe('saved Team connections', () => {
   const config = { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }
   const connectionsPath = '/plugins/dsh-codex-shared-pool/team-client/connections'
