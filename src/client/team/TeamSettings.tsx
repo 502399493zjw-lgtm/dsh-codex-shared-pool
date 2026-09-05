@@ -1272,9 +1272,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     setError(browserAuthorizationFailureMessage(account?.lastError, t))
   }, [oauth, overview, projectedBrowserAuthorization, status, t])
 
+  const shouldRefreshTeam = status?.enabled === true && status.keyConfigured
+    && status.dissolution === undefined && status.connectionTerminal === undefined
+    && connectionIssue?.kind !== 'invalid'
   useEffect(() => {
-    if (overview === undefined) return
-    if (shouldPollBrowserAuthorization) return
+    if (!shouldRefreshTeam || shouldPollBrowserAuthorization) return
     let pending = false
     const timer = globalThis.setInterval(() => {
       if (pending) return
@@ -1282,7 +1284,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       void refresh(false).finally(() => { pending = false })
     }, USAGE_REFRESH_MS)
     return () => { globalThis.clearInterval(timer) }
-  }, [overview, refresh, shouldPollBrowserAuthorization])
+  }, [shouldRefreshTeam, refresh, shouldPollBrowserAuthorization])
 
   useEffect(() => {
     if (overview?.viewerRole !== 'owner') return

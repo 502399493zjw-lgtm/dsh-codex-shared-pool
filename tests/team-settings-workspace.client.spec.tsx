@@ -1558,6 +1558,24 @@ describe('Team subscription-pool workspace', () => {
     expect(await within(panel).findByText('98%')).toBeDefined()
   })
 
+  it('recovers the Team overview after a transient background refresh failure', async () => {
+    const callbacks = new Map<number, () => void>()
+    let id = 0
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((handler, timeout) => {
+      const timer = ++id
+      if (timeout === 60_000 && typeof handler === 'function') callbacks.set(timer, handler as () => void)
+      return timer
+    })
+    vi.spyOn(globalThis, 'clearInterval').mockImplementation(timer => { callbacks.delete(Number(timer)) })
+    render(<TeamSettings t={translate} embedded />)
+    await screen.findByRole('region', { name: zh.teamPanelTitle })
+    managementApi.overview.mockRejectedValueOnce(new Error('temporary outage'))
+    await act(async () => { [...callbacks.values()].forEach(callback => callback()) })
+    expect(screen.queryByRole('region', { name: zh.teamPanelTitle })).toBeNull()
+    await act(async () => { [...callbacks.values()].forEach(callback => callback()) })
+    expect(await screen.findByRole('region', { name: zh.teamPanelTitle })).toBeDefined()
+  })
+
   it('shows teammate quota and limits as read-only details', async () => {
     overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
       sharing: { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
