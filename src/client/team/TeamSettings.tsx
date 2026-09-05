@@ -1270,9 +1270,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
   useEffect(() => {
     if (overview === undefined) return
-    const timer = globalThis.setInterval(() => { void refreshUsage() }, USAGE_REFRESH_MS)
+    // Capacity belongs to the overview; refreshing only usage leaves its quota frozen.
+    const timer = globalThis.setInterval(() => { void refresh(false) }, USAGE_REFRESH_MS)
     return () => { globalThis.clearInterval(timer) }
-  }, [overview, refreshUsage])
+  }, [overview, refresh])
 
   useEffect(() => {
     if (overview?.viewerRole !== 'owner') return

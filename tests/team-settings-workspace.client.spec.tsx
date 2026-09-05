@@ -1620,6 +1620,27 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
   })
 
+  it('refreshes provider capacity while the account detail remains open', async () => {
+    overviewState = { ...overviewState, contributions: [{ ...mine,
+      capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 98 }] },
+    }] }
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const remaining = () => within(heading.closest('article')!)
+      .getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent
+    expect(remaining()).toBe('98%')
+    overviewState = { ...overviewState, contributions: [{ ...mine,
+      capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 25 }] },
+    }] }
+    // Capture the actual mounted poll callback without speeding up unrelated timers.
+    const polls = intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000)
+    await act(async () => {
+      for (const [callback] of polls) await (callback as () => void)()
+    })
+    expect(remaining()).toBe('25%')
+  })
+
   it('places subscription details below remaining capacity in the weekly summary', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
