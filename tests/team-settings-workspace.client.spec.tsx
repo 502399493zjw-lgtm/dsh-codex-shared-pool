@@ -63,14 +63,15 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     variant?: string
   }) => <button type="button" {...props}>{children}</button>,
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
-  Modal: ({ open, title, description, children, footer }: {
+  Modal: ({ open, title, description, children, footer, className }: {
+    className?: string
     open: boolean
     title: string
     description?: string
     children?: React.ReactNode
     footer?: React.ReactNode
   }) => open ? (
-    <div role="dialog" aria-label={title}>
+    <div role="dialog" aria-label={title} className={className}>
       <h2>{title}</h2>
       {description === undefined ? null : <p>{description}</p>}
       {children}
@@ -3156,6 +3157,9 @@ describe('Team subscription-pool workspace', () => {
 
     const tokenDialog = await screen.findByRole('dialog', { name: zh.inviteCreated })
     expect(tokenDialog.textContent).toContain('关闭后仍可从邀请码列表再次查看。')
+    expect(tokenDialog.className).toContain('inviteDialog')
+    const token = within(tokenDialog).getByText(CREATED_INVITE_TOKEN)
+    expect(token.parentElement?.contains(within(tokenDialog).getByRole('button', { name: zh.copyInvite }))).toBe(false)
     fireEvent.click(within(tokenDialog).getByRole('button', { name: zh.close }))
     const reopenedSettings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
     const navigation = within(reopenedSettings).getByRole('navigation', { name: zh.workspaceNavigation })
@@ -3485,6 +3489,12 @@ describe('Team subscription-pool workspace', () => {
     const revealDialog = await screen.findByRole('dialog', { name: zh.inviteRevealed })
     expect(managementApi.revealInvite).toHaveBeenCalledWith('invite-1', expectedContext())
     expect(within(revealDialog).getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
+    expect(revealDialog.className).toContain('inviteDialog')
+    const token = within(revealDialog).getByText(REVEALED_INVITE_TOKEN)
+    const copy = within(revealDialog).getByRole('button', { name: zh.copyInvite })
+    expect(token.parentElement?.contains(copy)).toBe(false)
+    fireEvent.click(copy)
+    await waitFor(() => { expect(copy.textContent).toBe(zh.copied) })
 
     fireEvent.click(within(revealDialog).getByRole('button', { name: zh.close }))
     expect(screen.queryByText(REVEALED_INVITE_TOKEN)).toBeNull()

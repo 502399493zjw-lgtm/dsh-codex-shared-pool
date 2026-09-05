@@ -3256,3 +3256,39 @@
 .teamSetup {
   width: min(100%, 520px);
 }
+
+/* Secret dialogs use one viewport-bounded scroller, with actions outside the code. */
+.inviteSecretBody {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.inviteSecretBody .secretValue {
+  display: block;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+}
+
+.inviteSecretBody .code {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  user-select: all;
+}
+
+.inviteSecretNote {
+  margin: 0;
+  color: var(--team-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.inviteDialog .modalActions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

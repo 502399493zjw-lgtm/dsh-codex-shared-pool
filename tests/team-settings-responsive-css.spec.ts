@@ -276,3 +276,10 @@ it('gives join and create a visible button surface and distinct interaction stat
   expect(css).toMatch(/\.teamConnectionsFooter button:not\(:disabled\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--team-blue-strong\);[^}]*outline-offset:\s*2px;/s)
   expect(css).toMatch(/\.teamConnectionsFooter button:disabled\s*\{[^}]*color:\s*var\(--team-faint\);[^}]*cursor:\s*default;/s)
 })
+
+ it('keeps secret text and footer actions readable without a nested scroller', () => {
+  expect(css).toMatch(/\.inviteSecretBody\s*\{[^}]*min-width:\s*0;/s)
+  expect(css).toMatch(/\.inviteSecretBody \.secretValue\s*\{[^}]*display:\s*block;[^}]*min-width:\s*0;/s)
+  expect(css).toMatch(/\.inviteSecretBody \.code\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*line-height:\s*22px;/s)
+  expect(css).toMatch(/\.inviteDialog \.modalActions > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s)
+ })

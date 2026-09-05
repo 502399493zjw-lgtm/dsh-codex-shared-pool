@@ -545,25 +545,33 @@ function InviteRevealModal({ inviteId, authorizationContext, getAuthorizationCon
 
   return (
     <Modal
+      className={styles.inviteDialog!}
+      contentClassName={styles.inviteDialogContent!}
       open
       onClose={onClose}
       title={t('inviteRevealed')}
       closeLabel={t('close')}
       {...visibleSecret === undefined ? {} : { description: t('inviteRevealedHint', { time: formatTime(visibleSecret.expiresAt) }) }}
-      footer={<Button variant="primary" onClick={onClose}>{t('close')}</Button>}
+      footer={(
+        <div className={styles.modalActions}>
+          <Button variant="ghost" onClick={onClose}>{t('close')}</Button>
+          {visibleSecret === undefined ? null : (
+            <Button variant="primary" icon={<IconCopyOutline16 />} onClick={() => {
+              void writeClipboard(visibleSecret.inviteToken).then(success => { if (success) setCopied(true) })
+            }}>{copied ? t('copied') : t('copyInvite')}</Button>
+          )}
+        </div>
+      )}
     >
       {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
       {visibleSecret === undefined ? (
         error === undefined ? <p className={styles.hint}>{t('working')}</p> : null
       ) : (
-        <div className={styles.modalBody}>
-          <p className={styles.dangerNote}>{t('inviteCredentialWarning')}</p>
+        <div className={styles.inviteSecretBody}>
           <div className={styles.secretValue}>
             <span className={styles.code} data-team-dialog-focus="invite-reveal" tabIndex={-1}>{visibleSecret.inviteToken}</span>
-            <Button size="sm" variant="ghost" icon={<IconCopyOutline16 />} onClick={() => {
-              void writeClipboard(visibleSecret.inviteToken).then(success => { if (success) setCopied(true) })
-            }}>{copied ? t('copied') : t('copyInvite')}</Button>
           </div>
+          <p className={styles.inviteSecretNote}>{t('inviteCredentialWarning')}</p>
         </div>
       )}
     </Modal>
@@ -3226,18 +3234,31 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         />
       )}
 
-      <Modal open={visibleInviteResult !== undefined} onClose={closeInviteResult} title={t('inviteCreated')} closeLabel={t('close')} {...visibleInviteResult === undefined ? {} : { description: t('inviteCreatedHint', { time: formatTime(visibleInviteResult.expiresAt) }) }} footer={(
-        <Button variant="primary" onClick={closeInviteResult}>{t('close')}</Button>
-      )}>
-        {visibleInviteResult === undefined ? null : (
-          <div className={styles.modalBody}>
-            <p className={styles.dangerNote}>{t('inviteCredentialWarning')}</p>
-            <div className={styles.secretValue}>
-              <span className={styles.code} data-team-dialog-focus="invite-result" tabIndex={-1}>{visibleInviteResult.token}</span>
-              <Button size="sm" variant="ghost" icon={<IconCopyOutline16 />} onClick={() => {
+      <Modal
+        className={styles.inviteDialog!}
+        contentClassName={styles.inviteDialogContent!}
+        open={visibleInviteResult !== undefined}
+        onClose={closeInviteResult}
+        title={t('inviteCreated')}
+        closeLabel={t('close')}
+        {...visibleInviteResult === undefined ? {} : { description: t('inviteCreatedHint', { time: formatTime(visibleInviteResult.expiresAt) }) }}
+        footer={(
+          <div className={styles.modalActions}>
+            <Button variant="ghost" onClick={closeInviteResult}>{t('close')}</Button>
+            {visibleInviteResult === undefined ? null : (
+              <Button variant="primary" icon={<IconCopyOutline16 />} onClick={() => {
                 void writeClipboard(visibleInviteResult.token).then(success => { if (success) setCopied(true) })
               }}>{copied ? t('copied') : t('copyInvite')}</Button>
+            )}
+          </div>
+        )}
+      >
+        {visibleInviteResult === undefined ? null : (
+          <div className={styles.inviteSecretBody}>
+            <div className={styles.secretValue}>
+              <span className={styles.code} data-team-dialog-focus="invite-result" tabIndex={-1}>{visibleInviteResult.token}</span>
             </div>
+            <p className={styles.inviteSecretNote}>{t('inviteCredentialWarning')}</p>
           </div>
         )}
       </Modal>
