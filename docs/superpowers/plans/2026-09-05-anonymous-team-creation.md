@@ -23,9 +23,9 @@
 
 **Interfaces:** `POST /team/create` receives `{creationToken,teamName,ownerName,apiKey,recoveryCode}`; `POST /team/recover-owner` receives `{recoveryCode,apiKey}`. Both return `{team,member}` and never raw credentials.
 
-- [ ] Write failing tests for identical retry returning one Team, altered retry rejection, hashed secrets, owner recovery, ownership-transfer revocation, and rate limits.
-- [ ] Add transactional creation/recovery records with unique hashes; enforce lifecycle/ownership checks and bounded anonymous request rates.
-- [ ] Run focused memory, PostgreSQL, route and edge tests; commit assigned files.
+- [x] Write failing tests for identical retry returning one Team, altered retry rejection, hashed secrets, owner recovery, ownership-transfer revocation, and rate limits.
+- [x] Add transactional creation/recovery records with unique hashes; enforce lifecycle/ownership checks and bounded anonymous request rates.
+- [x] Run focused memory, PostgreSQL, route and edge tests; commit assigned files.
 
 ### Task 2: Local Host journal and typed browser API
 
@@ -40,25 +40,35 @@ resumeTeamSetup(): Promise<TeamManagementConnectionResult>
 exportRecoveryCode(expectedContext: TeamManagementExpectedContext): Promise<{ recoveryCode: string }>
 ```
 
-- [ ] Write failing tests that the journal precedes a request, errors preserve the current key, restarts replay identical credentials, and only explicit owner export returns a recovery code.
-- [ ] Persist versioned, server-scoped setup/recovery records through Cordis credentials; preserve saved Team connections and lock OAuth transitions.
-- [ ] Add same-origin capability-protected routes and exact typed parsers; test stale contexts and malformed responses.
-- [ ] Run focused Host and API tests; commit assigned files.
+- [x] Write failing tests that the journal precedes a request, errors preserve the current key, restarts replay identical credentials, and only explicit owner export returns a recovery code.
+- [x] Persist versioned, server-scoped setup/recovery records through Cordis credentials; preserve saved Team connections and lock OAuth transitions.
+- [x] Add same-origin capability-protected routes and exact typed parsers; test stale contexts and malformed responses.
+- [x] Run focused Host and API tests; commit assigned files.
 
 ### Task 3: Team dropdown and setup UI
 
 **Files:** `src/client/team/{TeamConnections,TeamSettings}.tsx`, new setup component, locales/CSS, UI tests, `README.md`.
 
-- [ ] Write failing tests for Team-name dropdown, footer actions, create/recovery forms, resume after uncertain response and original Team preservation.
-- [ ] Place dropdown in overview and settings headers, retaining keyboard access and bounded positioning.
-- [ ] Implement creation and owner recovery; offer explicit recovery-code export after success and from owner actions.
-- [ ] Remove narrow-width menu alignment that pushes management actions outside the panel; test real rendered menu geometry.
-- [ ] Run DOM and responsive tests; commit assigned files.
+- [x] Write failing tests for Team-name dropdown, footer actions, create/recovery forms, resume after uncertain response and original Team preservation.
+- [x] Place dropdown in overview and settings headers, retaining keyboard access and bounded positioning.
+- [x] Implement creation and owner recovery; offer explicit recovery-code export after success and from owner actions.
+- [x] Remove narrow-width menu alignment that pushes management actions outside the panel; test real rendered menu geometry.
+- [x] Run DOM and responsive tests; commit assigned files.
 
 ### Task 4: Integration and delivery
 
-- [ ] Run `node node_modules/vitest/vitest.mjs run tests`, prototype tests, `pnpm run build` and `pnpm run verify:package`.
-- [ ] Pack and install into an isolated stock DSH profile; exercise anonymous create, retry, recovery, switching and menu layout with disposable test data.
-- [ ] Open a draft PR and obtain independent change-scoped review; fix findings and re-review.
-- [ ] Confirm CI, merge to main, and update local 3181 with backup and restart notice. Remote shared deployment requires separate authorization.
+- [x] Run `node node_modules/vitest/vitest.mjs run tests`, prototype tests, `pnpm run build` and `pnpm run verify:package`.
+- [x] Pack and install into an isolated stock DSH profile; exercise anonymous create, retry, recovery, switching and menu layout with disposable test data.
+- [x] Open a draft PR and obtain independent change-scoped review; fix findings and re-review.
+- [ ] Confirm final-head CI, merge to main, and update local 3181 with backup and restart notice. Remote shared deployment requires separate authorization.
 - [ ] Report exact Git state, verification layers and any remote deployment limitation.
+
+## Verification record (2026-09-05)
+
+- Final implementation: 1,101 unit/DOM tests passed; 26 PostgreSQL tests skipped locally because no test database was configured. Prototype suite: 33 passed. Build and package verification passed.
+- PostgreSQL 17 concurrency and self-hosted Docker multi-Team invite/data-isolation checks passed in CI; the final menu focus change awaits its own CI run.
+- The packed artifact installed and started successfully with the published stock DSH 0.1.0-rc.8 CLI in an isolated profile; the browser bundle was served successfully.
+- Browser acceptance with disposable data: anonymous creation of two Teams, switching between them, explicit recovery-code export, and recovery of the original Team into a fresh Host profile. Retry and ambiguous-commit recovery were verified by focused Host/server regression tests.
+- Menu boundaries remained within 768px and 390px viewports. Final-package keyboard acceptance confirmed ArrowDown moves into menu items and Escape closes only the menu, preserving Settings and returning focus to the trigger.
+- Independent review findings fixed: unknown server persistence failures return retryable 503; invalid owner-recovery codes retain the recovery form and accurate message; menu focus waits until positioning makes it visible. Whole-change review and the final focus-change review have no blocking findings.
+- No live provider OAuth was performed. Remote Team service deployment and migration 23 remain separate from local UI installation.
