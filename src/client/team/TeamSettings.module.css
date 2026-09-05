@@ -3293,19 +3293,12 @@
   white-space: nowrap;
 }
 
-.accountCapacity { padding-bottom: 20px; }
-.accountCapacity .compactSummaryTitle { margin-bottom: 8px; }
-.accountQuotaHint { margin: 0; font-size: 12px; line-height: 1.7; color: var(--team-muted); }
-.accountQuotaBucket { padding: 18px 0; border-bottom: 1px solid var(--team-line); }
-.accountQuotaBucket:last-of-type { border-bottom: 0; }
-.accountQuotaHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--team-ink); }
-.accountQuotaHeading > span { font-size: 14px; font-weight: 600; }
-.accountQuotaHeading > strong { font-size: 32px; line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
-.accountQuotaBucket[data-available='false'] .accountQuotaHeading > strong { font-size: 20px; color: var(--team-muted); }
-.accountQuotaBucket .quotaTrack { margin: 12px 0; }
-.accountQuotaMeta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; line-height: 1.6; }
-.accountQuotaMeta [data-ready='true'] { color: var(--team-green); }
-.accountSubscription { padding: 16px 0; }
 .compactSummaryList dd { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 .compactSummaryList dd > .inlineLimitButton { margin-inline-start: 8px; }
+
+.sharingDetails { margin-top: 16px; color: var(--team-muted); font-size: 12px; }
+.sharingDetails > summary { cursor: pointer; }
+.sharingDetails[open] > summary { margin-bottom: 12px; }
+
+.capacityDetail { display: grid; gap: 6px; margin-top: 12px; }
