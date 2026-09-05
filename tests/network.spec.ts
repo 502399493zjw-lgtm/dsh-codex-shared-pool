@@ -5,6 +5,7 @@ import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici'
 import {
   OutboundNetwork,
   resolveOutboundProxyEnvironment,
+  resolveOutboundNetworkEnvironment,
 } from '../src/network.ts'
 
 const originalDispatcher = getGlobalDispatcher()
@@ -16,6 +17,15 @@ afterEach(async () => {
 })
 
 describe('OutboundNetwork', () => {
+  it('discovers macOS system proxies only without explicit proxy overrides', () => {
+    const discover = () => ({ httpProxy: 'http://proxy.test:8080', httpsProxy: 'http://proxy.test:8080', noProxy: 'localhost,127.0.0.1,::1' })
+    expect(resolveOutboundNetworkEnvironment({}, 'darwin', discover)).toEqual(discover())
+    expect(resolveOutboundNetworkEnvironment({ HTTPS_PROXY: '' }, 'darwin', discover).httpsProxy).toBeUndefined()
+    expect(resolveOutboundNetworkEnvironment({ HTTPS_PROXY: 'http://explicit.test' }, 'darwin', discover).httpsProxy).toBe('http://explicit.test')
+    expect(resolveOutboundNetworkEnvironment({}, 'linux', discover).httpsProxy).toBeUndefined()
+    expect(resolveOutboundNetworkEnvironment({ NO_PROXY: 'internal.test' }, 'darwin', discover).noProxy).toBe('localhost,127.0.0.1,::1,internal.test')
+  })
+
   it('uses lowercase standard variables before uppercase variants', () => {
     expect(resolveOutboundProxyEnvironment({
       http_proxy: 'http://lower-http.test:8080',
@@ -80,7 +90,28 @@ describe('OutboundNetwork', () => {
     expect(getGlobalDispatcher()).toBe(later)
   })
 
-  it('lets built-in fetch bypass an unreachable proxy for a NO_PROXY host', async () => {
+  it('bypasses an unreachable discovered proxy for IPv6 loopback', async () => {
+    const server = createServer((_request, response) => { response.end('direct-ipv6') })
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '::1', resolve)
+    })
+    const address = server.address() as AddressInfo
+    const { readMacOSSystemProxy } = await import('../src/system-proxy.ts')
+    const proxy = readMacOSSystemProxy(() => 'HTTPEnable : 1\nHTTPProxy : 127.0.0.1\nHTTPPort : 1')!
+    const dispose = new OutboundNetwork({ HTTP_PROXY: proxy.httpProxy, NO_PROXY: proxy.noProxy }).install()
+    try {
+      const response = await fetch(`http://[::1]:${address.port}`)
+      expect(await response.text()).toBe('direct-ipv6')
+    } finally {
+      await dispose()
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => { if (error === undefined) resolve(); else reject(error) })
+      })
+    }
+  })
+
+  it.each(['127.0.0.1', '127.0.0.0/8'])('lets built-in fetch bypass an unreachable proxy for %s', async (noProxy) => {
     const server = createServer((_request, response) => { response.end('direct') })
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -89,7 +120,7 @@ describe('OutboundNetwork', () => {
     const address = server.address() as AddressInfo
     const dispose = new OutboundNetwork({
       HTTP_PROXY: 'http://127.0.0.1:1',
-      NO_PROXY: '127.0.0.1',
+      NO_PROXY: noProxy,
     }).install()
 
     try {

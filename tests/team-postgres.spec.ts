@@ -248,6 +248,16 @@ async function applyTeamMigrationsThrough(pool: PgPool, lastVersion: number): Pr
 }
 
 describe('PostgreSQL Team store', () => {
+  it('rejects stale usage schema even when migration history is current', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('team_usage_events')) throw Object.assign(new Error('missing column'), { code: '42703' })
+      return { rows: POSTGRES_TEAM_MIGRATIONS.map(migration => ({ version: migration.version })) }
+    })
+    const pool = { query, connect: vi.fn(), end: vi.fn() } as unknown as PgPool
+    await expect(testStore({ pool }).initialize()).rejects.toThrow(/Team database schema.*dsh-codex-team-migrate/)
+    expect(pool.connect).not.toHaveBeenCalled()
+  })
+
   it('skips schema DDL when every migration is already present for a restricted runtime role', async () => {
     const query = vi.fn(async () => ({
       rows: POSTGRES_TEAM_MIGRATIONS.map(migration => ({ version: migration.version })),
