@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react'
 import { subscriptionPlanLabel } from '../shared/subscription.ts'
 import type { CodexSubscription } from '../shared/subscription.ts'
 
@@ -13,14 +14,15 @@ export function subscriptionEstimateLabels(t: (key: LabelKey) => string): Labels
 
 const dollars = (value: number) => `US$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
-export function SubscriptionEstimate({ subscription, labels }: {
+export function SubscriptionEstimate({ subscription, labels, style }: {
   subscription?: CodexSubscription | undefined
   labels: Labels
+  style?: CSSProperties
 }) {
   const planType = subscription?.planType
   const total = subscription?.weeklyEstimatedUsd
   const rowStyle = { display: 'flex', flexWrap: 'wrap' as const, justifyContent: 'space-between', gap: '4px 16px' }
-  return <div style={{ display: 'grid', gap: 8, fontSize: 13, marginBlock: 12 }}>
+  return <div style={{ display: 'grid', gap: 8, fontSize: 13, marginBlock: 12, ...style }}>
     <div style={rowStyle}>
       <span>{labels.subscriptionTier}</span>
       <span>{planType === undefined || planType === 'unknown' ? labels.unknownSubscription : subscriptionPlanLabel(planType)}</span>

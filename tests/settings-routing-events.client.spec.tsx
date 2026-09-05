@@ -58,6 +58,25 @@ const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): strin
 }
 
 describe('OpenAI Codex local routing monitor', () => {
+  it('groups the usage heading and subscription details without stacked spacing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({
+        status: 'ready', profiles: [{ id: 'local-a', label: 'Local account', createdAt: 1, updatedAt: 1, usage: { rateLimits: [] } }],
+      })
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    }))
+    render(<OpenAICodexSettings t={t} />)
+    const title = await screen.findByRole('heading', { name: en.usageLimits })
+    const summary = title.parentElement!
+    expect(within(summary).getByText(en.subscriptionTier)).toBeDefined()
+    expect(summary.style.gap).toBe('10px')
+    expect(within(summary).getByText(en.subscriptionTier).parentElement!.parentElement!.style.marginBlock).toBe('0px')
+    fireEvent.click(screen.getByRole('button', { name: en.renameProfile }))
+    expect(screen.getByRole('textbox', { name: en.renameProfilePrompt })).toBeDefined()
+  })
+
   it('ignores an old quota response after refreshing directory metadata', async () => {
     vi.useFakeTimers()
     let revision = 0
@@ -261,12 +280,11 @@ describe('OpenAI Codex local routing monitor', () => {
 
   it('moves the single in-use marker after quota fallback promotes another profile', async () => {
     let profileReads = 0
-    let routingReads = 0
+    let switched = false
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const path = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
         profileReads += 1
-        const switched = profileReads > 1
         return response({
           status: 'ready',
           profiles: switched
@@ -281,9 +299,8 @@ describe('OpenAI Codex local routing monitor', () => {
         })
       }
       if (path.endsWith('/routing-events')) {
-        routingReads += 1
         return response({
-          events: routingReads > 1
+          events: switched
             ? [{
                 id: 'event-1',
                 profileAlias: 'A',
@@ -309,6 +326,7 @@ describe('OpenAI Codex local routing monitor', () => {
 
     const originalPriority = await screen.findByRole('button', { name: /Private A/ })
     expect(within(originalPriority).getByText(en.profileInUse)).toBeDefined()
+    switched = true
     await waitFor(() => {
       const promoted = screen.getByRole('button', { name: /Private B/ })
       expect(within(promoted).getByText(en.profileInUse)).toBeDefined()
