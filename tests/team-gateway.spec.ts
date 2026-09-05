@@ -145,6 +145,31 @@ function postgresTestPool(): PgPool {
 }
 
 describe('Team Responses gateway', () => {
+  it('waits for a competing first-session request to release the shared slot', async () => {
+    const broker = new GatewayBroker()
+    const store = new MemoryTeamStore()
+    const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = await store.authenticateApiKey(joined.apiKey)
+    if (friend === undefined) throw new Error('friend key should authenticate')
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+    const first = await service.admitLiveRequest(friend, { sessionId: 'title', model: 'gpt-5.6-sol' })
+    const result = response(createTeamGatewayHandler(service), request('POST', {
+      model: 'gpt-5.6-sol', input: [], stream: true,
+    }, { authorization: `Bearer ${joined.apiKey}`, 'content-type': 'application/json' }))
+    // The main request must remain pending while the title owns the sole slot.
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(broker.forwarded).toHaveLength(0)
+    await service.settleRequest(first.lease, 'success')
+    expect((await result).status).toBe(200)
+    expect(broker.forwarded).toHaveLength(1)
+  })
+
   it('registers both generic and Codex-native data-plane aliases with one handler', () => {
     const registered: Array<{ path: string; handler: unknown }> = []
     const context = {

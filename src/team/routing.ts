@@ -123,25 +123,26 @@ export class TeamRequestRouter implements TeamRequestAdmissionRouter {
       throw new TeamRouteCapacityError('no Team capacity is configured for this request', ['no_candidates'])
     }
 
+    const reasons = new Set<string>()
     const sessionKey = bindingKey(request.teamId, request.consumerMemberId, request.sessionId)
     const boundId = this.bindings.get(sessionKey)
     if (boundId !== undefined) {
       const bound = candidates.find(candidate => candidate.account.id === boundId)
-      if (bound !== undefined && this.isAvailable(bound, request, bound.account.ownerMemberId !== request.consumerMemberId)) {
+      if (bound !== undefined && this.isAvailable(bound, request, bound.account.ownerMemberId !== request.consumerMemberId, reasons)) {
         return this.reserve(bound, request, sessionKey, 'session')
       }
     }
 
     const own = candidates
       .filter(candidate => candidate.account.ownerMemberId === request.consumerMemberId)
-      .filter(candidate => this.isAvailable(candidate, request, false))
+      .filter(candidate => this.isAvailable(candidate, request, false, reasons))
       .sort(compareCandidates)
     const ownCandidate = own[0]
     if (ownCandidate !== undefined) return this.reserve(ownCandidate, request, sessionKey, 'own')
 
     const shared = candidates
       .filter(candidate => candidate.account.ownerMemberId !== request.consumerMemberId)
-      .filter(candidate => this.isAvailable(candidate, request, true))
+      .filter(candidate => this.isAvailable(candidate, request, true, reasons))
       .sort(compareCandidates)
     const sharedCandidate = shared[0]
     if (sharedCandidate !== undefined) return this.reserve(sharedCandidate, request, sessionKey, 'shared')
@@ -149,6 +150,7 @@ export class TeamRequestRouter implements TeamRequestAdmissionRouter {
     throw new TeamRouteCapacityError('no shared capacity is available for this request', [
       boundId === undefined ? 'session_unbound' : 'session_bound_unavailable',
       'own_unavailable',
+      ...reasons,
       'shared_unavailable',
     ])
   }
@@ -232,27 +234,29 @@ export class TeamRequestRouter implements TeamRequestAdmissionRouter {
     return { lease, account: candidate.account, source }
   }
 
-  private isAvailable(candidate: TeamRouteCandidate, request: TeamRouteRequest, shared: boolean): boolean {
+  private isAvailable(candidate: TeamRouteCandidate, request: TeamRouteRequest, shared: boolean, reasons: Set<string>): boolean {
+    const reject = (reason: string): false => { reasons.add(reason); return false }
     const account = candidate.account
     const quota = candidate.quota
-    if (this.blockedAccounts.has(account.id)) return false
-    if (account.status !== 'active' || !quota.healthy) return false
-    if (account.allowedModels.length > 0 && !account.allowedModels.includes(request.model)) return false
+    if (this.blockedAccounts.has(account.id)) return reject('account_unavailable')
+    if (account.status !== 'active') return reject('account_unavailable')
+    if (!quota.healthy) return reject('quota_unavailable')
+    if (account.allowedModels.length > 0 && !account.allowedModels.includes(request.model)) return reject('model_unavailable')
     const remaining = validPercent(quota.remainingPercent)
     if (remaining === undefined) {
       // A contributor's personal account may still be attempted when the
       // provider has not supplied a quota signal. Shared capacity may not.
-      if (shared) return false
+      if (shared) return reject('quota_unavailable')
     } else if (remaining <= 0 || (shared && remaining <= account.personalReservePercent)) {
-      return false
+      return reject(remaining <= 0 ? 'quota_exhausted' : 'reserve_reached')
     }
 
     const state = this.accountState(account.id)
-    if (shared && state.sharedInFlight >= account.maxSharedConcurrency) return false
+    if (shared && state.sharedInFlight >= account.maxSharedConcurrency) return reject('shared_concurrency_reached')
     if (!shared || account.maxSharedRequestsPerWindow === null) return true
     const resetAt = validResetAt(quota.resetAt)
-    if (resetAt === undefined) return false
-    return (state.sharedRequestsByReset.get(resetAt) ?? 0) < account.maxSharedRequestsPerWindow
+    if (resetAt === undefined) return reject('quota_unavailable')
+    return (state.sharedRequestsByReset.get(resetAt) ?? 0) < account.maxSharedRequestsPerWindow || reject('request_cap_reached')
   }
 
   private accountState(accountId: string): AccountState {

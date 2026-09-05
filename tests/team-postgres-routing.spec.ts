@@ -81,13 +81,13 @@ describe('PostgreSQL Team request routing', () => {
       sharedInFlight: 1,
       sharedRequestsUsed: 1,
     })
-    await expect(secondHost.route({ ...request, sessionId: 'session-2' })).rejects.toBeInstanceOf(TeamRouteCapacityError)
+    await expect(secondHost.route({ ...request, sessionId: 'session-2' })).rejects.toMatchObject({ reasons: expect.arrayContaining(['shared_concurrency_reached']) })
     await firstHost.settle(admitted.lease, 'success')
     await expect(secondHost.inspectAccount(owner.teamId, account.id, 10_000)).resolves.toEqual({
       sharedInFlight: 0,
       sharedRequestsUsed: 1,
     })
-    await expect(secondHost.route({ ...request, sessionId: 'session-3' })).rejects.toBeInstanceOf(TeamRouteCapacityError)
+    await expect(secondHost.route({ ...request, sessionId: 'session-3' })).rejects.toMatchObject({ reasons: expect.arrayContaining(['request_cap_reached']) })
     await pool.end()
   })
 

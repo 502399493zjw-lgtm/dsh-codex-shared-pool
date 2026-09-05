@@ -28,6 +28,9 @@ describe('Team client Codex adapter', () => {
   it.each([
     [undefined, 'Team 请求受限'],
     ['shared_concurrency_reached', '共享并发'],
+    ['quota_unavailable', '暂时无法确认'],
+    ['model_unavailable', '未开放此模型'],
+    ['account_unavailable', '账号当前不可用'],
     ['weekly_shared_cost_reached', '每周共享预算'],
     ['untrusted-provider-secret', 'Team 请求受限'],
   ])('keeps Team 429 diagnostics distinct from ChatGPT quota (%s)', async (reason, expected) => {
