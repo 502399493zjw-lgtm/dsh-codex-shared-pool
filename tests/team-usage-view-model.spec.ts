@@ -18,6 +18,16 @@ function usage(overrides: Partial<TeamUsageAggregateInput> = {}): TeamUsageAggre
 }
 
 describe('Team usage view model', () => {
+  it('shows reservation estimates with unknown Tokens as partial data', () => {
+    expect(createTeamUsageViewModel(usage({ requestCount: 1, tokenMeasuredRequestCount: 0,
+      pricedRequestCount: 1, totalTokens: null, estimatedCostUsdMicros: '250000' })))
+      .toMatchObject({ state: 'partial', estimatedCostText: 'US$0.25', tokenCountText: '—', requestCountText: '1' })
+  })
+
+  it('still rejects price coverage greater than the total request count', () => {
+    expect(() => createTeamUsageViewModel(usage({ pricedRequestCount: 40 }))).toThrow(/requestCount/)
+  })
+
   it('derives the complete state when every request is measured and priced', () => {
     expect(createTeamUsageViewModel(usage())).toEqual({
       state: 'complete',

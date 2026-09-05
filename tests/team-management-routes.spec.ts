@@ -742,6 +742,25 @@ describe('local Team management routes', () => {
     })
   })
 
+  it.each(['owner', 'member'] as const)('passes reservation-only usage through Host and Browser for %s', async (role) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const aggregate = { requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 1,
+      totalTokens: null, estimatedCostUsdMicros: '250000' }
+    const window = { startedAt: 100, endedAt: 200 }
+    const payload = { role, window, currency: 'USD', mine: aggregate,
+      ...(role === 'owner' ? { team: aggregate } : {}),
+      ownedAccounts: [{ accountId: 'account-1', window, aggregate,
+        currentUtcWeek: { window, resetAt: 300, aggregate }, last24Hours: { window, aggregate }, recentRequests: [] }] }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+    const result = await response(route(routes, TEAM_MANAGEMENT_USAGE_PATH).handler, request('GET'))
+    expect(result).toMatchObject({ status: 200, body: payload })
+    const { createTeamManagementApi } = await import('../src/client/team/api.ts')
+    const api = createTeamManagementApi(vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } })))
+    await expect(api.usage()).resolves.toEqual(payload)
+  })
+
   it('projects aggregate-only Team usage plus safe owner windows and drops private remote details', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'

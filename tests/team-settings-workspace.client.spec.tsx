@@ -3017,6 +3017,14 @@ describe('Team subscription-pool workspace', () => {
       state: '部分数据', amount: 'US$4.20', tokens: '3,100,000 Token',
     },
     {
+      label: 'reservation-only',
+      aggregate: {
+        requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 1,
+        totalTokens: null, estimatedCostUsdMicros: '250000',
+      },
+      state: '部分数据', amount: 'US$0.25', tokens: '—',
+    },
+    {
       label: 'unpriced',
       aggregate: {
         requestCount: 39, tokenMeasuredRequestCount: 39, pricedRequestCount: 0,
