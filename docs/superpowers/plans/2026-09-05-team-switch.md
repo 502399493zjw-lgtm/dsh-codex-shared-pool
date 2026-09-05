@@ -50,5 +50,14 @@ Files: `src/client/team/api.ts`, `src/client/team/TeamSettings.tsx`, `src/client
 - [x] Document same-server scope and recovery in README.
 - [x] Run focused Host/client tests, `pnpm run build`, `pnpm run verify:package`, and stock package smoke.
 - [x] Commit only task changes, push, create draft PR targeting main.
-- [x] Independent subagent review; fix blocking findings, pass CI, then merge.
-- [ ] Update 3181 with rollback backup and verify installed package; report limits of actual runtime testing.
+- [x] Independent subagent review and re-review; fixed the pending-join OAuth race. Merge follows final CI checks.
+- [x] Update 3181 with rollback backup and verify installed package; report limits of actual runtime testing.
+
+
+## Verification evidence
+
+- Full Vitest run: 1046 passed, 24 skipped (including environment-dependent PostgreSQL tests).
+- Prototype tests: 33 passed. Build and package verification passed.
+- Final tarball installed into isolated stock DSH 0.1.0-rc.8; Web startup and browser bundle checks passed.
+- Local 3181 updated after configuration/plugin backup. Configuration contents preserved; status and connections routes passed, and served controls/installed bundle match the build.
+- Live team membership switching and real provider OAuth were not performed against the user's shared instance.

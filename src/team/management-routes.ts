@@ -1602,6 +1602,10 @@ class TeamManagementProxy {
     for (const ref of [this.pendingJoinRef(), this.pendingDissolutionRef(), this.terminalDissolutionRef(), this.connectionTerminalRef()]) {
       if ((await this.credentials.describe(ref)).configured) throw new Error('finish pending Team recovery before switching')
     }
+    await this.requireNoPendingBrowserOAuth()
+  }
+
+  private async requireNoPendingBrowserOAuth(): Promise<void> {
     if (this.browserOAuth.size > 0 || (await this.pendingBrowserOAuthJournal()).length > 0) {
       throw new Error('finish or cancel Team authorization before switching')
     }
@@ -1668,13 +1672,14 @@ class TeamManagementProxy {
   }
 
   async recoverJoin(): Promise<TeamManagementConnectionResult> {
-    return this.withCredentialTransition(async () => {
+    return this.withCredentialTransition(() => this.withBrowserOAuthLifecycleTransition(async () => {
       const active = await this.requireWritable()
       const pending = await this.pendingJoin()
       const activeKey = active.configured ? (await this.credentials.resolve(this.keyRef()))?.value : undefined
       if (active.configured && activeKey !== pending.apiKey && activeKey !== pending.previousKey) {
         throw new Error('pending Team join belongs to a different active Team connection')
       }
+      if (activeKey !== pending.apiKey) await this.requireNoPendingBrowserOAuth()
       try {
         const overview = projectOverview(await this.remote(TEAM_OVERVIEW_PATH, { key: pending.apiKey, diagnoseTerminal: false }))
         await this.promotePendingJoin(pending)
@@ -1693,7 +1698,7 @@ class TeamManagementProxy {
         }
         throw error
       }
-    })
+    }))
   }
 
   async discardPendingJoin(): Promise<{ discarded: true }> {
@@ -2083,6 +2088,9 @@ class TeamManagementProxy {
   ): Promise<TeamManagementOAuthResult> {
     try {
       const start = async (): Promise<TeamManagementOAuthResult> => {
+        if ((await this.credentials.describe(this.pendingJoinRef())).configured) {
+          throw new Error('finish pending Team join recovery before authorization')
+        }
         const { key, overview } = await this.expectedMutationContext(expectedContext)
         const validationIntent = await this.resolveLocalAccountValidationIntent(method, sourceLocalProfileId)
         const bindings = validationIntent === undefined ? [] : await this.localContributionBindings()
@@ -2247,6 +2255,9 @@ class TeamManagementProxy {
   ): Promise<TeamManagementOAuthResult> {
     try {
       const reauthorize = async (): Promise<TeamManagementOAuthResult> => {
+        if ((await this.credentials.describe(this.pendingJoinRef())).configured) {
+          throw new Error('finish pending Team join recovery before authorization')
+        }
         const { key, overview } = await this.expectedMutationContext(expectedContext)
         const persistedOperation = method === 'browser'
           ? (await this.pendingBrowserOAuthJournal()).find(candidate => (

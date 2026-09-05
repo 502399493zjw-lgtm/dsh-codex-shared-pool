@@ -5053,4 +5053,34 @@ describe('saved Team connections', () => {
     expect(listed.body.connections).toEqual([])
   })
 
+
+  it.each([
+    { path: TEAM_MANAGEMENT_OAUTH_START_PATH, body: { label: 'Personal Pro', method: 'browser' } },
+    { path: TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH, body: { accountId: 'account-1', method: 'browser' } },
+  ])('blocks authorization from an old page while another Team join is pending: $path', async ({ path, body }) => {
+    const env = fixture()
+    env.failJoin()
+    await env.joinOther()
+    const callsBefore = env.fetch.mock.calls.length
+    const started = await env.call(path, withExpectedContext(body))
+    expect(started.status).toBeGreaterThanOrEqual(400)
+    expect(env.fetch.mock.calls.length).toBe(callsBefore)
+    expect(env.credentials.value).toBe(oldKey)
+  })
+
+  it('preserves existing authorization recovery metadata instead of switching during join recovery', async () => {
+    const env = fixture()
+    env.failJoin()
+    await env.joinOther()
+    const journal = JSON.stringify({ version: 1, operations: [{ expectedContext: EXPECTED_CONTEXT,
+      pending: { accountId: 'account-1', method: 'browser', expiresAt: Date.now() + 900_000, discardInitial: true },
+    }] })
+    env.credentials.put(BROWSER_OAUTH_PENDING_REF, journal)
+    const restarted = setup(config, env.credentials, env.fetch)
+    const recovered = await response(route(restarted.routes, TEAM_MANAGEMENT_JOIN_RECOVER_PATH).handler, request('POST', {}))
+    expect(recovered.status).toBeGreaterThanOrEqual(400)
+    expect(env.credentials.value).toBe(oldKey)
+    expect(env.credentials.get(BROWSER_OAUTH_PENDING_REF)).toBe(journal)
+  })
+
 })
