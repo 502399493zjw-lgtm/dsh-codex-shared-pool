@@ -257,3 +257,11 @@ it('keeps portaled menus scrollable without narrow-screen left anchoring', () =>
   expect(css).not.toMatch(/\.teamMenuPopover\s*\{[^}]*left:\s*0;/s)
   expect(css).toMatch(/\.teamConnectionsFooter\s*\{[^}]*grid-template-columns:\s*1fr 1fr;/s)
 })
+
+it('keeps the team-name trigger on one line without shrinking away its horizontal padding', () => {
+  expect(css).toMatch(/\.teamSelectorTrigger\s*\{[^}]*min-width:\s*0;[^}]*margin:\s*-4px 0;[^}]*font:\s*inherit;/s)
+  expect(css).toMatch(/\.teamSelectorName\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s)
+  expect(css).toMatch(/\.teamName\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0;/s)
+  expect(css).toMatch(/\.workspaceTeamName\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0;/s)
+  expect(css).toMatch(/\.workspaceIdentity\s*\{[^}]*max-width:\s*100%;/s)
+})
