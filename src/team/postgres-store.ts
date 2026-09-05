@@ -909,6 +909,15 @@ export const POSTGRES_TEAM_MIGRATIONS: readonly PostgresTeamMigration[] = [{
       ADD CONSTRAINT team_usage_events_reserved_estimated_cost_check
       CHECK (reserved_estimated_cost_usd_micros >= 0);
   `,
+}, {
+  version: 22,
+  // Some restored databases recorded migration 9 without its label column.
+  // Append a repair migration so the schema-owner migrator can recover them
+  // without rewriting history or changing existing invitation credentials.
+  sql: `
+    ALTER TABLE team_invites
+      ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT 'Team invitation';
+  `,
 }]
 
 interface TeamRow extends QueryResultRow {
@@ -1260,6 +1269,12 @@ export class PostgresTeamStore implements TeamStore {
       await this.pool.query(`
         SELECT total_tokens, estimated_cost_usd_micros, pricing_catalog_version
         FROM team_usage_events WHERE false
+      `)
+      await this.pool.query(`
+        SELECT label, envelope_version, envelope_key_ref, envelope_wrapped_dek,
+          envelope_wrapped_dek_nonce, envelope_wrapped_dek_tag, envelope_nonce,
+          envelope_ciphertext, envelope_tag
+        FROM team_invites WHERE false
       `)
     } catch (error: unknown) {
       if (typeof error === 'object' && error !== null && 'code' in error

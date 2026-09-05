@@ -258,6 +258,36 @@ describe('PostgreSQL Team store', () => {
     expect(pool.connect).not.toHaveBeenCalled()
   })
 
+  it('repairs a missing invitation label on an already migrated database without losing invites', async () => {
+    const pool = testPool()
+    const original = testStore({ pool })
+    const boot = await original.bootstrap('Friends', 'Owner')
+    const owner = (await original.authenticateApiKey(boot.apiKey))!
+    const existing = await original.createInvite(owner, 60_000, 'Team invitation')
+    await pool.query('ALTER TABLE team_invites DROP COLUMN label')
+    await pool.query('DELETE FROM team_schema_migrations WHERE version = 22')
+
+    const upgraded = testStore({ pool })
+    await upgraded.initialize()
+    const created = await upgraded.createInvite(owner, 60_000, 'New invitation')
+    expect(created.invite.label).toBe('New invitation')
+    expect(await upgraded.revealInvite(owner, existing.invite.id)).toMatchObject({ inviteToken: existing.inviteToken })
+    expect(await pool.query('SELECT label FROM team_invites WHERE id = $1', [existing.invite.id]))
+      .toMatchObject({ rows: [{ label: 'Team invitation' }] })
+    await testStore({ pool }).initialize()
+    expect(await upgraded.revealInvite(owner, created.invite.id)).toMatchObject({ inviteToken: created.inviteToken })
+    await pool.end()
+  })
+
+  it.each(['label', 'envelope_ciphertext'])('rejects missing invitation %s even with current migration history', async column => {
+    const pool = testPool()
+    await testStore({ pool }).initialize()
+    await pool.query(`ALTER TABLE team_invites DROP COLUMN ${column}`)
+    // pg-mem reports undefined columns without PostgreSQL's 42703 code.
+    await expect(testStore({ pool }).initialize()).rejects.toThrow(/column.*does not exist|Team database schema/)
+    await pool.end()
+  })
+
   it('skips schema DDL when every migration is already present for a restricted runtime role', async () => {
     const query = vi.fn(async () => ({
       rows: POSTGRES_TEAM_MIGRATIONS.map(migration => ({ version: migration.version })),

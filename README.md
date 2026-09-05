@@ -163,7 +163,7 @@ docker compose -f deploy/self-hosted/compose.yml run --rm team-migrations
 docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-host credential-broker team-edge
 ```
 
-非 Compose 部署使用同版本包的 `dsh-codex-team-migrate`，通过管理员的私密配置提供 `DSH_CODEX_SHARED_POOL_DATABASE_URL`，不要给运行中的 Host/Broker 增加 schema-owner 权限。初始化会检查用量表的实际字段，而不只信任迁移版本记录；若迁移记录齐全但字段仍缺失，说明数据库结构与迁移历史不一致，应停止升级、检查备份/恢复过程并修复结构，不要清空数据库或删除迁移记录来绕过检查。
+非 Compose 部署使用同版本包的 `dsh-codex-team-migrate`，通过管理员的私密配置提供 `DSH_CODEX_SHARED_POOL_DATABASE_URL`，不要给运行中的 Host/Broker 增加 schema-owner 权限。迁移 22 会为缺失 `team_invites.label` 的旧库补回字段，并将缺失的邀请说明设为 `Team invitation`；保留已有说明、邀请码摘要和加密内容，不会重发或撤销邀请。它不会恢复已经丢失的原说明。初始化会检查用量表和邀请码表的实际字段，而不只信任迁移版本记录；若迁移记录齐全但字段仍缺失，说明数据库结构与迁移历史不一致，应停止升级、检查备份/恢复过程并修复结构，不要清空数据库或删除迁移记录来绕过检查。
 
 ## 开发与验证
 
