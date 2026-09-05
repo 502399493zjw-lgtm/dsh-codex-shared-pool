@@ -180,7 +180,7 @@ export class TeamService {
   }
 
   /** Minimum role-shaped document for authenticated HTTP callers. */
-  async overviewProjection(auth: TeamAuthContext): Promise<TeamOverviewProjection> {
+  async overviewProjection(auth: TeamAuthContext, includeSharedDetails = false): Promise<TeamOverviewProjection> {
     const overview = await this.overview(auth)
     const isOwner = auth.role === 'owner'
     const liveKeyMemberIds = new Set(
@@ -201,13 +201,26 @@ export class TeamService {
             && liveKeyMemberIds.has(member.id),
         })),
       contributions: overview.contributions.filter(account => account.ownerMemberId === auth.memberId),
-      activeSharedAccounts: overview.contributions
+      activeSharedAccounts: await Promise.all(overview.contributions
         .filter(account => account.status === 'active')
-        .map(account => ({
-          id: account.id,
-          label: account.label,
-          ownerMemberId: account.ownerMemberId,
-          status: 'active' as const,
+        .map(async original => {
+          const account = includeSharedDetails && original.capacity === undefined ? await this.projectOwnedCapacity(original) : original
+          return {
+            id: account.id,
+            label: account.label,
+            ownerMemberId: account.ownerMemberId,
+            status: 'active' as const,
+            ...(includeSharedDetails ? {
+              sharing: {
+                personalReservePercent: account.personalReservePercent,
+                maxSharedRequestsPerWindow: account.maxSharedRequestsPerWindow,
+                weeklySharedEstimatedApiCostLimitMicros: account.weeklySharedEstimatedApiCostLimitMicros ?? null,
+                maxSharedConcurrency: account.maxSharedConcurrency,
+                allowedModels: account.allowedModels,
+              },
+              capacity: account.capacity,
+            } : {}),
+          }
         })),
       ...(overview.displayNameMigrationNotice === undefined
         ? {}

@@ -157,6 +157,8 @@ export type TeamManagementSharedAccountDirectoryEntry = Pick<TeamSharedAccountDi
   | 'label'
   | 'ownerMemberId'
   | 'status'
+  | 'sharing'
+  | 'capacity'
 >
 
 /** Browser writes may change only this explicit sharing-control allow-list. */

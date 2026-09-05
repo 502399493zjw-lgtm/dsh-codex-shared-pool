@@ -2172,6 +2172,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     }
 
     const renderSharedDirectoryAccount = (account: TeamManagementSharedAccountDirectoryEntry) => {
+      const sharing = account.sharing
+      const subscription = account.capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
       const contributor = contributorNameFor(account)
       const contributionLabel = t('contributedBy', { name: contributor })
       return (
@@ -2183,6 +2185,31 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <span className={styles.statusText}>{contributionLabel} · {t('teamShared')}</span>
             </span>
           </header>
+          <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
+            <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
+            <dl className={styles.compactSummaryList}>
+              <div><dt>{t('weeklyLimitLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.weeklySharedEstimatedApiCostLimitMicros === null ? '∞' : formatWeeklyUsdMicros(sharing.weeklySharedEstimatedApiCostLimitMicros)}</dd></div>
+              <div><dt>{t('reserveLabel')}</dt><dd>{sharing === undefined ? '—' : `${sharing.personalReservePercent}%`}</dd></div>
+              <div><dt>{t('requestCapLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.maxSharedRequestsPerWindow ?? '∞'}</dd></div>
+              <div><dt>{t('sharedConcurrencyLabel')}</dt><dd>{sharing?.maxSharedConcurrency ?? '—'}</dd></div>
+              <div><dt>{t('allowedModelsLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.allowedModels.length === 0 ? t('allModels') : sharing.allowedModels.join(', ')}</dd></div>
+            </dl>
+            <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
+          </section>
+          <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('accountRemainingCapacity')}>
+            <h4 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h4>
+            {account.capacity === undefined ? <p>{t('capacityQuotaUnavailable')}</p> : account.capacity.buckets.map(bucket => (
+              <div key={bucket.id}>
+                <dl className={styles.compactSummaryList}>
+                  <div><dt>{bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}</dt><dd>{bucket.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}</dd></div>
+                </dl>
+                <p>{t(CAPACITY_REASON_LOCALE_KEYS[bucket.reason])}</p>
+                {bucket.sharedRequestsUsed === undefined ? null : <p>{t('capacityRequestsUsed', { count: bucket.sharedRequestsUsed, cap: sharing?.maxSharedRequestsPerWindow ?? '∞' })}</p>}
+                {bucket.resetAt === undefined ? null : <p>{t('capacityResetAt', { time: new Date(bucket.resetAt).toLocaleString() })}</p>}
+              </div>
+            ))}
+            {account.capacity?.sharedInFlight === undefined ? null : <p>{t('capacityInFlight', { count: account.capacity.sharedInFlight })}</p>}
+          </section>
           <section className={styles.teamActionPanel} aria-label={t('sharedAccountReadonlyTitle')}>
             <p>{t('sharedAccountReadonlyHint')}</p>
           </section>

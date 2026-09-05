@@ -194,6 +194,16 @@ describe('Team management browser API', () => {
     })).toThrow(/pending browser authorization|authorizing account/iu)
   })
 
+  it('preserves teammate sharing limits and quota without granting management access', () => {
+    const sharing = { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
+      weeklySharedEstimatedApiCostLimitMicros: 50_000_000, allowedModels: ['gpt-5-codex'] }
+    const capacity = { sharedInFlight: 1, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 74 }] }
+    const parsed = parseTeamManagementOverview({ ...overview(), activeSharedAccounts: [{
+      id: 'account-2', label: 'Friend Codex', ownerMemberId: 'member-2', status: 'active', sharing, capacity,
+    }] })
+    expect(parsed.activeSharedAccounts[0]).toMatchObject({ sharing, capacity })
+  })
+
   it('rejects private fields in the active shared-account directory', () => {
     expect(() => parseTeamManagementOverview({
       ...overview(),

@@ -58,6 +58,29 @@ class CapacityBroker extends NoopCredentialBroker {
 }
 
 describe('Team request admission service', () => {
+  it('keeps teammate limits visible when their quota provider fails', async () => {
+    const store = new MemoryTeamStore()
+    const broker = new CapacityBroker()
+    broker.readUsage = async () => { throw new Error('provider unavailable') }
+    const service = new TeamService({ store, broker })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = (await store.authenticateApiKey(boot.apiKey))!
+    const invite = await store.createInvite(owner, 60_000)
+    const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+    const friend = (await store.authenticateApiKey(joined.apiKey))!
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.updateContributionAccount(owner, account.id, { personalReservePercent: 20, allowedModels: ['gpt-5-codex'] })
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+
+    const projection = await service.overviewProjection(friend, true)
+    expect(projection.activeSharedAccounts).toMatchObject([{
+      id: account.id,
+      sharing: { personalReservePercent: 20 },
+      capacity: { buckets: [{ id: 'codex', reason: 'provider_unavailable' }] },
+    }])
+    expect(projection.activeSharedAccounts[0]?.capacity?.buckets[0]).not.toHaveProperty('remainingPercent')
+  })
+
   it('projects live capacity only for the contribution owned by the current member', async () => {
     let id = 0
     const store = new MemoryTeamStore({ id: () => `id-${++id}` })
@@ -82,6 +105,17 @@ describe('Team request admission service', () => {
     await store.updateContributionAccount(friend, friendCreated.id, { allowedModels: ['gpt-5-codex'] })
     await store.setContributionAccountStatus(owner.teamId, ownerCreated.id, 'active')
     await store.setContributionAccountStatus(owner.teamId, friendCreated.id, 'active')
+
+    const memberProjection = await service.overviewProjection(friend, true)
+    expect(memberProjection.activeSharedAccounts.find(account => account.id === ownerCreated.id)).toMatchObject({
+      sharing: { personalReservePercent: 45, maxSharedRequestsPerWindow: 2, maxSharedConcurrency: 1,
+        weeklySharedEstimatedApiCostLimitMicros: null, allowedModels: ['gpt-5-codex'] },
+      capacity: { buckets: [{ id: 'codex', remainingPercent: 40, reason: 'reserve_reached' }] },
+    })
+    expect(memberProjection.contributions.every(account => account.ownerMemberId === friend.memberId)).toBe(true)
+    broker.reads.length = 0
+    service.capacity.invalidate({ teamId: owner.teamId, accountId: ownerCreated.id })
+    service.capacity.invalidate({ teamId: owner.teamId, accountId: friendCreated.id })
 
     const ownerOverview = await service.overview(owner)
     expect(ownerOverview.contributions.find(account => account.id === ownerCreated.id)?.capacity).toEqual({
