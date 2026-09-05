@@ -132,13 +132,13 @@ describe('Team Settings responsive container contract', () => {
 
   it('pins the approved Team prototype palette inside the DSH dark-theme scope', () => {
     expect(css).toMatch(
-      /:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-context-layer:\s*#272a2e;[^}]*--team-workspace-layer:\s*#2b2e32;/s,
+      /:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-context-layer:\s*#272a2e;[^}]*--team-workspace-layer:\s*#2b2e32;/s,
     )
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-line:\s*#383c42;[^}]*--team-line-strong:\s*#44484f;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-skeleton-strong:\s*#474c53;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-ink:\s*#f3f5f7;[^}]*--team-muted:\s*#afb5bd;[^}]*--team-faint:\s*#7f8791;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-blue:\s*#8bb8ff;[^}]*--team-blue-strong:\s*#5d91ed;[^}]*--team-green:\s*#50d890;[^}]*--team-red:\s*#ff747b;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page\s*\{[^}]*--team-selected-layer:\s*#333c4c;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-line:\s*#383c42;[^}]*--team-line-strong:\s*#44484f;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-skeleton-strong:\s*#474c53;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-ink:\s*#f3f5f7;[^}]*--team-muted:\s*#afb5bd;[^}]*--team-faint:\s*#7f8791;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-blue:\s*#8bb8ff;[^}]*--team-blue-strong:\s*#5d91ed;[^}]*--team-green:\s*#50d890;[^}]*--team-red:\s*#ff747b;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-selected-layer:\s*#333c4c;/s)
     expect(css).toMatch(/\.accountNavItem\[data-selected='true'\]\s*\{[^}]*border-color:\s*var\(--team-blue-strong\);[^}]*background:\s*var\(--team-selected-layer\);/s)
     expect(css).toMatch(/\.page \.stopSharingButton\s*\{[^}]*background:\s*rgba\(255,\s*116,\s*123,\s*\.08\);/s)
     expect(subscriptionPoolCss).toMatch(
@@ -236,5 +236,18 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(
       /\.select\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);/s,
     )
+  })
+})
+
+
+describe('invitation visual layout', () => {
+  it('shares theme tokens with body-portaled invitation dialogs', () => {
+    expect(css).toMatch(/\.page,\s*\.inviteDialog\s*\{[^}]*--team-line:/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-ink:/s)
+  })
+
+  it('keeps invitation actions together and allows wrapping in narrow slots', () => {
+    expect(css).toMatch(/\.inviteActions\s*\{[^}]*flex-wrap:\s*wrap;[^}]*flex-direction:\s*row;/s)
+    expect(css).toMatch(/\.workspaceBody > \.workspaceSection:first-child\s*\{[^}]*border-top:\s*0;/s)
   })
 })
