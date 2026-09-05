@@ -1,4 +1,5 @@
-.page {
+.page,
+.inviteDialog {
   --team-blue: var(--dsw-alias-state-business-primary, #3964fe);
   --team-blue-strong: var(--team-blue);
   --team-green: var(--dsw-alias-state-success-primary, #168f61);
@@ -19,6 +20,9 @@
   --team-danger-layer: color-mix(in srgb, var(--team-red) 8%, transparent);
   --team-skeleton: color-mix(in srgb, var(--team-ink) 10%, var(--team-workspace-layer));
   --team-skeleton-strong: color-mix(in srgb, var(--team-ink) 15%, var(--team-workspace-layer));
+}
+
+.page {
   box-sizing: border-box;
   container-name: team-settings;
   container-type: inline-size;
@@ -31,7 +35,8 @@
   color: var(--team-ink);
 }
 
-:global(body[data-ds-dark-theme]) .page {
+:global(body[data-ds-dark-theme]) .page,
+:global(body[data-ds-dark-theme]) .inviteDialog {
   --team-context-layer: #272a2e;
   --team-workspace-layer: #2b2e32;
   --team-line: #383c42;
@@ -261,7 +266,7 @@
   overflow-wrap: anywhere;
   margin: 0;
   color: var(--team-ink);
-  font-size: clamp(25px, 4.4cqi, 32px);
+  font-size: clamp(20px, 3cqi, 24px);
   font-weight: 680;
   letter-spacing: -0.025em;
   line-height: 1.12;
@@ -380,6 +385,11 @@
   padding-top: 24px;
 }
 
+.workspaceBody > .workspaceSection:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .workspaceSectionHeader {
   display: flex;
   min-width: 0;
@@ -401,10 +411,10 @@
 .workspaceSectionTitle {
   margin: 0 0 6px;
   color: var(--team-ink);
-  font-size: 22px;
-  font-weight: 680;
+  font-size: 18px;
+  font-weight: 600;
   letter-spacing: -0.015em;
-  line-height: 30px;
+  line-height: 26px;
 }
 
 .workspaceBody > .usageWorkspace {
@@ -1247,8 +1257,7 @@
   padding: 2px 0 18px;
 }
 
-.settingsPageHeader > :last-child,
-.inviteRow > :last-child {
+.settingsPageHeader > :last-child {
   flex: 0 0 auto;
 }
 
@@ -1962,16 +1971,18 @@
 .inviteIdentity {
   flex-direction: column;
   align-items: flex-start;
-  gap: 1px;
+  gap: 4px;
+  overflow-wrap: anywhere;
 }
 
 .inviteActions {
   display: flex;
-  max-width: 240px;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
+  max-width: 100%;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .inviteNotRevealable {
@@ -3022,6 +3033,73 @@
 .page :global(select:focus-visible),
 .page :global(summary:focus-visible),
 .page :global(a:focus-visible) {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 2px;
+}
+
+
+/* Plugin-owned dialog scope also carries tokens across the stock body portal. */
+.inviteDialog[role='dialog'] {
+  width: min(420px, 100%);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 16px;
+  background: var(--team-layer);
+  color: var(--team-ink);
+  gap: 24px;
+}
+
+.inviteDialogContent h2 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.inviteDialogContent > p {
+  color: var(--team-muted);
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.inviteDialog .select {
+  box-sizing: border-box;
+  background: var(--team-layer-soft);
+
+}
+
+.inviteDialog .modalActions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.inviteDialog .modalActions > button,
+.page .workspaceSectionHeader > button,
+.page .inviteActions > button {
+  min-height: 36px;
+  height: auto;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.page .inviteActions > button {
+  white-space: normal;
+  text-align: center;
+}
+
+.page .inviteActions > button:last-child {
+  color: var(--team-red);
+}
+
+.page .teamMenu > button {
+  width: 36px;
+  min-height: 36px;
+  border-radius: 8px;
+}
+
+.inviteDialog :focus-visible {
   outline: 2px solid var(--team-blue);
   outline-offset: 2px;
 }

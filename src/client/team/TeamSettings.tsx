@@ -3107,6 +3107,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       </Modal>
 
       <Modal
+        className={styles.inviteDialog!}
+        contentClassName={styles.inviteDialogContent!}
         open={activeInviteDraft !== undefined}
         onClose={closeInviteDraft}
         title={t('createInviteTitle')}
