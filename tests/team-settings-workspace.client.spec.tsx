@@ -1567,13 +1567,21 @@ describe('Team subscription-pool workspace', () => {
       return timer
     })
     vi.spyOn(globalThis, 'clearInterval').mockImplementation(timer => { callbacks.delete(Number(timer)) })
+    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
+      capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 98 }] },
+    }] }
     render(<TeamSettings t={translate} embedded />)
-    await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
+    expect(within(panel).getByText('98%')).toBeDefined()
     managementApi.overview.mockRejectedValueOnce(new Error('temporary outage'))
     await act(async () => { [...callbacks.values()].forEach(callback => callback()) })
-    expect(screen.queryByRole('region', { name: zh.teamPanelTitle })).toBeNull()
+    expect(screen.getByRole('region', { name: zh.teamPanelTitle })).toBeDefined()
+    expect(within(panel).queryByText('98%')).toBeNull()
+    const callsAfterFailure = managementApi.overview.mock.calls.length
     await act(async () => { [...callbacks.values()].forEach(callback => callback()) })
-    expect(await screen.findByRole('region', { name: zh.teamPanelTitle })).toBeDefined()
+    expect(managementApi.overview.mock.calls.length).toBeGreaterThan(callsAfterFailure)
+    expect(await within(panel).findByText('98%')).toBeDefined()
   })
 
   it('shows teammate quota and limits as read-only details', async () => {
@@ -1669,6 +1677,57 @@ describe('Team subscription-pool workspace', () => {
       )
     })
     expect(managementApi.updateContribution).not.toHaveBeenCalled()
+  })
+
+  it('refreshes provider capacity while the account detail remains open', async () => {
+    overviewState = { ...overviewState, contributions: [{ ...mine,
+      capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 98 }] },
+    }] }
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const remaining = () => within(heading.closest('article')!)
+      .getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent
+    expect(remaining()).toBe('98%')
+    overviewState = { ...overviewState, contributions: [{ ...mine,
+      capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 25 }] },
+    }] }
+    // Capture the actual mounted poll callback without speeding up unrelated timers.
+    const polls = intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000)
+    await act(async () => {
+      for (const [callback] of polls) await (callback as () => void)()
+    })
+    expect(remaining()).toBe('25%')
+  })
+
+  it('retries capacity polling after a transient overview failure', async () => {
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    await screen.findByRole('heading', { name: mine.label })
+    const poll = () => intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000).at(-1)![0] as () => void
+    managementApi.overview.mockRejectedValueOnce(new Error('temporary failure'))
+    await act(async () => { await poll()() })
+    expect(screen.getByRole('heading', { name: mine.label })).toBeDefined()
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent)
+      .toBe(zh.capacityQuotaUnavailable)
+    await act(async () => { await poll()() })
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+  })
+
+  it('preserves an open invite reveal during a background capacity read', async () => {
+    overviewState = { ...overviewState, invites: [pendingInvite('invite-1', '新邀请', true)] }
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval')
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.revealInvite }))
+    await screen.findByText(REVEALED_INVITE_TOKEN)
+    let resolveOverview!: (value: typeof overviewState) => void
+    managementApi.overview.mockImplementationOnce(() => new Promise(resolve => { resolveOverview = resolve }))
+    const poll = intervalSpy.mock.calls.filter(([, delay]) => delay === 60_000).at(-1)![0] as () => void
+    await act(async () => { void poll() })
+    expect(screen.getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
+    await act(async () => { resolveOverview(overviewState) })
+    expect(screen.getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
   })
 
   it('places subscription details below remaining capacity in the weekly summary', async () => {
@@ -3066,6 +3125,14 @@ describe('Team subscription-pool workspace', () => {
         totalTokens: '3100000', estimatedCostUsdMicros: '4200000',
       },
       state: '部分数据', amount: 'US$4.20', tokens: '3,100,000 Token',
+    },
+    {
+      label: 'reservation-only',
+      aggregate: {
+        requestCount: 1, tokenMeasuredRequestCount: 0, pricedRequestCount: 1,
+        totalTokens: null, estimatedCostUsdMicros: '250000',
+      },
+      state: '部分数据', amount: 'US$0.25', tokens: '—',
     },
     {
       label: 'unpriced',
