@@ -265,3 +265,14 @@ it('keeps the team-name trigger on one line without shrinking away its horizonta
   expect(css).toMatch(/\.workspaceTeamName\s*\{[^}]*max-width:\s*100%;[^}]*min-width:\s*0;/s)
   expect(css).toMatch(/\.workspaceIdentity\s*\{[^}]*max-width:\s*100%;/s)
 })
+
+it('centers the team-name chevron independently of font metrics', () => {
+  expect(css).toMatch(/\.teamSelectorChevron\s*\{[^}]*display:\s*flex;[^}]*width:\s*14px;[^}]*height:\s*14px;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;/s)
+})
+
+it('gives join and create a visible button surface and distinct interaction states', () => {
+  expect(css).toMatch(/\.teamConnectionsFooter button\s*\{[^}]*min-width:\s*0;[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*background:\s*var\(--team-layer-soft\);/s)
+  expect(css).toMatch(/\.teamConnectionsFooter button:not\(:disabled\):hover\s*\{[^}]*border-color:\s*var\(--team-blue-strong\);[^}]*background:\s*var\(--team-selected-layer\);/s)
+  expect(css).toMatch(/\.teamConnectionsFooter button:not\(:disabled\):focus-visible\s*\{[^}]*outline:\s*2px solid var\(--team-blue-strong\);[^}]*outline-offset:\s*2px;/s)
+  expect(css).toMatch(/\.teamConnectionsFooter button:disabled\s*\{[^}]*color:\s*var\(--team-faint\);[^}]*cursor:\s*default;/s)
+})

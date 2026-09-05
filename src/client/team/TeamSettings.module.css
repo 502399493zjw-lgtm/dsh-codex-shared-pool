@@ -3157,10 +3157,13 @@
 }
 
 .teamSelectorChevron {
+  display: flex;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
   color: var(--team-muted);
-  font-size: 17px;
-  font-weight: 400;
 }
 
 .teamConnectionsMenu button {
@@ -3215,7 +3218,31 @@
 }
 
 .teamConnectionsFooter button {
+  min-width: 0;
   justify-content: center;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 8px;
+  background: var(--team-layer-soft);
+  font-weight: 600;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.teamConnectionsFooter button:not(:disabled):hover {
+  border-color: var(--team-blue-strong);
+  background: var(--team-selected-layer);
+}
+
+.teamConnectionsFooter button:not(:disabled):focus-visible {
+  outline: 2px solid var(--team-blue-strong);
+  outline-offset: 2px;
+}
+
+.teamConnectionsFooter button:disabled {
+  border-color: var(--team-line);
+  background: var(--team-layer-soft);
+  color: var(--team-faint);
+  cursor: default;
 }
 
 .teamSetup,

@@ -79,6 +79,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
   ) : null,
   Pill: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   StateDot: ({ state }: { state: string }) => <span data-state={state} />,
+  IconChevronDownOutline14: ({ size = 14, className }: { size?: number, className?: string }) => <svg width={size} height={size} className={className} />,
   IconCopyOutline16: () => null,
   IconLinkOutline16: () => null,
   IconPauseOutline16: () => null,
@@ -4022,6 +4023,18 @@ it('places the selected Team and bottom join/create actions in the Team-name dro
   menu = screen.getByRole('menu', { name: zh.switchTeam })
   expect(settings.contains(menu)).toBe(false)
   expect(within(menu).getByRole('menuitem', { name: '创建团队' })).toBeDefined()
+})
+
+it('uses a decorative SVG chevron in both team-name triggers instead of a text glyph', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  const trigger = await screen.findByRole('button', { name: '周末造物局' })
+  const chevron = trigger.querySelector(`.${styles.teamSelectorChevron}`)!
+  expect(chevron.getAttribute('aria-hidden')).toBe('true')
+  expect(chevron.querySelector('svg')).not.toBeNull()
+  expect(chevron.textContent).toBe('')
+  const settings = await openTeamSettings()
+  const settingsTrigger = within(settings).getByRole('button', { name: '周末造物局' })
+  expect(settingsTrigger.querySelector(`.${styles.teamSelectorChevron} svg`)).not.toBeNull()
 })
 
 it('creates from the name dropdown and only reveals the recovery code after explicit export', async () => {
