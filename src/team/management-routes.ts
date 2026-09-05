@@ -1592,7 +1592,6 @@ class TeamManagementProxy {
     try {
       const item = record(JSON.parse(raw ?? ''), 'pending Team setup')
       if (item.version !== 1 || (item.kind !== 'create' && item.kind !== 'recover')) throw new Error()
-      if ((await this.savedConnections()).length >= 100) throw new Error('saved Team connection limit reached')
       const pending: PendingTeamSetup = {
         version: 1, kind: item.kind, serverUrl: requiredString(item, 'serverUrl'),
         apiKey: requiredString(item, 'apiKey'), recoveryCode: requiredString(item, 'recoveryCode'),
@@ -1664,6 +1663,7 @@ class TeamManagementProxy {
         const current = await this.expectedMutationContext(expectedContext)
         await this.saveConnection(current.key, current.overview)
       } else if (expectedContext !== null) throw new TeamManagementContextMismatchError()
+      if ((await this.savedConnections()).length >= 100) throw new Error('saved Team connection limit reached')
       const pending: PendingTeamSetup = {
         version: 1, ...input, serverUrl: this.requireEnabled(),
         apiKey: `dsh_team_${randomBytes(32).toString('base64url')}`,
