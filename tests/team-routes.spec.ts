@@ -12,6 +12,8 @@ import {
 } from '../src/team/index.ts'
 import {
   TEAM_BOOTSTRAP_PATH,
+  TEAM_CREATE_PATH,
+  TEAM_RECOVER_OWNER_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
@@ -1405,5 +1407,39 @@ describe('Team control-plane routes', () => {
     await cleanups[0]!()
     expect(broker.disposals).toBe(0)
     cleanups.shift()
+  })
+})
+
+
+describe('anonymous Team provisioning routes', () => {
+  const body = { creationToken: `dsh_create_${'a'.repeat(43)}`, teamName: 'Public Team', ownerName: 'Owner', apiKey: `dsh_team_${'b'.repeat(43)}`, recoveryCode: `dsh_recovery_${'c'.repeat(43)}` }
+  it('allows credential-free creation/recovery while returning only identity summaries', async () => {
+    const routes = setup()
+    const create = routes.find(route => route.path === TEAM_CREATE_PATH)!
+    const recover = routes.find(route => route.path === TEAM_RECOVER_OWNER_PATH)!
+    expect(create).toBeDefined()
+    expect(recover).toBeDefined()
+    const created = await response(create.handler, request('POST', body, { 'content-type': 'application/json' }, '203.0.113.9'))
+    expect(created.status).toBe(201)
+    expect(Object.keys(created.body).sort()).toEqual(['member', 'team'])
+    const recovered = await response(recover.handler, request('POST', { recoveryCode: body.recoveryCode, apiKey: `dsh_team_${'d'.repeat(43)}` }, { 'content-type': 'application/json' }, '203.0.113.9'))
+    expect(recovered).toEqual(created)
+  })
+  it('rejects unknown fields, non-POST methods and malformed secrets', async () => {
+    const create = setup().find(route => route.path === TEAM_CREATE_PATH)!
+    expect(create).toBeDefined()
+    expect((await response(create.handler, request('GET', undefined))).status).toBe(405)
+    expect((await response(create.handler, request('POST', { ...body, role: 'owner' }, { 'content-type': 'application/json' }))).status).toBe(400)
+    expect((await response(create.handler, request('POST', { ...body, recoveryCode: 'short' }, { 'content-type': 'application/json' }))).status).toBe(400)
+  })
+  it('rate limits anonymous attempts before parsing regardless of spoofed forwarding headers', async () => {
+    const create = setup().find(route => route.path === TEAM_CREATE_PATH)!
+    expect(create).toBeDefined()
+    for (let i = 0; i < 30; i++) {
+      await response(create.handler, request('POST', {}, { 'content-type': 'application/json', 'x-forwarded-for': `203.0.113.${i}` }, '203.0.113.9'))
+    }
+    const headers: Record<string, string> = {}
+    expect((await response(create.handler, request('POST', body, { 'content-type': 'application/json', 'x-forwarded-for': '198.51.100.1' }, '198.51.100.1'), headers)).status).toBe(429)
+    expect(Number(headers['retry-after'])).toBeGreaterThan(0)
   })
 })

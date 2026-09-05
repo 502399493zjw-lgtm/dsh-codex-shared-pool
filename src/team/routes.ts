@@ -11,6 +11,8 @@ import {
 } from '../shared/team-management.ts'
 import {
   TEAM_BOOTSTRAP_PATH,
+  TEAM_CREATE_PATH,
+  TEAM_RECOVER_OWNER_PATH,
   TEAM_CONTRIBUTION_OAUTH_CANCEL_PATH,
   TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH,
   TEAM_CONTRIBUTION_OAUTH_REAUTHORIZE_PATH,
@@ -51,6 +53,7 @@ import type {
 import type { TeamCredentialHandoffEnvelope } from './oauth-handoff.ts'
 import { TeamDissolutionRecoveryRateLimitError, TeamInviteRevealRateLimitError } from './store.ts'
 import type { TeamAuthContext } from './store.ts'
+import { TeamAnonymousRateLimitError } from './anonymous.ts'
 import { safeTeamErrorMessage as safeMessage } from './safe-message.ts'
 
 export interface TeamRouteConfig {
@@ -369,6 +372,30 @@ function requireAuth(auth: TeamAuthContext | undefined): TeamAuthContext {
 export function registerTeamRoutes(ctx: Context, service: TeamService, config: TeamRouteConfig): void {
   ctx.effect(() => {
     const routes = [
+      ...([['create', TEAM_CREATE_PATH], ['recover-owner', TEAM_RECOVER_OWNER_PATH]] as const).map(([action, path]) => ctx.webServer.register({
+        kind: 'exact',
+        path,
+        handler: async (req, res) => {
+          if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
+          try {
+            // A durable global budget protects direct deployments and replicas;
+            // the edge additionally applies limits based on its own peer socket.
+            await service.store.consumeAnonymousTeamAttempt(action)
+            const body = await readJson(req)
+            if (action === 'create') {
+              const input = exactStrings(body, ['creationToken', 'teamName', 'ownerName', 'apiKey', 'recoveryCode'])
+              json(res, 201, await service.store.createAnonymousTeam(input))
+            } else {
+              const { recoveryCode, apiKey } = exactStrings(body, ['recoveryCode', 'apiKey'])
+              json(res, 201, await service.store.recoverAnonymousTeamOwner(recoveryCode, apiKey))
+            }
+          } catch (error: unknown) {
+            if (error instanceof TeamAnonymousRateLimitError) {
+              json(res, 429, { error: safeMessage(error) }, { 'retry-after': String(error.retryAfterSeconds) })
+            } else json(res, statusFor(error), { error: safeMessage(error) })
+          }
+        },
+      })),
       ctx.webServer.register({
         kind: 'exact',
         path: TEAM_BOOTSTRAP_PATH,

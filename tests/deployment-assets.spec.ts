@@ -254,6 +254,21 @@ describe('self-hosted deployment assets', () => {
     expect(edge).toContain("headers.host = '127.0.0.1:3081'")
   })
 
+  it('limits anonymous edge requests by peer socket and ignores caller forwarding headers', async () => {
+    const { createAnonymousTeamEdgeLimiter } = await import('../deploy/edge/server.mjs')
+    let now = 1000
+    const admit = createAnonymousTeamEdgeLimiter(() => now)
+    const url = '/plugins/dsh-codex-shared-pool/team/create'
+    for (let i = 0; i < 5; i++) {
+      expect(admit({ method: 'POST', url, socket: { remoteAddress: '203.0.113.9' }, headers: { 'x-forwarded-for': `203.0.113.${i}` } })).toBeUndefined()
+    }
+    expect(admit({ method: 'POST', url: `${url}?change=1`, socket: { remoteAddress: '::ffff:203.0.113.9' }, headers: { forwarded: 'for=198.51.100.1' } })).toBeGreaterThan(0)
+    expect(admit({ method: 'POST', url, socket: { remoteAddress: '198.51.100.1' } })).toBeUndefined()
+    expect(admit({ method: 'POST', url: '/plugins/dsh-codex-shared-pool/team/recover-owner', socket: { remoteAddress: '203.0.113.9' } })).toBeUndefined()
+    now += 3600000
+    expect(admit({ method: 'POST', url, socket: { remoteAddress: '203.0.113.9' } })).toBeUndefined()
+  })
+
   it('proves two deployed Teams support one-time friend invites, distinct member keys, and isolated overviews', async () => {
     const { runMultiTeamDeploymentSmoke } = await import('../deploy/host/smoke-multi-team.mjs')
     const bootstrapToken = 'bootstrap-secret-for-ci-smoke'

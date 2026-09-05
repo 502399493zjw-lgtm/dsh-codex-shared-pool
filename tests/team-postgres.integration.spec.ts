@@ -84,6 +84,55 @@ function lifecycleStore(store: PostgresTeamStore): TestPostgresTeamLifecycleStor
 }
 
 describePostgres('real PostgreSQL Team concurrency', () => {
+  it('serializes anonymous creation and recovery across replicas without storing recovery secrets', async () => {
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString: requiredDatabaseUrl() })
+    const pool = new Pool({ connectionString: requiredDatabaseUrl(), options: `-c search_path=${schema},public`, max: 8 })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const first = testStore({ pool })
+      await first.initialize()
+      const second = testStore({ pool })
+      const input = { creationToken: `dsh_create_${'a'.repeat(43)}`, teamName: 'Anonymous Team', ownerName: 'Owner', apiKey: `dsh_team_${'b'.repeat(43)}`, recoveryCode: `dsh_recovery_${'c'.repeat(43)}` }
+      const created = await Promise.all(Array.from({ length: 8 }, (_, index) => (index % 2 === 0 ? first : second).createAnonymousTeam(input)))
+      expect(created.every(result => result.team.id === created[0]!.team.id && result.member.id === created[0]!.member.id)).toBe(true)
+      expect((await pool.query('SELECT id FROM teams')).rows).toHaveLength(1)
+      const newKey = `dsh_team_${'d'.repeat(43)}`
+      await Promise.all(Array.from({ length: 8 }, (_, index) => (index % 2 === 0 ? first : second).recoverAnonymousTeamOwner(input.recoveryCode, newKey)))
+      expect((await pool.query('SELECT id FROM team_api_keys')).rows).toHaveLength(2)
+      expect(await second.authenticateApiKey(newKey)).toMatchObject({ role: 'owner', teamId: created[0]!.team.id })
+      const persisted = JSON.stringify((await pool.query('SELECT * FROM team_anonymous_creations')).rows)
+      for (const secret of [input.creationToken, input.apiKey, input.recoveryCode, newKey]) expect(persisted).not.toContain(secret)
+      await expect(second.createAnonymousTeam({ ...input, creationToken: `dsh_create_${'e'.repeat(43)}`, recoveryCode: `dsh_recovery_${'f'.repeat(43)}` })).rejects.toThrow()
+      expect((await pool.query('SELECT id FROM teams')).rows).toHaveLength(1)
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  })
+
+  it('shares anonymous request budgets across concurrent stores and restarts', async () => {
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString: requiredDatabaseUrl() })
+    const pool = new Pool({ connectionString: requiredDatabaseUrl(), options: `-c search_path=${schema},public`, max: 8 })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const first = testStore({ pool })
+      await first.initialize()
+      const second = testStore({ pool })
+      const attempts = await Promise.allSettled(Array.from({ length: 40 }, (_, index) => (index % 2 === 0 ? first : second).consumeAnonymousTeamAttempt('create')))
+      expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(30)
+      expect(attempts.filter(result => result.status === 'rejected')).toHaveLength(10)
+      await expect(testStore({ pool }).consumeAnonymousTeamAttempt('create')).rejects.toThrow(/rate limit/)
+      await expect(second.consumeAnonymousTeamAttempt('recover-owner')).resolves.toBeUndefined()
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  })
+
   it('repairs missing invite labels and preserves existing encrypted invitations', async () => {
     const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
     const admin = new Pool({ connectionString: requiredDatabaseUrl() })

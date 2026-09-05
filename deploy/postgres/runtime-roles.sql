@@ -50,6 +50,8 @@ GRANT USAGE ON SCHEMA public TO dsh_team_host, dsh_team_broker;
 REVOKE ALL ON TABLE
   public.teams,
   public.team_members,
+  public.team_anonymous_creations,
+  public.team_anonymous_rate_limits,
   public.team_membership_audit_events,
   public.team_role_migration_audit_events,
   public.team_member_display_name_migration_audit_events,
@@ -75,6 +77,8 @@ FROM PUBLIC;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.teams,
   public.team_members,
+  public.team_anonymous_creations,
+  public.team_anonymous_rate_limits,
   public.team_membership_audit_events,
   public.team_invites,
   public.team_invite_reveal_audit_events,
@@ -118,6 +122,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 REVOKE ALL ON TABLE
   public.teams,
   public.team_members,
+  public.team_anonymous_creations,
+  public.team_anonymous_rate_limits,
   public.team_membership_audit_events,
   public.team_role_migration_audit_events,
   public.team_member_display_name_migration_audit_events,

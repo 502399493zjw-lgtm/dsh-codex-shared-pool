@@ -1,6 +1,8 @@
 /** JSON-safe Team control-plane types shared by Host routes and the Browser. */
 
 export const TEAM_PATH_PREFIX = '/plugins/dsh-codex-shared-pool/team'
+export const TEAM_CREATE_PATH = `${TEAM_PATH_PREFIX}/create`
+export const TEAM_RECOVER_OWNER_PATH = `${TEAM_PATH_PREFIX}/recover-owner`
 export const TEAM_BOOTSTRAP_PATH = `${TEAM_PATH_PREFIX}/bootstrap`
 export const TEAM_OVERVIEW_PATH = `${TEAM_PATH_PREFIX}/overview`
 export const TEAM_DISPLAY_NAME_MIGRATION_ACK_PATH = `${TEAM_PATH_PREFIX}/display-name-migration/ack`
@@ -468,6 +470,21 @@ export type TeamUsageProjection =
       readonly mine: TeamUsageAggregateSummary
       readonly ownedAccounts: readonly TeamOwnedAccountUsageSummary[]
     }
+
+/** Host supplies durable random credentials before an anonymous create request. */
+export interface TeamAnonymousCreationInput {
+  readonly creationToken: string
+  readonly teamName: string
+  readonly ownerName: string
+  readonly apiKey: string
+  readonly recoveryCode: string
+}
+
+/** Credentials are retained by the requesting Host and never echoed by the server. */
+export interface TeamAnonymousOwnerResult {
+  readonly team: TeamSummary
+  readonly member: TeamMemberSummary
+}
 
 /** One-time result returned immediately after a Team bootstrap. */
 export interface TeamBootstrapResult {
