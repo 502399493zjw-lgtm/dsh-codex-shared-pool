@@ -1601,8 +1601,8 @@ describe('Team subscription-pool workspace', () => {
   it('keeps secondary quota and admission diagnostics in the compact disclosure', async () => {
     overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
       capacity: { sharedInFlight: 2, buckets: [
-        { id: 'codex', reason: 'request_cap_reached', remainingPercent: 74, sharedRequestsUsed: 100 },
-        { id: 'codex-spark', reason: 'ready', remainingPercent: 31 },
+        { id: 'codex', reason: 'request_cap_reached', remainingPercent: 74, sharedRequestsUsed: 100, resetAt: NOW },
+        { id: 'codex_spark', reason: 'ready', remainingPercent: 31 },
       ] },
     }] }
     render(<TeamSettings t={translate} embedded />)
@@ -1612,6 +1612,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(account).getByText(zh.editProtection))
     expect(within(account).getByText(/Codex Spark.*31%/)).toBeDefined()
     expect(within(account).getByText(zh.capacityRequestCapReached)).toBeDefined()
+    expect(within(account).getByText(translate('capacityRequestsUsed', { count: 100, cap: '∞' }))).toBeDefined()
+    expect(within(account).getByText(translate('capacityResetAt', { time: new Date(NOW).toLocaleString() }))).toBeDefined()
     expect(within(account).getByText(translate('capacityInFlight', { count: 2 }))).toBeDefined()
   })
 
