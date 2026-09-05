@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
+import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { TeamFloatingMenu } from '../src/client/team/TeamFloatingMenu.tsx'
 
 function Fixture() {
@@ -64,4 +65,28 @@ it('closes on an outside pointer event without trapping page focus', () => {
   fireEvent.click(screen.getByRole('button', { name: 'Open' }))
   fireEvent.pointerDown(document.body)
   expect(screen.queryByRole('menu')).toBeNull()
+})
+
+it('focuses the visible menu and consumes Escape before the stock DSH modal closes', () => {
+  const nativeFocus = HTMLElement.prototype.focus
+  // JSDOM focuses hidden elements; browsers ignore focus until placement makes the menu visible.
+  vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options) {
+    if (getComputedStyle(this).visibility !== 'hidden') nativeFocus.call(this, options)
+  })
+  const closeSettings = vi.fn()
+  render(<Modal open title="Settings" onClose={closeSettings}><Fixture /></Modal>)
+  const trigger = screen.getByRole('button', { name: 'Open' })
+  trigger.focus()
+  fireEvent.click(trigger)
+  expect(document.activeElement).toBe(screen.getByRole('menu'))
+  fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+  expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Join' }))
+  fireEvent.resize(window)
+  expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Join' }))
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  expect(screen.queryByRole('menu')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  expect(closeSettings).not.toHaveBeenCalled()
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  expect(closeSettings).toHaveBeenCalledOnce()
 })

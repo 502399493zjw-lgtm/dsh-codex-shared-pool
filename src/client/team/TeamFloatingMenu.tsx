@@ -34,7 +34,6 @@ export function TeamFloatingMenu({ anchorRef, label, className, children, onClos
       setPosition({ position: 'fixed', left, top: useAbove ? Math.max(margin, rect.top - height - 6) : Math.max(margin, Math.min(rect.bottom + 6, viewportHeight - maxHeight - margin)), width, maxHeight })
     }
     positionMenu()
-    menu.focus()
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(positionMenu)
     observer?.observe(menu)
     const outside = (event: PointerEvent) => {
@@ -50,6 +49,10 @@ export function TeamFloatingMenu({ anchorRef, label, className, children, onClos
       document.removeEventListener('pointerdown', outside)
     }
   }, [anchorRef, align])
+  useLayoutEffect(() => {
+    // Browsers ignore focus while the measuring pass still has visibility:hidden.
+    if (position.visibility !== 'hidden') menuRef.current?.focus({ preventScroll: true })
+  }, [position.visibility])
   return createPortal(<div ref={menuRef} role="menu" aria-label={label} tabIndex={-1}
     className={`${styles.inviteDialog} ${styles.floatingMenu} ${className}`} style={position}
     onKeyDown={event => {
