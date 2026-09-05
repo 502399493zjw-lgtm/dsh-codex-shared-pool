@@ -1253,8 +1253,21 @@ export class PostgresTeamStore implements TeamStore {
   }
 
   private async initializeSchema(): Promise<void> {
-    if (await this.hasCurrentSchema()) return
-    await this.runMigrations()
+    if (!await this.hasCurrentSchema()) await this.runMigrations()
+    // Migration history alone does not prove restored/older databases match the
+    // installed Host. Validate with a read-only query under the runtime role.
+    try {
+      await this.pool.query(`
+        SELECT total_tokens, estimated_cost_usd_micros, pricing_catalog_version
+        FROM team_usage_events WHERE false
+      `)
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null && 'code' in error
+        && (error.code === '42703' || error.code === '42P01')) {
+        throw new Error('Team database schema is incompatible: run dsh-codex-team-migrate from the matching package with the schema-owner connection before starting Host and Broker; if migration history is current, repair the schema from a verified backup', { cause: error })
+      }
+      throw error
+    }
   }
 
   private async hasCurrentSchema(): Promise<boolean> {

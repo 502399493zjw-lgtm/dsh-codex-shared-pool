@@ -1611,7 +1611,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).queryByRole('alert')).toBeNull()
     expect(within(account).queryByText(zh.usageUnavailableTitle)).toBeNull()
     expect(within(account).queryByRole('button', { name: zh.retry })).toBeNull()
-    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('获取失败')
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(account.textContent).not.toContain('upstream-usage-secret')
 
     const usageSettings = await openTeamSettings('usage')
@@ -2465,6 +2465,21 @@ describe('Team subscription-pool workspace', () => {
 
     await waitFor(() => { expect(managementApi.disconnect).toHaveBeenCalledWith(false) })
     expect(await screen.findByRole('button', { name: zh.previewInvitation })).toBeDefined()
+  })
+
+  it('preserves capacity and subscription when the usage ledger fails', async () => {
+    managementApi.usage.mockRejectedValue(new Error('usage unavailable'))
+    overviewState = { ...overviewState, contributions: [{ ...mine, capacity: {
+      sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 73,
+        subscription: { planType: 'plus' } }],
+    } }] }
+    render(<TeamSettings t={translate} embedded />)
+    await waitFor(() => { expect(managementApi.usage).toHaveBeenCalled() })
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
+    await waitFor(() => { expect(within(account).getByText('73%')).toBeDefined() })
+    expect(within(account).getByText('Plus')).toBeDefined()
+    expect(within(account).queryByText(zh.accountCapacityFetchFailed)).toBeNull()
   })
 
   it('keeps the connected workspace available when only usage loading fails', async () => {

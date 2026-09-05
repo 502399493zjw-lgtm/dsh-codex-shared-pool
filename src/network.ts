@@ -1,3 +1,4 @@
+import { readMacOSSystemProxy } from './system-proxy.ts'
 /** Environment-driven outbound HTTP(S) transport for the DSH process. */
 
 import {
@@ -46,13 +47,29 @@ export function resolveOutboundProxyEnvironment(
   }
 }
 
+/** Explicit environment configuration wins, including an intentionally empty override. */
+export function resolveOutboundNetworkEnvironment(
+  environment: Environment,
+  platform: NodeJS.Platform = process.platform,
+  discover: () => OutboundProxyEnvironment | undefined = readMacOSSystemProxy,
+): OutboundProxyEnvironment {
+  const configured = resolveOutboundProxyEnvironment(environment)
+  if (platform !== 'darwin' || ['http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']
+    .some(key => environment[key] !== undefined)) return configured
+  const system = discover()
+  if (system === undefined) return configured
+  return { ...system, noProxy: [system.noProxy, configured.noProxy].filter(Boolean).join(',') }
+}
+
 /** Own the process-global dispatcher for exactly one plugin lifecycle. */
 export class OutboundNetwork {
   private readonly environment: OutboundProxyEnvironment
   private cleanup: (() => Promise<void>) | undefined
 
-  constructor(environment: Environment = process.env) {
-    this.environment = resolveOutboundProxyEnvironment(environment)
+  constructor(environment?: Environment) {
+    this.environment = environment === undefined
+      ? resolveOutboundNetworkEnvironment(process.env)
+      : resolveOutboundProxyEnvironment(environment)
   }
 
   /**

@@ -144,6 +144,27 @@ docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-hos
 
 完整验收与部署说明见 [第二期验收文档](docs/acceptance/team-mvp-phase-two.md)。
 
+## 额度、订阅与升级排障
+
+本地额度和订阅档位来自同一次 ChatGPT 用量请求。直连超时会让两项一起不可用，不代表账号额度为零，也不应据此要求重新登录。设置页的高级选项会显示代理是否启用。
+
+- macOS：未设置代理环境变量时，插件启动时自动读取系统已启用的 HTTP/HTTPS 代理；重启 DSH 后仍会重新读取，无需把代理端口写进插件代码。自动发现的代理始终绕过 localhost、127.0.0.1 和 ::1，并带上系统代理例外列表。
+- 手动设置的 `HTTP_PROXY` / `HTTPS_PROXY`（小写优先）优先于系统发现；显式设置为空会禁用系统发现。仅支持 HTTP/HTTPS 代理，不执行 PAC 脚本，也不把 SOCKS 地址当成 HTTP 代理。使用 PAC/SOCKS 时，请为 DSH 配置代理软件提供的 HTTP 监听地址。
+- Linux、Windows、容器或后台服务：将代理环境变量持久化在启动服务的配置中，而不是只在当前终端临时 export。`NO_PROXY` 至少包含 `localhost,127.0.0.1,::1`。容器里的 127.0.0.1 指容器本身，应使用容器能访问到的代理地址。
+- Team 模式的请求由远端 Credential Broker 发出，本机代理无法修复远端网络。Host 和 Broker 应使用匹配版本；只升级本地插件不会为旧 Broker 补上订阅字段。订阅未知时不猜测档位或金额。
+
+Team 的额度来自 overview，金额和最近用量来自 usage；后者失败不再覆盖前者。数据库报缺列时，应由 Team 管理者备份数据库并执行迁移，普通团队成员不需要修改数据库。
+
+自托管升级必须先构建匹配的 Host/Broker，再使用 schema-owner 运行迁移，成功后启动服务：
+
+```sh
+docker compose -f deploy/self-hosted/compose.yml build team-host credential-broker team-edge
+docker compose -f deploy/self-hosted/compose.yml run --rm team-migrations
+docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-host credential-broker team-edge
+```
+
+非 Compose 部署使用同版本包的 `dsh-codex-team-migrate`，通过管理员的私密配置提供 `DSH_CODEX_SHARED_POOL_DATABASE_URL`，不要给运行中的 Host/Broker 增加 schema-owner 权限。初始化会检查用量表的实际字段，而不只信任迁移版本记录；若迁移记录齐全但字段仍缺失，说明数据库结构与迁移历史不一致，应停止升级、检查备份/恢复过程并修复结构，不要清空数据库或删除迁移记录来绕过检查。
+
 ## 开发与验证
 
 ```bash

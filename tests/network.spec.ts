@@ -5,6 +5,7 @@ import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici'
 import {
   OutboundNetwork,
   resolveOutboundProxyEnvironment,
+  resolveOutboundNetworkEnvironment,
 } from '../src/network.ts'
 
 const originalDispatcher = getGlobalDispatcher()
@@ -16,6 +17,15 @@ afterEach(async () => {
 })
 
 describe('OutboundNetwork', () => {
+  it('discovers macOS system proxies only without explicit proxy overrides', () => {
+    const discover = () => ({ httpProxy: 'http://proxy.test:8080', httpsProxy: 'http://proxy.test:8080', noProxy: 'localhost,127.0.0.1,::1' })
+    expect(resolveOutboundNetworkEnvironment({}, 'darwin', discover)).toEqual(discover())
+    expect(resolveOutboundNetworkEnvironment({ HTTPS_PROXY: '' }, 'darwin', discover).httpsProxy).toBeUndefined()
+    expect(resolveOutboundNetworkEnvironment({ HTTPS_PROXY: 'http://explicit.test' }, 'darwin', discover).httpsProxy).toBe('http://explicit.test')
+    expect(resolveOutboundNetworkEnvironment({}, 'linux', discover).httpsProxy).toBeUndefined()
+    expect(resolveOutboundNetworkEnvironment({ NO_PROXY: 'internal.test' }, 'darwin', discover).noProxy).toBe('localhost,127.0.0.1,::1,internal.test')
+  })
+
   it('uses lowercase standard variables before uppercase variants', () => {
     expect(resolveOutboundProxyEnvironment({
       http_proxy: 'http://lower-http.test:8080',

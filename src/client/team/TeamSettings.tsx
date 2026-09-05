@@ -2129,9 +2129,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const capacityBucket = account.capacity?.buckets.find(bucket => bucket.id === 'codex')
         ?? account.capacity?.buckets.find(bucket => bucket.remainingPercent !== undefined)
       const subscription = account.capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
-      const remainingCapacity = usageUnavailable
-        ? t('accountCapacityFetchFailed')
-        : capacityBucket?.remainingPercent === undefined
+      const remainingCapacity = capacityBucket?.remainingPercent === undefined
           ? t('capacityQuotaUnavailable')
           : `${capacityBucket.remainingPercent}%`
       const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
