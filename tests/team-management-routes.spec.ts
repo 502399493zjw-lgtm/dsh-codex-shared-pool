@@ -5005,6 +5005,20 @@ describe('anonymous Team setup through the local Host', () => {
     expect(env.credentials.value).toBe(env.requests[0]!.apiKey)
   })
 
+  it('keeps the journal on a server storage failure and retries the same setup credentials', async () => {
+    const env = fixture(false)
+    env.fetch.mockResolvedValueOnce(Response.json({ error: 'Team storage unavailable' }, { status: 503 }))
+    const failed = await env.call('create', { teamName: 'New Team', ownerName: 'Edison', expectedContext: null })
+    expect(failed.status).toBeGreaterThanOrEqual(500)
+    const journal = JSON.parse(env.credentials.get(pendingRef)!) as Record<string, string>
+    expect(env.credentials.value).toBeUndefined()
+    const originalBody = JSON.parse(String(env.fetch.mock.calls[0]![1]!.body)) as Record<string, string>
+    expect(originalBody.apiKey).toBe(journal.apiKey)
+    expect((await env.call('setup/resume', {})).status).toBe(200)
+    expect(env.requests[0]).toEqual(originalBody)
+    expect(env.credentials.get(pendingRef)).toBeUndefined()
+  })
+
   it('restores an owner on a new device with a Host-generated key', async () => {
     const env = fixture(false)
     const recoveryCode = `dsh_recovery_${'r'.repeat(43)}`
