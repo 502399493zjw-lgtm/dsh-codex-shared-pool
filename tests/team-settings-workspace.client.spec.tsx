@@ -1529,6 +1529,35 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).getByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeDefined()
   })
 
+  it.each([[undefined, 74], [61, 61]])('uses the tightest valid local quota window and individual limit %s', async (individualRemaining, expected) => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ status: 'ready', profiles: [{
+      id: 'local-a', label: '本机账号 A', inUse: true,
+      usage: { individualLimit: { remainingPercent: individualRemaining }, rateLimits: [{ id: 'codex', windows: [
+        { remainingPercent: 100 }, { remainingPercent: 74 }, { remainingPercent: -1 },
+      ] }] },
+    }] }) } as Response)
+    render(<TeamSettings t={translate} embedded />)
+    expect(await screen.findByText(`${expected}%`)).toBeDefined()
+    expect(screen.queryByText('100%')).toBeNull()
+  })
+
+  it('refreshes the selected teammate quota without a manual reload', async () => {
+    const callbacks: Array<() => void> = []
+    vi.spyOn(globalThis, 'setInterval').mockImplementation((handler, timeout) => {
+      if (timeout === 60_000 && typeof handler === 'function') callbacks.push(handler as () => void)
+      return 1
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
+    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
+      capacity: { sharedInFlight: 0, buckets: [{ id: 'codex', reason: 'ready', remainingPercent: 98 }] },
+    }] }
+    await act(async () => { callbacks.forEach(callback => callback()) })
+    expect(await within(panel).findByText('98%')).toBeDefined()
+  })
+
   it('shows teammate quota and limits as read-only details', async () => {
     overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
       sharing: { personalReservePercent: 20, maxSharedRequestsPerWindow: 100, maxSharedConcurrency: 2,
@@ -1541,6 +1570,10 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
     const details = within(panel).getByRole('region', { name: zh.accountDetails })
     expect(within(details).getByText('74%')).toBeDefined()
+    expect(within(details).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
+    const capacity = within(details).getByRole('region', { name: zh.accountRemainingCapacity })
+    const limits = within(details).getByRole('region', { name: zh.weeklySharingTitle })
+    expect(capacity.compareDocumentPosition(limits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(within(details).getByText('$50.00')).toBeDefined()
     expect(within(details).getByText('20%')).toBeDefined()
     expect(within(details).getByText('gpt-5-codex')).toBeDefined()

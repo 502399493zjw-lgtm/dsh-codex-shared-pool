@@ -3292,3 +3292,18 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+.memberCapacity { padding-bottom: 20px; }
+.memberCapacity .compactSummaryTitle { margin-bottom: 8px; }
+.memberQuotaHint { margin: 0; font-size: 12px; line-height: 1.7; color: var(--team-muted); }
+.memberQuotaBucket { padding: 18px 0; border-bottom: 1px solid var(--team-line); }
+.memberQuotaBucket:last-of-type { border-bottom: 0; }
+.memberQuotaHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--team-ink); }
+.memberQuotaHeading > span { font-size: 14px; font-weight: 600; }
+.memberQuotaHeading > strong { font-size: 32px; line-height: 1.2; font-weight: 600; font-variant-numeric: tabular-nums; }
+.memberQuotaBucket[data-available='false'] .memberQuotaHeading > strong { font-size: 20px; color: var(--team-muted); }
+.memberQuotaBucket .quotaTrack { margin: 12px 0; }
+.memberQuotaMeta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 8px; font-size: 12px; line-height: 1.6; }
+.memberQuotaMeta [data-ready='true'] { color: var(--team-green); }
+.memberSubscription { padding: 16px 0; }
+.compactSummaryList dd { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
