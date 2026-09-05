@@ -1363,7 +1363,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
 
     expect(within(account).getByText((_, element) => element?.tagName === 'DD'
-      && /^∞\s*编辑$/u.test(element.textContent ?? ''))).toBeDefined()
+      && /—\s*\/\s*∞\s*编辑/u.test(element.textContent ?? ''))).toBeDefined()
     fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
     expect(within(dialog).getByLabelText(zh.weeklyLimitLabel)).toBeDefined()
@@ -1584,29 +1584,18 @@ describe('Team subscription-pool workspace', () => {
     expect(await within(panel).findByText('98%')).toBeDefined()
   })
 
-  it('uses identical quota and sharing sections for contributors and recipients', async () => {
-    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
-      sharing: { personalReservePercent: mine.personalReservePercent,
-        maxSharedRequestsPerWindow: mine.maxSharedRequestsPerWindow,
-        maxSharedConcurrency: mine.maxSharedConcurrency, allowedModels: mine.allowedModels,
-        weeklySharedEstimatedApiCostLimitMicros: null }, capacity: mine.capacity,
-    }] }
+  it('keeps the original contributor compact summary for both account roles', async () => {
     render(<TeamSettings t={translate} embedded />)
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
-    const owner = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
-    const snapshot = (article: HTMLElement) => [zh.accountRemainingCapacity, zh.weeklySharingTitle].map(name => {
-      const section = within(article).getByRole('region', { name }).cloneNode(true) as HTMLElement
-      section.querySelectorAll('button').forEach(button => button.remove())
-      return section.outerHTML
-    })
-    const ownerSections = snapshot(owner)
-    expect(within(owner).getByRole('button', { name: zh.editSharingLimit })).toBeDefined()
-    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
-    const recipient = within(panel).getByRole('heading', { name: friend.label }).closest('article')!
-    expect(snapshot(recipient)).toEqual(ownerSections)
-    expect(within(recipient).queryByRole('button', { name: zh.editSharingLimit })).toBeNull()
-    expect(within(recipient).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
-    expect(within(recipient).queryByRole('region', { name: zh.recentUsageRegionLabel })).toBeNull()
+    for (const label of [mine.label, friend.label]) {
+      if (label === friend.label) fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
+      const account = within(panel).getByRole('heading', { name: label }).closest('article')!
+      const summary = within(account).getByRole('region', { name: zh.weeklySharingTitle })
+      expect(summary.querySelector(':scope > dl')?.children).toHaveLength(2)
+      expect(within(summary).getByText(zh.weeklySharedAmount)).toBeDefined()
+      expect(within(summary).getByText(zh.accountRemainingCapacity)).toBeDefined()
+      expect(within(account).queryByRole('progressbar')).toBeNull()
+    }
   })
 
   it('shows teammate quota and limits as read-only details', async () => {
@@ -1621,10 +1610,8 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
     const details = within(panel).getByRole('region', { name: zh.accountDetails })
     expect(within(details).getByText('74%')).toBeDefined()
-    expect(within(details).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
-    const capacity = within(details).getByRole('region', { name: zh.accountRemainingCapacity })
-    const limits = within(details).getByRole('region', { name: zh.weeklySharingTitle })
-    expect(capacity.compareDocumentPosition(limits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(details).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
+    fireEvent.click(within(details).getByText(zh.editProtection))
     expect(within(details).getByText('$50.00')).toBeDefined()
     expect(within(details).getByText('20%')).toBeDefined()
     expect(within(details).getByText('gpt-5-codex')).toBeDefined()
@@ -1720,7 +1707,7 @@ describe('Team subscription-pool workspace', () => {
     await act(async () => resolveOverview({ ...overviewState, contributions: [{ ...mine,
       capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 25 }] },
     }] }))
-    expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('25')
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('25%')
     expect(button).toHaveProperty('disabled', false)
     expect(button.getAttribute('aria-busy')).toBe('false')
   })
@@ -1732,10 +1719,11 @@ describe('Team subscription-pool workspace', () => {
     const button = within(account).getByRole('button', { name: '刷新额度' })
     managementApi.overview.mockRejectedValueOnce(new Error('offline'))
     fireEvent.click(button)
-    await waitFor(() => expect(within(account).getByText(zh.capacityQuotaUnavailable)).toBeDefined())
+    await waitFor(() => expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent)
+      .toBe(zh.capacityQuotaUnavailable))
     expect(button).toHaveProperty('disabled', false)
     fireEvent.click(button)
-    await waitFor(() => expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74'))
+    await waitFor(() => expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%'))
   })
 
   it('refreshes provider capacity while the account detail remains open', async () => {
@@ -1746,8 +1734,8 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     const heading = await screen.findByRole('heading', { name: mine.label })
     const remaining = () => within(heading.closest('article')!)
-      .getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')
-    expect(remaining()).toBe('98')
+      .getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent
+    expect(remaining()).toBe('98%')
     overviewState = { ...overviewState, contributions: [{ ...mine,
       capacity: { ...mine.capacity, buckets: [{ ...mine.capacity.buckets[0], remainingPercent: 25 }] },
     }] }
@@ -1756,7 +1744,7 @@ describe('Team subscription-pool workspace', () => {
     await act(async () => {
       for (const [callback] of polls) await (callback as () => void)()
     })
-    expect(remaining()).toBe('25')
+    expect(remaining()).toBe('25%')
   })
 
   it('retries capacity polling after a transient overview failure', async () => {
@@ -1767,10 +1755,10 @@ describe('Team subscription-pool workspace', () => {
     managementApi.overview.mockRejectedValueOnce(new Error('temporary failure'))
     await act(async () => { await poll()() })
     expect(screen.getByRole('heading', { name: mine.label })).toBeDefined()
-    expect(within(screen.getByRole('region', { name: zh.accountRemainingCapacity })).getByText(zh.capacityQuotaUnavailable)).toBeDefined()
-    expect(screen.queryByRole('progressbar', { name: 'Codex' })).toBeNull()
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent)
+      .toBe(zh.capacityQuotaUnavailable)
     await act(async () => { await poll()() })
-    expect(screen.getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
+    expect(screen.getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
 
   it('preserves an open invite reveal during a background capacity read', async () => {
@@ -1789,16 +1777,15 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
   })
 
-  it('places subscription details below capacity and sharing limits', async () => {
+  it('places subscription details below remaining capacity in the weekly summary', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const account = within(settings).getByRole('heading', { name: mine.label }).closest('article')!
     const summary = within(account).getByRole('region', { name: zh.weeklySharingTitle })
-    const capacity = within(account).getByRole('region', { name: zh.accountRemainingCapacity })
-    const tier = within(account).getByText(zh.subscriptionTier)
-    const estimate = within(account).getByText(zh.weeklyEstimate)
-    expect(capacity.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
-    expect(summary.compareDocumentPosition(tier) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    const capacity = within(summary).getByText(zh.accountRemainingCapacity)
+    const tier = within(summary).getByText(zh.subscriptionTier)
+    const estimate = within(summary).getByText(zh.weeklyEstimate)
+    expect(capacity.compareDocumentPosition(tier) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(tier.compareDocumentPosition(estimate) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
@@ -1814,7 +1801,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(account).queryByRole('alert')).toBeNull()
     expect(within(account).queryByText(zh.usageUnavailableTitle)).toBeNull()
     expect(within(account).queryByRole('button', { name: zh.retry })).toBeNull()
-    expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
+    expect(within(account).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(account.textContent).not.toContain('upstream-usage-secret')
 
     const usageSettings = await openTeamSettings('usage')
@@ -1823,7 +1810,7 @@ describe('Team subscription-pool workspace', () => {
     expect(await within(usage).findByRole('group', { name: zh.myTeamUsage })).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: '返回团队' }))
     const restoredAccount = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
-    expect(within(restoredAccount).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
+    expect(within(restoredAccount).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
 
   it('matches the approved weekly-sharing and recent-day account detail', async () => {
@@ -1885,20 +1872,20 @@ describe('Team subscription-pool workspace', () => {
     const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
     const actions = within(account).getByRole('group', { name: zh.accountActions })
 
-    expect(weekly.querySelectorAll('dl > div')).toHaveLength(5)
-    expect(within(recentUsage).getByText(zh.weeklySharedAmount)).toBeDefined()
-    const weeklyAmount = within(recentUsage).getByText((_, element) => element?.tagName === 'DD'
-      && /^\$0\.16\s*\/\s*\$1\.00$/u.test(element.textContent ?? ''))
+    expect(weekly.querySelectorAll(':scope > dl > div')).toHaveLength(2)
+    expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
+    const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
+      && /\$0\.16\s*\/\s*\$1\.00\s*编辑/u.test(element.textContent ?? ''))
     expect(weeklyAmount.textContent).not.toMatch(/已用|共享上限/u)
     expect(within(weekly).queryByRole('img')).toBeNull()
     const editLimit = within(weekly).getByRole('button', { name: zh.editSharingLimit })
     expect(editLimit.textContent).toBe(zh.edit)
     expect(editLimit.querySelector('svg')).toBeNull()
-    expect(within(account).getByText('Pro 20x')).toBeDefined()
-    expect(within(account).getByText('US$2,100.00')).toBeDefined()
+    expect(within(weekly).getByText('Pro 20x')).toBeDefined()
+    expect(within(weekly).getByText('US$2,100.00')).toBeDefined()
     expect(within(weekly).queryByText(/US\$1,554|周剩余预估/)).toBeNull()
     expect(within(weekly).queryByLabelText(zh.amountEstimateHelpLabel)).toBeNull()
-    expect(within(account).getByRole('progressbar', { name: 'Codex' }).getAttribute('aria-valuenow')).toBe('74')
+    expect(within(weekly).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
     expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
     expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'

@@ -2237,60 +2237,51 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     const renderAccountSummary = (
       capacity: TeamManagementSharedAccountDirectoryEntry['capacity'],
       sharing: TeamManagementSharedAccountDirectoryEntry['sharing'],
+      weeklyUsed = '—',
       onEdit?: () => void,
     ) => {
-      const subscription = capacity?.buckets.find(bucket => bucket.subscription !== undefined)?.subscription
-      return <>
-          <section className={`${styles.prototypeSection} ${styles.accountCapacity}`} role="region" aria-label={t('accountRemainingCapacity')}>
-            <div className={styles.accountQuotaHeading}>
-              <h3 className={styles.compactSummaryTitle}>{t('accountRemainingCapacity')}</h3>
+      const bucket = capacity?.buckets.find(item => item.id === 'codex')
+        ?? capacity?.buckets.find(item => item.remainingPercent !== undefined)
+      const subscription = capacity?.buckets.find(item => item.subscription !== undefined)?.subscription
+      const weeklyLimit = sharing === undefined ? '—' : sharing.weeklySharedEstimatedApiCostLimitMicros == null
+        ? '∞' : formatWeeklyUsdMicros(sharing.weeklySharedEstimatedApiCostLimitMicros)
+      return <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
+        <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
+        <dl className={styles.compactSummaryList}>
+          <div>
+            <dt>{t('weeklySharedAmount')}</dt>
+            <dd className={styles.weeklyAmount}>
+              <span className={styles.weeklyLimitValue}>{weeklyUsed} / {weeklyLimit}</span>
+              {onEdit === undefined ? null : <button type="button" className={styles.inlineLimitButton}
+                aria-label={t('editSharingLimit')} title={t('editSharingLimit')}
+                disabled={busy !== undefined} onClick={onEdit}>{t('edit')}</button>}
+            </dd>
+          </div>
+          <div>
+            <dt>{t('accountRemainingCapacity')}</dt>
+            <dd className={styles.weeklyAmount}>
+              {bucket?.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}
               <button type="button" className={styles.inlineLimitButton}
                 aria-label={t('refreshQuota')} title={t(capacityRefreshing ? 'refreshingQuota' : 'refreshQuota')}
                 aria-busy={capacityRefreshing} disabled={capacityRefreshing || loading}
                 onClick={() => { void refreshCapacityRef.current?.() }}>
-                {capacityRefreshing
-                  ? <span className={styles.actionSpinner} aria-hidden="true" />
-                  : <IconRefreshOutline16 aria-hidden="true" />}
+                {capacityRefreshing ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
               </button>
-            </div>
-            <p className={styles.accountQuotaHint}>{t('memberQuotaBasis')}</p>
-            {capacity === undefined ? <p>{t('capacityQuotaUnavailable')}</p> : capacity.buckets.map(bucket => (
-              <div className={styles.accountQuotaBucket} key={bucket.id} data-available={bucket.remainingPercent !== undefined}>
-                <div className={styles.accountQuotaHeading}>
-                  <span>{bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}</span>
-                  <strong>{bucket.remainingPercent === undefined ? '—' : `${bucket.remainingPercent}%`}</strong>
-                </div>
-                {bucket.remainingPercent === undefined ? null : <div className={styles.quotaTrack}
-                  role="progressbar" aria-label={bucket.id === 'codex' ? 'Codex' : 'Codex Spark'}
-                  aria-valuenow={bucket.remainingPercent} aria-valuemin={0} aria-valuemax={100}>
-                  <span style={{ width: `${bucket.remainingPercent}%` }} />
-                </div>}
-                <div className={styles.accountQuotaMeta}>
-                  <span data-ready={bucket.reason === 'ready'}>{t(CAPACITY_REASON_LOCALE_KEYS[bucket.reason])}</span>
-                  {bucket.resetAt === undefined ? null : <span>{t('capacityResetAt', { time: new Date(bucket.resetAt).toLocaleString() })}</span>}
-                  {bucket.sharedRequestsUsed === undefined ? null : <span>{t('capacityRequestsUsed', { count: bucket.sharedRequestsUsed, cap: sharing?.maxSharedRequestsPerWindow ?? '∞' })}</span>}
-                </div>
-              </div>
-            ))}
-            {capacity?.sharedInFlight === undefined ? null : <p className={styles.accountQuotaHint}>{t('capacityInFlight', { count: capacity.sharedInFlight })}</p>}
-          </section>
-          <section className={`${styles.prototypeSection} ${styles.compactSummary}`} role="region" aria-label={t('weeklySharingTitle')}>
-            <h4 className={styles.compactSummaryTitle}>{t('weeklySharingTitle')}</h4>
-            <dl className={styles.compactSummaryList}>
-              <div><dt>{t('weeklyLimitLabel')}</dt><dd>
-                {sharing === undefined ? '—' : sharing.weeklySharedEstimatedApiCostLimitMicros == null ? '∞' : formatWeeklyUsdMicros(sharing.weeklySharedEstimatedApiCostLimitMicros)}
-                {onEdit === undefined ? null : <button type="button" className={styles.inlineLimitButton}
-                  aria-label={t('editSharingLimit')} title={t('editSharingLimit')}
-                  disabled={busy !== undefined} onClick={onEdit}>{t('edit')}</button>}
-              </dd></div>
-              <div><dt>{t('reserveLabel')}</dt><dd>{sharing === undefined ? '—' : `${sharing.personalReservePercent}%`}</dd></div>
-              <div><dt>{t('requestCapLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.maxSharedRequestsPerWindow ?? '∞'}</dd></div>
-              <div><dt>{t('sharedConcurrencyLabel')}</dt><dd>{sharing?.maxSharedConcurrency ?? '—'}</dd></div>
-              <div><dt>{t('allowedModelsLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.allowedModels.length === 0 ? t('allModels') : sharing.allowedModels.join(', ')}</dd></div>
-            </dl>
-          </section>
-          <div className={styles.accountSubscription}><SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} /></div>
-      </>
+            </dd>
+          </div>
+        </dl>
+        <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
+        <details className={styles.sharingDetails}>
+          <summary>{t('editProtection')}</summary>
+          <dl className={styles.compactSummaryList}>
+            <div><dt>{t('weeklyLimitLabel')}</dt><dd>{weeklyLimit}</dd></div>
+            <div><dt>{t('reserveLabel')}</dt><dd>{sharing === undefined ? '—' : `${sharing.personalReservePercent}%`}</dd></div>
+            <div><dt>{t('requestCapLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.maxSharedRequestsPerWindow ?? '∞'}</dd></div>
+            <div><dt>{t('sharedConcurrencyLabel')}</dt><dd>{sharing?.maxSharedConcurrency ?? '—'}</dd></div>
+            <div><dt>{t('allowedModelsLabel')}</dt><dd>{sharing === undefined ? '—' : sharing.allowedModels.length === 0 ? t('allModels') : sharing.allowedModels.join(', ')}</dd></div>
+          </dl>
+        </details>
+      </section>
     }
 
     const renderSharedDirectoryAccount = (account: TeamManagementSharedAccountDirectoryEntry) => {
@@ -2318,9 +2309,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
       const weeklyUsed = formatWeeklyUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
-      const weeklyLimit = account.weeklySharedEstimatedApiCostLimitMicros == null
-        ? '∞'
-        : formatWeeklyUsdMicros(account.weeklySharedEstimatedApiCostLimitMicros)
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const activeCapacityReason = account.status === 'active'
         ? activeContributionCapacityReason(account)
@@ -2362,13 +2350,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <span className={styles.statusText}>{contributionStatus}</span>
             </span>
           </header>
-          {renderAccountSummary(account.capacity, {
-            personalReservePercent: account.personalReservePercent,
-            maxSharedRequestsPerWindow: account.maxSharedRequestsPerWindow,
-            maxSharedConcurrency: account.maxSharedConcurrency,
-            weeklySharedEstimatedApiCostLimitMicros: account.weeklySharedEstimatedApiCostLimitMicros ?? null,
-            allowedModels: account.allowedModels,
-          }, openProtection)}
           <section className={`${styles.teamActionPanel} ${styles.accountActionBar}`} role="group" aria-label={t('accountActions')}>
             {account.status === 'reauth_required' ? (
               <Button className={styles.accountActionButton} size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void reauthorizeOAuth(account.id) }}>{t('reauthorize')}</Button>
@@ -2393,10 +2374,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             )}
             {contributionHint === undefined ? null : <p>{contributionHint}</p>}
           </section>
+          {renderAccountSummary(account.capacity, {
+            personalReservePercent: account.personalReservePercent,
+            maxSharedRequestsPerWindow: account.maxSharedRequestsPerWindow,
+            maxSharedConcurrency: account.maxSharedConcurrency,
+            weeklySharedEstimatedApiCostLimitMicros: account.weeklySharedEstimatedApiCostLimitMicros ?? null,
+            allowedModels: account.allowedModels,
+          }, weeklyUsed, openProtection)}
           <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
-            <dl className={styles.compactSummaryList}>
-              <div><dt>{t('weeklySharedAmount')}</dt><dd>{weeklyUsed} / {weeklyLimit}</dd></div>
-            </dl>
             <header className={styles.compactRecentHeader}>
               <h4 className={styles.compactSummaryTitle}>{t('recentUsageTitle')}</h4>
               <Button className={styles.viewSevenDaysButton} size="sm" variant="outline" onClick={() => {
