@@ -1914,11 +1914,7 @@
 }
 
 .memberMenuPopover {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 5px);
-  right: 0;
-  min-width: 138px;
+  min-width: 0;
   border: 1px solid var(--team-line);
   border-radius: 8px;
   padding: 4px;
