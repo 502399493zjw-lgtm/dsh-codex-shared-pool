@@ -1363,7 +1363,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(settings).getByRole('heading', { name: '个人 Pro' }).closest('article')!
 
     expect(within(account).getByText((_, element) => element?.tagName === 'DD'
-      && /—\s*\/\s*∞\s*编辑/u.test(element.textContent ?? ''))).toBeDefined()
+      && /\$0\.00\s*\/\s*∞\s*编辑/u.test(element.textContent ?? ''))).toBeDefined()
     fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
     const dialog = screen.getByRole('dialog', { name: zh.editProtection })
     expect(within(dialog).getByLabelText(zh.weeklyLimitLabel)).toBeDefined()
@@ -1582,6 +1582,33 @@ describe('Team subscription-pool workspace', () => {
     await act(async () => { [...callbacks.values()].forEach(callback => callback()) })
     expect(managementApi.overview.mock.calls.length).toBeGreaterThan(callsAfterFailure)
     expect(await within(panel).findByText('98%')).toBeDefined()
+  })
+
+  it('shows zero weekly spending after a successful empty usage response', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const account = heading.closest('article')!
+    await waitFor(() => expect(within(account).getByText('$0.00 / ∞')).toBeDefined())
+  })
+
+  it.each([[0, '$0.00 / ∞'], [1, '— / ∞']] as const)('distinguishes %i requests with no priced amount', async (requestCount, expected) => {
+    managementApi.usage.mockResolvedValueOnce({ ...completeOwnerUsage, ownedAccounts: [{
+      accountId: mine.id,
+      currentUtcWeek: { aggregate: { requestCount, estimatedCostUsdMicros: null } },
+    }] })
+    render(<TeamSettings t={translate} embedded />)
+    const account = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
+    await waitFor(() => expect(within(account).getByText(expected)).toBeDefined())
+  })
+
+  it('does not turn a failed usage response into zero spending', async () => {
+    managementApi.usage.mockRejectedValueOnce(new Error('offline'))
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: mine.label })
+    const account = heading.closest('article')!
+    await within(account).findByText(zh.recentUsageUnavailable)
+    expect(within(account).getByText('— / ∞')).toBeDefined()
+    expect(within(account).queryByText('$0.00 / ∞')).toBeNull()
   })
 
   it('keeps the original contributor compact summary for both account roles', async () => {
