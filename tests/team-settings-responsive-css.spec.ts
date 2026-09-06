@@ -283,3 +283,12 @@ it('gives join and create a visible button surface and distinct interaction stat
   expect(css).toMatch(/\.inviteSecretBody \.code\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*line-height:\s*22px;/s)
   expect(css).toMatch(/\.inviteDialog \.modalActions > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s)
  })
+
+
+describe('Invite expiry arrow positioning', () => {
+  it('insets and centers one non-interactive arrow inside the select control', () => {
+    expect(css).toMatch(/\.selectControl\s*\{[^}]*position:\s*relative;/s)
+    expect(css).toMatch(/\.select\s*\{[^}]*appearance:\s*none;/s)
+    expect(css).toMatch(/\.selectArrow\s*\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*top:\s*50%;[^}]*transform:\s*translateY\(-50%\);[^}]*pointer-events:\s*none;/s)
+  })
+})
