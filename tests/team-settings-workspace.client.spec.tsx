@@ -1591,6 +1591,16 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => expect(within(account).getByText('$0.00 / ∞')).toBeDefined())
   })
 
+  it.each([[0, '$0.00 / ∞'], [1, '— / ∞']] as const)('distinguishes %i requests with no priced amount', async (requestCount, expected) => {
+    managementApi.usage.mockResolvedValueOnce({ ...completeOwnerUsage, ownedAccounts: [{
+      accountId: mine.id,
+      currentUtcWeek: { aggregate: { requestCount, estimatedCostUsdMicros: null } },
+    }] })
+    render(<TeamSettings t={translate} embedded />)
+    const account = (await screen.findByRole('heading', { name: mine.label })).closest('article')!
+    await waitFor(() => expect(within(account).getByText(expected)).toBeDefined())
+  })
+
   it('does not turn a failed usage response into zero spending', async () => {
     managementApi.usage.mockRejectedValueOnce(new Error('offline'))
     render(<TeamSettings t={translate} embedded />)
