@@ -1,6 +1,7 @@
 .page,
 .recentRequestsDialog,
-.inviteDialog {
+.inviteDialog,
+.localAuthorizationDialog {
   --team-blue: var(--dsw-alias-state-business-primary, #3964fe);
   --team-blue-strong: var(--team-blue);
   --team-green: var(--dsw-alias-state-success-primary, #168f61);
@@ -38,7 +39,8 @@
 
 :global(body[data-ds-dark-theme]) .page,
 :global(body[data-ds-dark-theme]) .recentRequestsDialog,
-:global(body[data-ds-dark-theme]) .inviteDialog {
+:global(body[data-ds-dark-theme]) .inviteDialog,
+:global(body[data-ds-dark-theme]) .localAuthorizationDialog {
   --team-context-layer: #272a2e;
   --team-workspace-layer: #2b2e32;
   --team-line: #383c42;
@@ -436,11 +438,77 @@
 }
 
 .workspaceSection .memberRow {
-  min-height: 66px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 80px;
   border: 0;
   border-bottom: 1px solid var(--team-line);
   border-radius: 0;
-  padding: 11px 2px;
+  padding: 16px 4px;
+  background: transparent;
+}
+
+.workspaceSection .memberRow:last-child {
+  border-bottom: 0;
+}
+
+.membersSection .workspaceSectionTitle {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.membersSection .hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.memberRow .identity {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.memberRow .name {
+  max-width: 100%;
+  white-space: normal;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.memberRole {
+  color: var(--team-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.memberActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.memberMenu > button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--team-muted);
+}
+
+.memberMenu > button:hover,
+.memberMenu > button[aria-expanded='true'] {
+  background: var(--team-layer-soft);
+  color: var(--team-ink);
+}
+
+.memberMenu > button:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 2px;
 }
 
 .workspaceSection .inviteRow {
@@ -1041,11 +1109,16 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px 12px;
 }
 
 .detailTitle {
+  max-width: 12em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   color: var(--team-ink);
   font-size: 20px;
@@ -1055,12 +1128,18 @@
 }
 
 .connectionStatus {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--team-muted);
   font-size: 12px;
   line-height: 18px;
+}
+
+.headingActions,
+.detailHeading > button {
+  flex-shrink: 0;
 }
 
 .teamActionPanel {
@@ -1520,37 +1599,30 @@
   border: 1px solid var(--team-line);
   border-radius: 10px;
   padding: 14px;
-  background: color-mix(in srgb, var(--team-blue) 3%, transparent);
+  background: var(--team-layer-soft);
 }
 
-.sharingQuotaMeter {
-  position: relative;
-  overflow: hidden;
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--team-muted) 16%, transparent);
+.localAuthorizationDialog {
+  width: min(100%, 480px);
 }
 
-.sharingQuotaMeter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--team-green);
+.sharingQuotaField {
+  display: grid;
+  gap: 8px;
+  color: var(--team-ink);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.sharingQuotaMeter > i {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--team-ink);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--team-layer) 82%, transparent);
+.sharingQuotaField input {
+  width: 100%;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
 }
 
 .sharingQuotaFacts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin: 0;
 }
@@ -1566,12 +1638,12 @@
 }
 
 .sharingQuotaFacts dd {
-  margin: 2px 0 0;
+  margin: 6px 0 0;
   color: var(--team-ink);
-  font-size: 14px;
+  font-size: 24px;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
-  line-height: 20px;
+  line-height: 32px;
 }
 
 .localAuthorizationConfirmation .sharingQuotaHint {
@@ -1936,12 +2008,7 @@
 }
 
 .memberMenuPopover {
-  min-width: 0;
-  border: 1px solid var(--team-line);
-  border-radius: 8px;
-  padding: 4px;
-  background: var(--team-layer);
-  box-shadow: 0 12px 30px rgba(31, 35, 41, 0.14);
+  position: fixed;
 }
 
 .memberMenuPopover button {
@@ -2820,7 +2887,6 @@
 
 @container team-settings (max-width: 620px) {
   .workspaceSectionHeader,
-  .memberRow,
   .inviteRow {
     align-items: stretch;
     flex-direction: column;
@@ -2848,10 +2914,6 @@
 
   .inviteNotRevealable {
     text-align: left;
-  }
-
-  .memberRow .compactActions {
-    padding-left: 0;
   }
 
   .usageCards[data-owner='true'] {
@@ -3021,7 +3083,6 @@
   .settingsPageHeader,
   .settingsStatus,
   .settingsCardHeader,
-  .memberRow,
   .inviteRow {
     align-items: stretch;
     flex-direction: column;
@@ -3045,7 +3106,6 @@
 
   .settingsCard { padding: 15px; }
 
-  .memberRow,
   .inviteRow { gap: 9px; }
 
   .inviteActions {
@@ -3054,8 +3114,6 @@
   }
 
   .inviteNotRevealable { text-align: left; }
-
-  .memberRow .compactActions { padding-left: 0; }
 
   .connectionGrid,
   .accountGroups { grid-template-columns: 1fr; }
@@ -3409,4 +3467,79 @@
 .recoveryEntryLink:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Keep invite scanning and actions compact, including in narrow settings panes. */
+.invitationSection .workspaceSectionHeader {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.invitationSection .workspaceSectionHeader > button {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.invitationSection .inviteRow {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.invitationSection .inviteIdentity {
+  flex: 1;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.inviteDetails {
+  min-width: 0;
+  width: 100%;
+}
+
+.inviteDetails > summary {
+  display: list-item;
+  cursor: pointer;
+}
+
+.inviteDetails > summary::marker {
+  color: var(--team-faint);
+  font-size: 10px;
+}
+
+.inviteDetails > summary:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.inviteDetails[open] > .meta {
+  display: block;
+  margin-top: 4px;
+}
+
+.invitationSection .inviteActions {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.invitationSection .inviteActions > button {
+  min-width: 44px;
+}
+
+.invitationSection .inviteNotRevealable {
+  max-width: 140px;
+}
+
+@container team-settings (max-width: 380px) {
+  .invitationSection .inviteRow {
+    flex-wrap: wrap;
+  }
+
+  .invitationSection .inviteIdentity {
+    flex-basis: 100%;
+  }
 }
