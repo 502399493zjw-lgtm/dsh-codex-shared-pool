@@ -206,6 +206,11 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
 
+  it('gives the Team settings entry a visible button surface at rest and pressed feedback', () => {
+    expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*border-color:\s*var\(--team-line-strong\);[^}]*background:\s*color-mix\(in srgb, var\(--team-ink\) 6%, var\(--team-layer\)\);/s)
+    expect(css).toMatch(/\.teamSettingsTrigger:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--team-blue\) 12%, var\(--team-layer\)\);/s)
+  })
+
   it('keeps the prototype compact Team bar and detail rhythm', () => {
     expect(css).toMatch(/\.teamIdentity \.hint\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
     expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*font-size:\s*13px;/s)
