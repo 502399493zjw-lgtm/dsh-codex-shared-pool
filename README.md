@@ -66,14 +66,13 @@
 
 ## 安装
 
-本分支适配官方 DSH `0.1.2-rc.1`，尚未发布到 npm。npm 上的 `0.1.3` 仍适用于旧基线 DSH `0.1.0-rc.8`；`latest` 和 `next` 暂不包含本次适配。
+当前版本适配官方 DSH `0.1.2-rc.1`，已发布到 npm `0.1.4`。npm `0.1.3` 仍适用于旧基线 DSH `0.1.0-rc.8`。
 
-使用本分支源码构建并安装到新版 DSH Web profile：
+安装到新版 DSH Web profile：
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm pack --out artifacts/dsh-codex-shared-pool.tgz
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./artifacts/dsh-codex-shared-pool.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add dsh-codex-shared-pool@0.1.4
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
