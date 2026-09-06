@@ -17,7 +17,7 @@ export function TeamConnections({ api, t, expectedContext, disabled, teamName, m
   prominent?: boolean
   onJoin?: () => void
   onCreate: () => void
-  onRecover: () => void
+  onRecover?: () => void
   onChanged: () => Promise<void>
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null)
@@ -63,7 +63,7 @@ export function TeamConnections({ api, t, expectedContext, disabled, teamName, m
         <button key={item.id} type="button" role="menuitemradio" aria-checked="false" aria-label={`${item.teamName} · ${item.memberName}`} disabled={disabled || switching} onClick={() => { void select(item.id) }}>
           <span className={styles.savedTeamIdentity}><strong>{item.teamName}</strong><small>{item.memberName}</small></span>
         </button>)}
-      <button type="button" role="menuitem" disabled={disabled || switching} onClick={() => { setOpen(false); onRecover() }}>{t('recoverOwner')}</button>
+      {onRecover === undefined ? null : <button type="button" role="menuitem" disabled={disabled || switching} onClick={() => { setOpen(false); onRecover() }}>{t('recoverOwner')}</button>}
       <div className={styles.teamConnectionsFooter}>
         {onJoin === undefined ? null : <button type="button" role="menuitem" disabled={disabled || switching} onClick={() => { setOpen(false); onJoin() }}>{t('joinTeamAction')}</button>}
         <button type="button" role="menuitem" disabled={disabled || switching} onClick={() => { setOpen(false); onCreate() }}>{t('createTeam')}</button>

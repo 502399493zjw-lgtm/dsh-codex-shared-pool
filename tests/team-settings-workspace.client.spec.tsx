@@ -4347,7 +4347,15 @@ it('offers pending setup recovery immediately after an uncertain create', async 
 it('allows an unconnected user to restore ownership with a recovery code', async () => {
   managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: false, keyWritable: true, serverOrigin: 'https://team.example.test' })
   render(<TeamSettings t={translate} embedded />)
-  fireEvent.click(await screen.findByRole('button', { name: '使用恢复码' }))
+  const recovery = await screen.findByRole('button', { name: '已有团队？恢复所有者身份' })
+  const join = screen.getByRole('heading', { name: zh.joinInvite })
+  expect(join.compareDocumentPosition(recovery) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: zh.savedTeams }))
+  expect(screen.queryByRole('menuitem', { name: zh.recoverOwner })).toBeNull()
+  fireEvent.keyDown(screen.getByRole('menu', { name: zh.switchTeam }), { key: 'Escape' })
+  fireEvent.click(recovery)
+  expect(screen.getByRole('heading', { name: '恢复所有者身份' })).toBeDefined()
+  expect(screen.getByText(zh.recoverOwnerHint)).toBeDefined()
   fireEvent.change(screen.getByLabelText('团队恢复码'), { target: { value: `dsh_recovery_${'b'.repeat(43)}` } })
   fireEvent.click(screen.getByRole('button', { name: '恢复并切换' }))
   await waitFor(() => expect(managementApi.recoverOwner).toHaveBeenCalledWith(`dsh_recovery_${'b'.repeat(43)}`, null))
@@ -4462,4 +4470,25 @@ it('portals member actions outside the clipped workspace and restores trigger fo
   fireEvent.pointerDown(document.body)
   expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
   expect(managementApi.removeMember).not.toHaveBeenCalled()
+})
+
+
+it.each([
+  { keyWritable: false, pendingJoinConfigured: false },
+  { keyWritable: true, pendingJoinConfigured: true },
+])('hides the recovery footer when another connection operation is unavailable or pending: %j', async flags => {
+  managementApi.status.mockResolvedValue({ enabled: true, keyConfigured: false, serverOrigin: 'https://team.example.test', ...flags })
+  render(<TeamSettings t={translate} embedded />)
+  await screen.findByRole('heading', { name: zh.notConnected })
+  expect(screen.queryByRole('button', { name: '已有团队？恢复所有者身份' })).toBeNull()
+})
+
+it('groups recovery code backup under security in Team settings', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  const settings = await openTeamSettings()
+  const menu = openTeamManagement(settings)
+  const security = within(menu).getByText('安全与恢复')
+  const backup = within(menu).getByRole('menuitem', { name: zh.saveRecoveryCode })
+  expect(security.nextElementSibling).toBe(backup)
+  expect(backup.nextElementSibling?.textContent).toBe(zh.ownershipGroup)
 })

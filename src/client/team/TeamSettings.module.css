@@ -3377,3 +3377,36 @@
 .compactSummaryList dd { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 .compactSummaryList dd > .inlineLimitButton { margin-inline-start: 8px; }
+
+/* Ownership recovery is a secondary path below the join form. */
+.recoveryEntry {
+  border-top: 1px solid var(--team-line);
+  padding-top: 18px;
+}
+
+.recoveryEntryLink {
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: var(--team-muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.recoveryEntryLink:hover:not(:disabled) {
+  color: var(--team-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.recoveryEntryLink:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
+.recoveryEntryLink:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
