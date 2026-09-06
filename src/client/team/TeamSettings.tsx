@@ -3113,6 +3113,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       </Modal>
 
       <Modal
+        className={styles.recentRequestsDialog!}
+        description={t('recentRequestsHint')}
         open={recentUsageAccount !== undefined}
         onClose={() => { setRecentUsageAccount(undefined) }}
         title={recentUsageAccount === undefined ? t('recentRequests') : t('recentRequestsFor', { label: recentUsageAccount.label })}
@@ -3124,12 +3126,19 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             : []
           return requests.length === 0
             ? <p className={styles.empty}>{t('noRecentRequests')}</p>
-            : <div className={styles.recentRequestList}>{requests.map(request => (
-              <div className={styles.recentRequest} key={request.id}>
-                <div><strong>{request.model}</strong><span>{formatTime(request.startedAt)}</span></div>
-                <div><span>{request.status}</span><span>{request.totalTokens ?? '—'} tokens</span></div>
-              </div>
-            ))}</div>
+            : <ol className={styles.recentRequestList}>{requests.map(request => (
+              <li className={styles.recentRequest} key={request.id}>
+                <div className={styles.recentRequestHeading}>
+                  <strong>{request.model}</strong>
+                  <span className={styles.recentRequestStatus} data-status={request.status}>{t(request.status)}</span>
+                </div>
+                <p className={styles.recentRequestConsumer}>{t('requestConsumer', { name: request.consumerDisplayName?.trim() || t('unknownRequestConsumer') })}</p>
+                <div className={styles.recentRequestMeta}>
+                  <time dateTime={new Date(request.startedAt).toISOString()}>{formatTime(request.startedAt)}</time>
+                  <span>{request.totalTokens === undefined ? t('requestTokensUnreported') : `${Number(request.totalTokens).toLocaleString('en-US')} tokens`}</span>
+                </div>
+              </li>
+            ))}</ol>
         })()}
       </Modal>
 

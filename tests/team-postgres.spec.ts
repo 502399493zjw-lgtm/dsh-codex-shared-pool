@@ -1683,7 +1683,7 @@ describe('PostgreSQL Team store', () => {
         estimatedCostUsdMicros: '1284',
       },
       recentRequests: expect.arrayContaining([
-        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model' }),
+        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model', consumerDisplayName: 'Friend' }),
         expect.objectContaining({ id: 'friend-unmeasured', model: 'untrusted-request-model' }),
         expect.objectContaining({ id: 'admin-priced', model: 'untrusted-request-model' }),
       ]),

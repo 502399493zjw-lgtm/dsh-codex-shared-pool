@@ -637,6 +637,7 @@ function aggregateUsage(events: readonly UsageEventRecord[]): TeamUsageAggregate
 
 function ownedAccountUsage(
   events: readonly UsageEventRecord[],
+  members: ReadonlyMap<string, MemberRecord>,
   accounts: readonly ContributionRecord[],
   memberId: string,
   endedAt: number,
@@ -666,15 +667,19 @@ function ownedAccountUsage(
           window: { startedAt: last24HoursStartedAt, endedAt },
           aggregate: aggregateUsage(matching.filter(event => event.startedAt >= last24HoursStartedAt)),
         },
-        recentRequests: matching.slice(0, 10).map(event => ({
-          id: event.id,
-          model: event.model,
-          status: event.status,
-          startedAt: event.startedAt,
-          ...(event.finishedAt === undefined ? {} : { finishedAt: event.finishedAt }),
-          ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
-          ...(event.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: event.estimatedCostUsdMicros.toString() }),
-        })),
+        recentRequests: matching.slice(0, 10).map(event => {
+          const consumerDisplayName = members.get(event.consumerMemberId)?.displayName
+          return {
+            id: event.id,
+            ...(consumerDisplayName === undefined ? {} : { consumerDisplayName }),
+            model: event.model,
+            status: event.status,
+            startedAt: event.startedAt,
+            ...(event.finishedAt === undefined ? {} : { finishedAt: event.finishedAt }),
+            ...(event.totalTokens === undefined ? {} : { totalTokens: event.totalTokens }),
+            ...(event.estimatedCostUsdMicros === undefined ? {} : { estimatedCostUsdMicros: event.estimatedCostUsdMicros.toString() }),
+          }
+        }),
       }
     })
 }
@@ -1627,6 +1632,7 @@ export class MemoryTeamStore implements TeamStore {
     const mine = aggregateUsage(sharedInWindow.filter(event => event.consumerMemberId === member.id))
     const ownedAccounts = ownedAccountUsage(
       [...this.usageEvents.values()].filter(event => event.teamId === member.teamId),
+      this.members,
       [...this.contributions.values()].filter(account => account.teamId === member.teamId),
       member.id,
       endedAt,

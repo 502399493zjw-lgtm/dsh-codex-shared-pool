@@ -751,7 +751,8 @@ describe('local Team management routes', () => {
     const payload = { role, window, currency: 'USD', mine: aggregate,
       ...(role === 'owner' ? { team: aggregate } : {}),
       ownedAccounts: [{ accountId: 'account-1', window, aggregate,
-        currentUtcWeek: { window, resetAt: 300, aggregate }, last24Hours: { window, aggregate }, recentRequests: [] }] }
+        currentUtcWeek: { window, resetAt: 300, aggregate }, last24Hours: { window, aggregate }, recentRequests: [{ id: 'request-1', model: 'codex',
+          status: 'succeeded', startedAt: 150, consumerDisplayName: 'Mia' }] }] }
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } }))
     const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
     const result = await response(route(routes, TEAM_MANAGEMENT_USAGE_PATH).handler, request('GET'))

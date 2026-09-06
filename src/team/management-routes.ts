@@ -1082,6 +1082,7 @@ function projectOwnedAccountUsage(value: unknown): TeamUsageProjection['ownedAcc
         if (!['in_progress', 'succeeded', 'failed', 'cancelled'].includes(status)) throw new Error('remote Team returned invalid request status')
         return {
           id: stringField(request, 'id'),
+          ...(request.consumerDisplayName === undefined ? {} : { consumerDisplayName: stringField(request, 'consumerDisplayName') }),
           model: stringField(request, 'model'),
           status: status as TeamUsageEventStatus,
           startedAt: safeNonNegativeInteger(request, 'startedAt'),

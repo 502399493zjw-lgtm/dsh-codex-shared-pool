@@ -1,4 +1,5 @@
 .page,
+.recentRequestsDialog,
 .inviteDialog {
   --team-blue: var(--dsw-alias-state-business-primary, #3964fe);
   --team-blue-strong: var(--team-blue);
@@ -36,6 +37,7 @@
 }
 
 :global(body[data-ds-dark-theme]) .page,
+:global(body[data-ds-dark-theme]) .recentRequestsDialog,
 :global(body[data-ds-dark-theme]) .inviteDialog {
   --team-context-layer: #272a2e;
   --team-workspace-layer: #2b2e32;
@@ -2081,25 +2083,70 @@
   opacity: 0.55;
 }
 
+.recentRequestsDialog {
+  color: var(--team-ink);
+}
+
 .recentRequestList {
   display: grid;
-  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .recentRequest {
   display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--dsh-color-border, #ddd);
-  border-radius: 10px;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--team-line);
 }
 
-.recentRequest > div {
+.recentRequest:first-child { padding-top: 0; }
+.recentRequest:last-child { border-bottom: 0; padding-bottom: 0; }
+
+.recentRequestHeading,
+.recentRequestMeta {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  color: var(--dsh-color-text-secondary, #666);
+  gap: 6px 16px;
 }
+
+.recentRequestHeading strong {
+  min-width: 0;
+  color: var(--team-ink);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.recentRequestConsumer {
+  margin: 0;
+  color: var(--team-ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.recentRequestMeta {
+  color: var(--team-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recentRequestStatus {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 5px;
+  color: var(--team-muted);
+  background: var(--team-layer-soft);
+  font-size: 12px;
+}
+
+.recentRequestStatus[data-status='succeeded'] { color: var(--team-green); }
+.recentRequestStatus[data-status='failed'] { color: var(--team-red); }
+.recentRequestStatus[data-status='in_progress'] { color: var(--team-blue); }
 
 .accountHeader {
   display: flex;

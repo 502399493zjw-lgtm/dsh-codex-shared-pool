@@ -2518,9 +2518,11 @@ export class PostgresTeamStore implements TeamStore {
       const last24HoursStartedAt = endedAt - 86_400_000
       const currentUtcWeekStartedAt = utcIsoWeekStart(endedAt)
       const currentUtcWeekResetAt = currentUtcWeekStartedAt + 7 * 86_400_000
-      const ownedRows = await client.query<UsageRow>(`
-        SELECT usage.*
+      const ownedRows = await client.query<UsageRow & { consumer_display_name: string | null }>(`
+        SELECT usage.*, consumer.display_name AS consumer_display_name
         FROM team_usage_events AS usage
+        LEFT JOIN team_members AS consumer
+          ON consumer.id = usage.consumer_member_id AND consumer.team_id = usage.team_id
         INNER JOIN team_contributions AS contribution
           ON contribution.id = usage.upstream_account_id
         WHERE usage.team_id = $1
@@ -2550,6 +2552,7 @@ export class PostgresTeamStore implements TeamStore {
             const event = summaryUsage(row)
             return {
               id: event.id,
+              ...(row.consumer_display_name == null ? {} : { consumerDisplayName: row.consumer_display_name }),
               model: event.model,
               status: event.status,
               startedAt: event.startedAt,

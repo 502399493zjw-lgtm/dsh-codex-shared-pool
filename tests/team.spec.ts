@@ -1689,7 +1689,7 @@ describe('Team control plane', () => {
         estimatedCostUsdMicros: '1234',
       },
       recentRequests: expect.arrayContaining([
-        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model' }),
+        expect.objectContaining({ id: 'friend-priced', model: 'untrusted-request-model', consumerDisplayName: 'Friend' }),
         expect.objectContaining({ id: 'friend-unmeasured', model: 'untrusted-request-model' }),
       ]),
     })
