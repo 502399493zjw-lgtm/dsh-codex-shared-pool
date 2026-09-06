@@ -1758,7 +1758,23 @@
 
 .input { width: 100%; }
 
+.selectControl {
+  position: relative;
+}
+
+.selectArrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  width: 16px;
+  height: 16px;
+  color: var(--team-ink);
+}
+
 .select {
+  appearance: none;
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--team-line-strong);

@@ -2036,12 +2036,51 @@ describe('Team subscription-pool workspace', () => {
     expect(within(shareRegion).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
     expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
-    expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
+    expect(within(details).getByText('68%')).toBeDefined()
+    expect(within(details).getByText(zh.accountRemainingCapacity)).toBeDefined()
+    expect(within(details).getByRole('button', { name: zh.refreshQuota })).toBeDefined()
     expect(within(details).getByText('Plus')).toBeDefined()
     expect(within(details).getByText('US$100.00')).toBeDefined()
     expect(within(details).queryByText(/US\$68|周剩余预估/)).toBeNull()
     expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('refreshes unshared local quota inline, prevents duplicate requests, and permits retry', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: /本机账号 A/u }))
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const quotaLabel = within(details).getByText(zh.accountRemainingCapacity)
+    const row = quotaLabel.closest('div')!
+    expect(within(row).getByText('68%')).toBeDefined()
+    expect(within(details).queryByRole('progressbar')).toBeNull()
+    const refresh = within(row).getByRole('button', { name: zh.refreshQuota })
+    await waitFor(() => { expect(refresh).toHaveProperty('disabled', false) })
+    vi.mocked(fetch).mockClear()
+    let rejectRefresh!: (reason: Error) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject }))
+    fireEvent.click(refresh)
+    fireEvent.click(refresh)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith('/plugins/dsh-openai-codex/profiles', {
+      credentials: 'same-origin', headers: { accept: 'application/json' },
+    })
+    expect(refresh).toHaveProperty('disabled', true)
+    expect(refresh.getAttribute('aria-busy')).toBe('true')
+    expect(within(row).getByText('68%')).toBeDefined()
+    await act(async () => { rejectRefresh(new Error('private-upstream-detail')) })
+    expect(within(details).getByText(zh.capacityQuotaStaleHint)).toBeDefined()
+    expect(details.textContent).not.toContain('private-upstream-detail')
+    expect(refresh).toHaveProperty('disabled', false)
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: async () => ({
+      status: 'ready', profiles: [{ id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1,
+        usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 25, windowSeconds: 604800 }] }] }, inUse: true }],
+    }) } as Response)
+    fireEvent.click(refresh)
+    expect(await within(row).findByText('25%')).toBeDefined()
+    expect(within(details).queryByText(zh.capacityQuotaStaleHint)).toBeNull()
+    expect(refresh).toHaveProperty('disabled', false)
   })
 
   it('moves a durably bound local profile into shared accounts immediately and after remount', async () => {
@@ -2136,7 +2175,7 @@ describe('Team subscription-pool workspace', () => {
     expect(capacity.textContent).not.toContain('telemetry unavailable')
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(within(capacity).queryByRole('progressbar')).toBeNull()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
   })
 
   it.each([
@@ -2194,7 +2233,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(within(capacity).queryByRole('progressbar')).toBeNull()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
     expect(settings.textContent).not.toMatch(
       /upstream-secret|proxy-secret|unexpected token|socket failed|empty-shape-secret|pending-shape-secret|profiles-shape-secret/u,
     )
@@ -2265,7 +2304,7 @@ describe('Team subscription-pool workspace', () => {
     expect(quotaStatus.textContent).toBe(zh.loadingLocalQuota)
     expect(quotaStatus.classList.contains(styles.screenReaderOnly)).toBe(true)
     expect(workspace?.querySelector(`.${styles.quotaValueSkeleton}`)).not.toBeNull()
-    expect(workspace?.querySelector(`.${styles.quotaTrack}[data-loading='true']`)).not.toBeNull()
+    expect(within(workspace!).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', true)
 
     await act(async () => {
       resolveQuota({
@@ -2369,7 +2408,7 @@ describe('Team subscription-pool workspace', () => {
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(capacity.getAttribute('data-stale')).toBe('true')
     expect(within(capacity).getByText(zh.capacityQuotaStaleHint)).toBeDefined()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
     expect(capacity.textContent).not.toMatch(/quota telemetry timed out|background-shape-secret/u)
   })
 
@@ -3369,7 +3408,12 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
     expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
-    expect(within(inviteDialog).getByLabelText(zh.inviteExpiry)).toBeDefined()
+    const expirySelect = within(inviteDialog).getByRole('combobox', { name: zh.inviteExpiry })
+    expect(expirySelect.parentElement?.classList.contains(styles.selectControl)).toBe(true)
+    const expiryArrow = expirySelect.parentElement?.querySelector('svg')
+    expect(expiryArrow?.classList.contains(styles.selectArrow)).toBe(true)
+    expect(expiryArrow?.getAttribute('aria-hidden')).toBe('true')
+    expect(expiryArrow?.getAttribute('focusable')).toBe('false')
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
       expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
@@ -4417,4 +4461,25 @@ it.each([false, true])('explains rejected owner recovery without blaming a serve
   expect(managementApi.disconnect).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: zh.returnToTeam }))
   expect(await screen.findByRole('button', { name: '周末造物局' })).toBeDefined()
+})
+
+
+it('portals member actions outside the clipped workspace and restores trigger focus', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  const settings = await openTeamSettings('members')
+  const trigger = within(settings).getByRole('button', { name: '管理 Mia' })
+  fireEvent.click(trigger)
+  const menu = screen.getByRole('menu', { name: '管理 Mia' })
+  expect(settings.contains(menu)).toBe(false)
+  expect(menu.style.position).toBe('fixed')
+  fireEvent.keyDown(menu, { key: 'ArrowDown' })
+  expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: zh.removeMember }))
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(trigger)
+  fireEvent.pointerDown(document.body)
+  expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+  expect(managementApi.removeMember).not.toHaveBeenCalled()
 })

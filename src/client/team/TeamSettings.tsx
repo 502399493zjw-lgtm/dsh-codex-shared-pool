@@ -628,6 +628,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [removeMember, setRemoveMember] = useState<TeamManagementMemberSummary>()
   const [removeMemberAuthorizationContext, setRemoveMemberAuthorizationContext] = useState<string>()
   const [memberMenuId, setMemberMenuId] = useState<string>()
+  const memberMenuAnchorRef = useRef<HTMLElement | null>(null)
   const [teamStatusConfirmation, setTeamStatusConfirmation] = useState<TeamStatusConfirmation>()
   const [dissolution, setDissolution] = useState<TeamDissolutionView>()
   const [connectionTerminal, setConnectionTerminal] = useState<TeamConnectionTerminalView>()
@@ -655,7 +656,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [protectionEdit, setProtectionEdit] = useState<ContributionProtectionEdit>()
   const [recentUsageAccount, setRecentUsageAccount] = useState<RecentUsageTarget>()
   const [teamMenuOpen, setTeamMenuOpen] = useState(false)
-  const memberMenuAnchorRef = useRef<HTMLElement | null>(null)
   const teamMenuAnchorRef = useRef<HTMLDivElement>(null)
   const teamSettingsTriggerRef = useRef<HTMLButtonElement>(null)
   const workspaceBackRef = useRef<HTMLButtonElement>(null)
@@ -2195,35 +2195,28 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           data-stale={quotaIsStale ? 'true' : undefined}
         >
           <h3>{t('capacityTitle')}</h3>
+          <dl className={styles.compactSummaryList}>
+            <div>
+              <dt>{t('accountRemainingCapacity')}</dt>
+              <dd className={styles.weeklyAmount}>
+                {profile.remainingPercent === undefined
+                  ? quotaIsLoading
+                    ? <>
+                        <span className={styles.screenReaderOnly} role="status" aria-live="polite">{t('loadingLocalQuota')}</span>
+                        <span className={`${styles.skeletonBlock} ${styles.quotaValueSkeleton}`} aria-hidden="true" />
+                      </>
+                    : t(quotaHasError ? 'capacityQuotaError' : 'capacityQuotaUnavailable')
+                  : `${profile.remainingPercent}%`}
+                <button type="button" className={styles.inlineLimitButton}
+                  aria-label={t('refreshQuota')} title={t(localProfilesQuotaLoading ? 'refreshingQuota' : 'refreshQuota')}
+                  aria-busy={localProfilesQuotaLoading} disabled={localProfilesQuotaLoading || loading}
+                  onClick={() => { void refreshLocalProfileQuota() }}>
+                  {localProfilesQuotaLoading ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
+                </button>
+              </dd>
+            </div>
+          </dl>
           <SubscriptionEstimate subscription={profile.subscription} labels={subscriptionEstimateLabels(t)} />
-          <div className={styles.capacityLine}>
-            <span>{t('capacityCodex')}</span>
-            <strong>{profile.remainingPercent === undefined
-              ? quotaIsLoading
-                ? <>
-                    <span className={styles.screenReaderOnly} role="status" aria-live="polite">{t('loadingLocalQuota')}</span>
-                    <span className={`${styles.skeletonBlock} ${styles.quotaValueSkeleton}`} aria-hidden="true" />
-                  </>
-                : t(quotaHasError ? 'capacityQuotaError' : 'capacityQuotaUnavailable')
-              : `${profile.remainingPercent}%`}</strong>
-          </div>
-          <div
-            className={styles.quotaTrack}
-            data-loading={quotaIsLoading ? 'true' : undefined}
-            data-error={quotaHasError ? 'true' : undefined}
-            data-unavailable={profile.remainingPercent === undefined && !quotaIsLoading && !quotaHasError ? 'true' : undefined}
-            role={profile.remainingPercent === undefined ? undefined : 'progressbar'}
-            aria-label={profile.remainingPercent === undefined ? undefined : t('capacityCodex')}
-            aria-valuenow={profile.remainingPercent}
-            aria-valuemin={profile.remainingPercent === undefined ? undefined : 0}
-            aria-valuemax={profile.remainingPercent === undefined ? undefined : 100}
-          >
-            {profile.remainingPercent === undefined
-              ? quotaIsLoading
-                ? <span className={styles.quotaTrackSkeleton} aria-hidden="true" />
-                : null
-              : <span style={{ width: `${profile.remainingPercent}%` }} />}
-          </div>
           {quotaHasError
             ? <p className={styles.quotaWarning} role="status">{t(quotaIsStale ? 'capacityQuotaStaleHint' : 'capacityQuotaErrorHint')}</p>
             : null}
@@ -3313,13 +3306,18 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <div className={styles.modalBody}>
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
             <Field label={t('inviteExpiry')}>
-              <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
-                setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
-              }}>
-                <option value={86_400_000}>{t('inviteOneDay')}</option>
-                <option value={7 * 86_400_000}>{t('inviteSevenDays')}</option>
-                <option value={30 * 86_400_000}>{t('inviteThirtyDays')}</option>
-              </select>
+              <div className={styles.selectControl}>
+                <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
+                  setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
+                }}>
+                  <option value={86_400_000}>{t('inviteOneDay')}</option>
+                  <option value={7 * 86_400_000}>{t('inviteSevenDays')}</option>
+                  <option value={30 * 86_400_000}>{t('inviteThirtyDays')}</option>
+                </select>
+                <svg className={styles.selectArrow} viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+                  <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
             </Field>
           </div>
         )}
