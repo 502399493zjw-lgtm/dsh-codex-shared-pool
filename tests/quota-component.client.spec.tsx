@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -8,11 +8,13 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
 
 import {
   CodexQuotaFooter,
+  CODEX_QUOTA_POLL_INTERVAL_MS,
   type CodexQuotaFooterProps,
   formatCodexResetTime,
 } from '../src/client/quota/CodexQuotaFooter.tsx'
 import css from '../src/client/quota/CodexQuotaFooter.module.css'
-import { zh, type CodexQuotaLocaleKey } from '../src/client/quota/locales.ts'
+import { en, zh, type CodexQuotaLocaleKey } from '../src/client/quota/locales.ts'
+import type { CodexQuotaSnapshot } from '../src/client/quota/useCodexQuota.ts'
 
 afterEach(() => {
   cleanup()
@@ -28,13 +30,17 @@ const SNAPSHOT = {
   refreshedAt: 1,
 } as const
 
-const t = ((key: CodexQuotaLocaleKey, params?: Record<string, unknown>): string => {
-  let value: string = zh[key]
-  for (const [name, replacement] of Object.entries(params ?? {})) {
-    value = value.replace(`{${name}}`, String(replacement))
+function translate(locale: Record<CodexQuotaLocaleKey, string>): CodexQuotaFooterProps['t'] {
+  return (key, params) => {
+    let value: string = locale[key]
+    for (const [name, replacement] of Object.entries(params ?? {})) {
+      value = value.replace(`{${name}}`, String(replacement))
+    }
+    return value
   }
-  return value
-}) as CodexQuotaFooterProps['t']
+}
+
+const t = translate(zh)
 
 function props(overrides: Partial<CodexQuotaFooterProps> = {}): CodexQuotaFooterProps {
   return {
@@ -85,11 +91,68 @@ describe('unified Codex quota footer', () => {
     expect(view.container.childElementCount).toBe(0)
   })
 
-  it('shows a neutral unavailable state without exposing an error message', async () => {
-    const read = vi.fn().mockRejectedValue(new Error('private account path'))
-    render(<CodexQuotaFooter {...props({ read })} />)
-    expect(await screen.findByText(zh.unavailable)).toBeTruthy()
-    expect(screen.queryByText('private account path')).toBeNull()
+  it.each([
+    { locale: zh, failed: '更新失败', updated: '上次更新 2026-09-06 08:30' },
+    { locale: en, failed: 'Update failed', updated: 'Last updated 2026-09-06 08:30' },
+  ])('retains stale values and their update time after a failed poll, then recovers ($failed)', async ({ locale, failed, updated }) => {
+    vi.useFakeTimers()
+    const refreshedAt = new Date(2026, 8, 6, 8, 30).getTime()
+    const recovery = Promise.withResolvers<CodexQuotaSnapshot>()
+    const read = vi.fn()
+      .mockResolvedValueOnce({ ...SNAPSHOT, refreshedAt })
+      .mockRejectedValueOnce(new Error('private account path'))
+      .mockReturnValueOnce(recovery.promise)
+    const view = render(<CodexQuotaFooter {...props({ read, t: translate(locale) })} />)
+    expect(screen.getByText(locale.loading)).toBeTruthy()
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText('73%')).toBeTruthy()
+    expect(screen.queryByText(failed)).toBeNull()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(CODEX_QUOTA_POLL_INTERVAL_MS) })
+    expect(screen.getByText('73%')).toBeTruthy()
+    expect(screen.getByText('61%')).toBeTruthy()
+    expect(screen.getByText('经纬 钟')).toBeTruthy()
+    const feedback = screen.getByRole('status')
+    expect(feedback.textContent).toContain(failed)
+    expect(feedback.textContent).toContain(updated)
+    expect(feedback.getAttribute('aria-atomic')).toBe('true')
+    expect(feedback.querySelector('time')?.dateTime).toBe(new Date(refreshedAt).toISOString())
+    expect(view.container.firstElementChild?.getAttribute('data-stale')).toBe('true')
+    expect(view.container.textContent).not.toContain('private account path')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(CODEX_QUOTA_POLL_INTERVAL_MS) })
+    expect(screen.getByRole('status').textContent).toContain(updated)
+    expect(screen.getByText('73%')).toBeTruthy()
+    await act(async () => {
+      recovery.resolve({ ...SNAPSHOT, currentRemainingPercent: 42, poolRemainingPercent: 55, refreshedAt: refreshedAt + 120_000 })
+      await recovery.promise
+    })
+    expect(screen.getByText('42%')).toBeTruthy()
+    expect(screen.getByText('55%')).toBeTruthy()
+    expect(screen.queryByText('73%')).toBeNull()
+    expect(screen.queryByText(failed)).toBeNull()
+    expect(view.container.querySelector('time')).toBeNull()
+    expect(view.container.firstElementChild?.hasAttribute('data-stale')).toBe(false)
+  })
+
+  it.each([zh, en])('distinguishes first load and first failure without inventing a previous update, then recovers', async (locale) => {
+    vi.useFakeTimers()
+    const read = vi.fn()
+      .mockRejectedValueOnce(new Error('private account path'))
+      .mockResolvedValueOnce(SNAPSHOT)
+    const view = render(<CodexQuotaFooter {...props({ read, t: translate(locale) })} />)
+    expect(screen.getByText(locale.loading)).toBeTruthy()
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText(locale.unavailable)).toBeTruthy()
+    expect(screen.queryByText(locale.loading)).toBeNull()
+    expect(view.container.textContent).not.toContain('private account path')
+    expect(view.container.textContent).not.toContain('%')
+    expect(view.container.querySelector('time')).toBeNull()
+    expect(view.container.firstElementChild?.hasAttribute('data-stale')).toBe(false)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(CODEX_QUOTA_POLL_INTERVAL_MS) })
+    expect(screen.getByText('73%')).toBeTruthy()
+    expect(screen.queryByText(locale.unavailable)).toBeNull()
   })
 
   it.each([
@@ -111,6 +174,31 @@ describe('unified Codex quota footer', () => {
       expect(view.container.querySelector(`.${css.pool}`)?.textContent).toBe(expectedPool)
     })
     expect(screen.getByRole('button', { name: '打开' })).toBeTruthy()
+  })
+
+  it('marks retained pool data as stale only after a failed read when the current quota is unknown', async () => {
+    vi.useFakeTimers()
+    const refreshedAt = new Date(2026, 8, 6, 8, 30).getTime()
+    const read = vi.fn()
+      .mockResolvedValueOnce({
+        ...SNAPSHOT,
+        currentAccountName: null,
+        currentRemainingPercent: null,
+        refreshedAt,
+      })
+      .mockRejectedValueOnce(new Error('private transport error'))
+    const view = render(<CodexQuotaFooter {...props({ read })} />)
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText(zh.unavailable)).toBeTruthy()
+    expect(screen.getByText('61%')).toBeTruthy()
+    expect(screen.queryByText('更新失败')).toBeNull()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(CODEX_QUOTA_POLL_INTERVAL_MS) })
+    expect(screen.getByText(zh.unavailable)).toBeTruthy()
+    expect(view.container.querySelector(`.${css.pool}`)?.textContent).toBe('账号池 12 个账号 · 总剩余 61%')
+    expect(screen.getByRole('status').textContent).toBe('更新失败 上次更新 2026-09-06 08:30')
+    expect(view.container.firstElementChild?.getAttribute('data-stale')).toBe('true')
+    expect(view.container.textContent).not.toContain('private transport error')
   })
 
   it('formats reset instants as local unpadded month and day with padded time', () => {

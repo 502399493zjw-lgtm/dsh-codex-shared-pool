@@ -83,6 +83,30 @@
   font-weight: 600;
 }
 
+.root[data-stale] .quota {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.feedback {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 6px;
+  min-width: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* Keep the live region mounted without adding an empty row to the footer. */
+.feedback:empty {
+  position: absolute;
+}
+
+.updateFailed {
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+}
+
 .open {
   align-self: center;
   display: inline-flex;

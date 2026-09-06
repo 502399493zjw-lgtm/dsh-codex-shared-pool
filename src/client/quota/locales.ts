@@ -12,6 +12,8 @@ export const zh = {
   totalRemaining: '总剩余',
   loading: '正在读取 Codex 额度…',
   unavailable: 'Codex 额度暂不可用',
+  updateFailed: '更新失败',
+  lastUpdated: '上次更新 {time}',
   open: '打开',
 } satisfies Record<string, string>
 
@@ -30,5 +32,7 @@ export const en = {
   totalRemaining: 'total remaining',
   loading: 'Reading Codex quota…',
   unavailable: 'Codex quota unavailable',
+  updateFailed: 'Update failed',
+  lastUpdated: 'Last updated {time}',
   open: 'Open',
 } satisfies Record<CodexQuotaLocaleKey, string>
