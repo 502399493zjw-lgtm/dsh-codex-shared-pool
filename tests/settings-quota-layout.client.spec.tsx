@@ -53,6 +53,29 @@ function requestPath(input: RequestInfo | URL): string {
 }
 
 describe('local account quota presentation', () => {
+  it.each([en, zh].flatMap(locale => [
+    { locale, planType: 'pro', label: 'Pro 20x' },
+    { locale, planType: 'prolite', label: 'Pro 5x' },
+    { locale, planType: 'plus', label: 'Plus' },
+    { locale, planType: undefined, label: locale.unknownSubscription },
+    { locale, planType: 'unrecognized-plan', label: locale.unknownSubscription },
+  ]))('shows $planType beside the subscription heading without estimate rows', async ({ locale, planType, label }) => {
+    const profile = { id: 'sample', label: 'Sample account', createdAt: 1, updatedAt: 1,
+      usage: { planType, rateLimits: [] } }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = requestPath(input)
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [profile] })
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    }))
+    render(<OpenAICodexSettings t={key => locale[key]} />)
+    const title = await screen.findByRole('heading', { name: locale.subscriptionDetails })
+    expect(within(title.parentElement!).getByText(label).parentElement).toBe(title.parentElement)
+    expect(screen.queryByText(locale.subscriptionTier)).toBeNull()
+    expect(screen.queryByText(locale.weeklyEstimate)).toBeNull()
+    expect(screen.queryByText(/US\$/)).toBeNull()
+  })
+
   it.each([en, zh])('groups model quotas and keeps compact values accessible', async (locale) => {
     const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>) => {
       let value: string = locale[key]

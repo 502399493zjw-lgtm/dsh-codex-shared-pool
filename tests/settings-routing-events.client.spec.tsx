@@ -58,7 +58,7 @@ const t = (key: OpenAICodexSettingsKey, params?: Record<string, unknown>): strin
 }
 
 describe('OpenAI Codex local routing monitor', () => {
-  it('groups the usage heading and subscription details without stacked spacing', async () => {
+  it('keeps account actions available with the inline subscription summary', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({
@@ -70,9 +70,7 @@ describe('OpenAI Codex local routing monitor', () => {
     render(<OpenAICodexSettings t={t} />)
     const title = await screen.findByRole('heading', { name: en.subscriptionDetails })
     const summary = title.parentElement!
-    expect(within(summary).getByText(en.subscriptionTier)).toBeDefined()
-    expect(summary.style.gap).toBe('10px')
-    expect(within(summary).getByText(en.subscriptionTier).parentElement!.parentElement!.style.marginBlock).toBe('0px')
+    expect(within(summary).getByText(en.unknownSubscription).parentElement).toBe(summary)
     fireEvent.click(screen.getByRole('button', { name: en.renameProfile }))
     expect(screen.getByRole('textbox', { name: en.renameProfilePrompt })).toBeDefined()
   })

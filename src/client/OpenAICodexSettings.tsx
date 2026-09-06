@@ -1,8 +1,7 @@
 /** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SubscriptionEstimate, subscriptionEstimateLabels } from './SubscriptionEstimate.tsx'
-import { subscriptionFromUsage } from '../shared/subscription.ts'
+import { subscriptionFromUsage, subscriptionPlanLabel } from '../shared/subscription.ts'
 import type { CSSProperties } from 'react'
 import {
   Button,
@@ -243,11 +242,14 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
   t: OpenAICodexSettingsInjected['t']
 }) {
   const hasData = usage.rateLimits.length > 0 || usage.credits !== undefined || usage.individualLimit !== undefined
+  const planType = subscriptionFromUsage(usage)?.planType
   return (
     <div style={quotaListStyle}>
-      <div style={quotaGroupStyle}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 12px' }}>
         <h3 style={quotaTitleStyle}>{t('subscriptionDetails')}</h3>
-        <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} style={{ marginBlock: 0 }} />
+        <span style={{ fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }}>
+          {planType === undefined || planType === 'unknown' ? t('unknownSubscription') : subscriptionPlanLabel(planType)}
+        </span>
       </div>
       <section aria-label={t('modelQuotas')} style={quotaListStyle}>
         <div style={{ ...quotaLabelStyle, alignItems: 'baseline' }}>
