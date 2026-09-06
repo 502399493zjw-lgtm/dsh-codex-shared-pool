@@ -19,6 +19,12 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('bounds recent requests to the viewport and scrolls only the body', () => {
+    expect(css).toMatch(/\.recentRequestsDialog\s*\{[^}]*height:\s*min\(640px,\s*calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s)
+    expect(css).toMatch(/\.recentRequestsContent\s*\{[^}]*min-height:\s*0;[^}]*display:\s*grid;[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/s)
+    expect(css).toMatch(/\.recentRequestsContent > :last-child\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+  })
+
   it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
     expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
     expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
@@ -206,6 +212,11 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
 
+  it('gives the Team settings entry a visible button surface at rest and pressed feedback', () => {
+    expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*border-color:\s*var\(--team-line-strong\);[^}]*background:\s*color-mix\(in srgb, var\(--team-ink\) 6%, var\(--team-layer\)\);/s)
+    expect(css).toMatch(/\.teamSettingsTrigger:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--team-blue\) 12%, var\(--team-layer\)\);/s)
+  })
+
   it('keeps the prototype compact Team bar and detail rhythm', () => {
     expect(css).toMatch(/\.teamIdentity \.hint\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
     expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*font-size:\s*13px;/s)
@@ -287,4 +298,12 @@ it('gives join and create a visible button surface and distinct interaction stat
 it('truncates account titles while keeping inline status and actions from shrinking', () => {
   expect(css).toMatch(/\.detailTitle\s*\{[^}]*max-width:\s*12em;[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s)
   expect(css).toMatch(/\.detailHeading\s*\{[^}]*flex-wrap:\s*nowrap;/s)
+})
+
+describe('Invite expiry arrow positioning', () => {
+  it('insets and centers one non-interactive arrow inside the select control', () => {
+    expect(css).toMatch(/\.selectControl\s*\{[^}]*position:\s*relative;/s)
+    expect(css).toMatch(/\.select\s*\{[^}]*appearance:\s*none;/s)
+    expect(css).toMatch(/\.selectArrow\s*\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*top:\s*50%;[^}]*transform:\s*translateY\(-50%\);[^}]*pointer-events:\s*none;/s)
+  })
 })

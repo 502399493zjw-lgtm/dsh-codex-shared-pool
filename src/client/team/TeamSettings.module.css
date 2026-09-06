@@ -101,9 +101,9 @@
 .teamSettingsTrigger {
   flex: 0 0 auto;
   min-height: 36px;
-  border-color: transparent;
+  border-color: var(--team-line-strong);
   padding: 7px 12px;
-  background: transparent;
+  background: color-mix(in srgb, var(--team-ink) 6%, var(--team-layer));
   font-size: 13px;
 }
 
@@ -113,6 +113,10 @@
 .workspaceBack:focus-visible {
   border-color: color-mix(in srgb, var(--team-blue) 38%, var(--team-line));
   background: color-mix(in srgb, var(--team-blue) 6%, var(--team-layer));
+}
+
+.teamSettingsTrigger:active {
+  background: color-mix(in srgb, var(--team-blue) 12%, var(--team-layer));
 }
 
 .workspaceBack {
@@ -1699,7 +1703,23 @@
 
 .input { width: 100%; }
 
+.selectControl {
+  position: relative;
+}
+
+.selectArrow {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  width: 16px;
+  height: 16px;
+  color: var(--team-ink);
+}
+
 .select {
+  appearance: none;
   width: 100%;
   min-height: 44px;
   border: 1px solid var(--team-line-strong);
@@ -2095,7 +2115,25 @@
 }
 
 .recentRequestsDialog {
+  box-sizing: border-box;
+  height: min(640px, calc(100dvh - 48px));
+  overflow: hidden;
   color: var(--team-ink);
+}
+
+.recentRequestsDialog .recentRequestsContent {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+/* The stock Modal body follows its fixed title and description rows. */
+.recentRequestsContent > :last-child {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .recentRequestList {
