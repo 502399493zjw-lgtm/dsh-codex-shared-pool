@@ -349,7 +349,7 @@ async function pipeResponse(
  * after the request settles.
  */
 class ProviderUsageObserver {
-  private readonly mode: 'sse' | 'json' | 'none'
+  private readonly mode: 'sse' | 'json' | 'untyped' | 'none'
   private readonly decoder = new TextDecoder()
   private readonly jsonChunks: Uint8Array[] = []
   private jsonBytes = 0
@@ -367,15 +367,17 @@ class ProviderUsageObserver {
       ? 'sse'
       : normalized.includes('application/json')
         ? 'json'
-        : 'none'
+        : normalized.trim() === '' ? 'untyped' : 'none'
   }
 
   observe(value: Uint8Array): void {
-    if (this.mode === 'sse') {
+    if (this.mode === 'sse' || this.mode === 'untyped') {
       this.consumeSseText(this.decoder.decode(value, { stream: true }))
-      return
+      if (this.mode === 'sse') return
     }
-    if (this.mode !== 'json' || this.jsonOverflow) return
+    // Some Codex responses omit Content-Type. Observe both bounded formats in
+    // that case; unknown or malformed usage still never becomes measured usage.
+    if ((this.mode !== 'json' && this.mode !== 'untyped') || this.jsonOverflow) return
     if (this.jsonBytes + value.byteLength > MAX_USAGE_JSON_BYTES) {
       this.jsonChunks.length = 0
       this.jsonOverflow = true
@@ -386,12 +388,12 @@ class ProviderUsageObserver {
   }
 
   finish(): TeamProviderTokenUsage | undefined {
-    if (this.mode === 'sse') {
+    if (this.mode === 'sse' || this.mode === 'untyped') {
       this.consumeSseText(this.decoder.decode(), true)
       this.flushSseEvent()
-      return this.latest
+      if (this.mode === 'sse' || this.latest !== undefined) return this.latest
     }
-    if (this.mode !== 'json' || this.jsonOverflow) return undefined
+    if ((this.mode !== 'json' && this.mode !== 'untyped') || this.jsonOverflow) return undefined
     try {
       const payload = JSON.parse(Buffer.concat(this.jsonChunks.map(chunk => Buffer.from(chunk))).toString('utf8')) as unknown
       return usageFromPayload(payload)
