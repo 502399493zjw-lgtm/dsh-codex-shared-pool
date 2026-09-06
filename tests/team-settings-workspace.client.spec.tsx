@@ -4283,6 +4283,20 @@ it.each(['周末造物局', '这是一个很长的团队名称用来验证省略
   expect(settingsTrigger.closest('h2')?.className).toBe(styles.workspaceTeamName)
 })
 
+it('omits redundant saved-Team copy when the Team menu has no other connections', async () => {
+  managementApi.connections.mockResolvedValue([])
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  const menu = screen.getByRole('menu', { name: zh.switchTeam })
+  await waitFor(() => expect(within(menu).queryByRole('status')).toBeNull())
+  expect(within(menu).queryByText('已保存的团队')).toBeNull()
+  expect(within(menu).queryByText('本机暂时没有其他已保存的团队。')).toBeNull()
+  expect(within(menu).getByRole('menuitemradio', { name: /周末造物局/u })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.recoverOwner })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.joinTeamAction })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.createTeam })).toBeDefined()
+})
+
 it('places the selected Team and bottom join/create actions in the Team-name dropdown in both views', async () => {
   render(<TeamSettings t={translate} embedded />)
   expect(screen.queryByRole('button', { name: zh.switchTeam })).toBeNull()
