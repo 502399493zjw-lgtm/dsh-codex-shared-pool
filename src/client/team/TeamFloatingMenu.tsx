@@ -3,13 +3,14 @@ import { createPortal } from 'react-dom'
 import styles from './TeamSettings.module.css'
 
 /** Body portal escapes the settings scroll container; every position is viewport bounded. */
-export function TeamFloatingMenu({ anchorRef, label, className, children, onClose, align = 'start' }: {
+export function TeamFloatingMenu({ anchorRef, label, className, children, onClose, align = 'start', preferredWidth = 320 }: {
   anchorRef: RefObject<HTMLElement | null>
   label: string
   className: string
   children: ReactNode
   onClose: () => void
   align?: 'start' | 'end'
+  preferredWidth?: number
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
@@ -24,7 +25,7 @@ export function TeamFloatingMenu({ anchorRef, label, className, children, onClos
       const margin = 12
       const viewportWidth = window.innerWidth
       const viewportHeight = window.innerHeight
-      const width = Math.min(320, viewportWidth - margin * 2)
+      const width = Math.min(preferredWidth, viewportWidth - margin * 2)
       const left = Math.max(margin, Math.min(align === 'end' ? rect.right - width : rect.left, viewportWidth - width - margin))
       const below = Math.max(0, viewportHeight - rect.bottom - margin - 6)
       const above = Math.max(0, rect.top - margin - 6)
@@ -48,7 +49,7 @@ export function TeamFloatingMenu({ anchorRef, label, className, children, onClos
       window.removeEventListener('scroll', positionMenu, true)
       document.removeEventListener('pointerdown', outside)
     }
-  }, [anchorRef, align])
+  }, [anchorRef, align, preferredWidth])
   useLayoutEffect(() => {
     // Browsers ignore focus while the measuring pass still has visibility:hidden.
     if (position.visibility !== 'hidden') menuRef.current?.focus({ preventScroll: true })
