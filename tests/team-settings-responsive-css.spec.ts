@@ -179,8 +179,8 @@ describe('Team Settings responsive container contract', () => {
   it('matches the approved dark controls, status pill, and compact detail type', () => {
     expect(css).toMatch(/\.teamBar,\s*\.routingSummary\s*\{[^}]*border-radius:\s*11px;/s)
     expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.accountNavItem:hover\s*\{[^}]*background:\s*#34383d;/s)
-    expect(css).toMatch(/\.accountNavStatus\.pill\s*\{[^}]*border:\s*1px solid rgba\(139,\s*184,\s*255,\s*\.3\);[^}]*border-radius:\s*999px;/s)
-    expect(css).toMatch(/\.compactSummaryTitle\s*\{[^}]*margin:\s*0 0 20px;[^}]*font-size:\s*15px;[^}]*font-weight:\s*600;[^}]*line-height:\s*22px;/s)
+    expect(css).toMatch(/\.accountNavAlias\s*\{[^}]*border:\s*1px solid var\(--team-line-strong\);[^}]*border-radius:\s*4px;/s)
+    expect(css).toMatch(/\.compactSummaryTitle\s*\{[^}]*margin:\s*0 0 14px;[^}]*font-size:\s*15px;[^}]*font-weight:\s*600;[^}]*line-height:\s*22px;/s)
     expect(css).toMatch(/\.page \.accountActionButton\s*\{[^}]*min-height:\s*36px;/s)
     expect(css).toMatch(/\.page \.stopSharingButton\s*\{[^}]*border-color:\s*rgba\(255,\s*116,\s*123,\s*\.38\);[^}]*background:\s*rgba\(255,\s*116,\s*123,\s*\.08\);[^}]*color:\s*#ff9ca1;/s)
   })
@@ -190,8 +190,14 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.directoryGroupHeader\s*\{[^}]*font-size:\s*11px;[^}]*line-height:\s*16px;/s)
     expect(css).toMatch(/\.directoryGroupTitle\s*\{[^}]*font-size:\s*11px;[^}]*font-weight:\s*650;[^}]*line-height:\s*16px;/s)
     expect(css).toMatch(/\.accountNavLabel\s*\{[^}]*font-size:\s*13px;[^}]*font-weight:\s*600;[^}]*line-height:\s*18px;/s)
-    expect(css).toMatch(/\.accountNavOwner\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*18px;/s)
-    expect(css).toMatch(/\.accountNavStatus\s*\{[^}]*font-size:\s*11px;[^}]*line-height:\s*16px;/s)
+    expect(css).toMatch(/\.accountNavAlias\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*16px;/s)
+    expect(css).toMatch(/\.accountNavStatus\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
+  })
+
+  it('makes allowance, subscription and expiry metadata legible with compact section spacing', () => {
+    expect(css).toMatch(/\.accountAuxiliary\s*\{[^}]*font-size:\s*13px;[^}]*line-height:\s*20px;/s)
+    expect(css).toMatch(/\.meta\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
+    expect(css).toMatch(/\.prototypeSection\s*\{[^}]*margin-top:\s*20px;[^}]*padding:\s*18px 0 20px;/s)
   })
 
   it('keeps the approved subscription-pool heading and tab rhythm', () => {

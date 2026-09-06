@@ -18,4 +18,13 @@ describe('Chinese team terminology', () => {
       expect(parameters(zh[key]), key).toEqual(parameters(en[key]))
     }
   })
+
+  it('distinguishes weekly usage and limit, account percentage, and API value estimates', () => {
+    expect(zh.weeklySharedAmount).toBe('本周已共享 / 上限')
+    expect(en.weeklySharedAmount).toBe('Shared this week / limit')
+    expect(zh.accountRemainingCapacity).toContain('比例')
+    expect(en.accountRemainingCapacity).toContain('(%)')
+    expect(zh.weeklyEstimate).toContain('API')
+    expect(en.weeklyEstimate).toContain('API')
+  })
 })
