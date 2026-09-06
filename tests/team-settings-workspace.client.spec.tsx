@@ -1426,18 +1426,62 @@ describe('Team subscription-pool workspace', () => {
             label: '本机账号 A',
             createdAt: 1,
             updatedAt: 1,
-            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
             inUse: true,
           }],
         }),
       } as Response)
     })
 
-    expect(within(quota).getByText('68%')).toBeDefined()
+    expect(within(quota).getByText('US$2,100.00')).toBeDefined()
     expect(within(quota).queryByText(zh.sharingQuotaUnavailable)).toBeNull()
-    expect(within(quota).getByText('20%')).toBeDefined()
-    expect(within(quota).getByText(zh.sharingQuotaNoWeeklyLimit)).toBeDefined()
-    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+    expect(within(quota).queryByText('20%')).toBeNull()
+    expect(within(quota).queryByText('为自己保留')).toBeNull()
+    const limit = within(quota).getByLabelText('共享额度（USD / 周）')
+    fireEvent.change(limit, { target: { value: '-1' } })
+    expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', true)
+    fireEvent.change(limit, { target: { value: '25' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('oauth-new', {
+      personalReservePercent: 0, weeklySharedEstimatedApiCostLimitMicros: 25_000_000,
+    }, expectedContext()))
+    expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves unlimited sharing without a reserve before opening provider authorization', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close: vi.fn() })
+    let resolveSave!: () => void
+    managementApi.updateContribution.mockImplementationOnce(() => new Promise<void>(resolve => { resolveSave = resolve }))
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    expect(dialog.className).toContain(styles.localAuthorizationDialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('oauth-new', {
+      personalReservePercent: 0, weeklySharedEstimatedApiCostLimitMicros: null,
+    }, expectedContext()))
+    expect(navigate).not.toHaveBeenCalled()
+    expect(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)).toHaveProperty('disabled', true)
+    await act(async () => resolveSave())
+    await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
+  })
+
+  it('cancels the new authorization if the sharing allowance cannot be saved', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close: vi.fn() })
+    managementApi.updateContribution.mockRejectedValueOnce(new Error('Unable to save allowance'))
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    fireEvent.change(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit), { target: { value: '25' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true))
+    expect(navigate).not.toHaveBeenCalled()
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', false))
+    expect(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)).toHaveProperty('value', '25')
   })
 
   it('shows an immediate saving state while sharing limits are being updated', async () => {
@@ -2273,7 +2317,7 @@ describe('Team subscription-pool workspace', () => {
             label: '本机账号 A',
             createdAt: 1,
             updatedAt: 1,
-            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
             inUse: true,
           }],
         }),
@@ -2332,7 +2376,7 @@ describe('Team subscription-pool workspace', () => {
               label: '本机账号 A',
               createdAt: 1,
               updatedAt: 1,
-              usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+              usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
               inUse: true,
             }],
           }),
