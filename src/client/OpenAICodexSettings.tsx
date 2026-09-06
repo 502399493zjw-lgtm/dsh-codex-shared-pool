@@ -252,10 +252,6 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
         </span>
       </div>
       <section aria-label={t('modelQuotas')} style={quotaListStyle}>
-        <div style={{ ...quotaLabelStyle, alignItems: 'baseline' }}>
-          <h3 style={quotaTitleStyle}>{t('modelQuotas')}</h3>
-          <span style={{ fontSize: 12 }}>{t('quotaRemaining')}</span>
-        </div>
         {usage.rateLimits.map(limit => (
           <div key={limit.id} style={quotaGroupStyle}>
             <h4 style={{ ...quotaTitleStyle, fontSize: 14, fontWeight: 500, overflowWrap: 'anywhere' }}>{limit.name ?? limit.id}</h4>
