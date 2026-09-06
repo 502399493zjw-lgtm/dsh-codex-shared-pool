@@ -6,12 +6,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
   BlockAssembler,
-  CallId,
+  ToolCallId,
   createAssistantMessage,
   createToolResultMessage,
   createUserMessage,
 } from '@deepseek-ai/dsh-llm'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
 import WebRuntime from '@deepseek-ai/dsh-web'
 import * as OpenAICodex from '../src/index.ts'
 import { OPENAI_CODEX_RESPONSES_URL } from '../src/responses.ts'
@@ -142,7 +143,7 @@ describe('OpenAI Codex compaction request', () => {
       })
     })
 
-    const callId = CallId('call_1|fc_1')
+    const callId = ToolCallId('call_1|fc_1')
     const reasoningItem = {
       type: 'reasoning',
       id: 'rs_1',
@@ -236,7 +237,7 @@ describe('OpenAI Codex compaction request', () => {
     ])
   })
 
-  it('uses native compact output as a durable checkpoint and restores its response items', async () => {
+  it.each(['runtime', 'prepared'] as const)('uses native compact output as a durable checkpoint and restores its response items through %s calls', async (entry) => {
     root = await mkdtemp(join(tmpdir(), 'dsh-openai-codex-native-compact-'))
     vi.stubEnv('DSH_HOME', root)
     const store = new OpenAICodex.OpenAICodexCredentialStore()
@@ -278,8 +279,13 @@ describe('OpenAI Codex compaction request', () => {
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(WebRuntime)
     await ctx.plugin(OpenAICodex, { useNativeCompaction: true, useFastMode: true })
+    const stream = async (options: GenerateOptions) => {
+      if (entry === 'runtime') return ctx.llm.stream(options)
+      const prepared = await ctx.llm.prepareCall(options)
+      return prepared.stream({ ...options, ...prepared.config })
+    }
     const compacted = new BlockAssembler()
-    for await (const chunk of ctx.llm.stream({
+    for await (const chunk of await stream({
       provider: 'openai-codex',
       model: 'gpt-5.6-sol',
       purpose: 'compaction',
@@ -300,7 +306,7 @@ describe('OpenAI Codex compaction request', () => {
     }).content
 
     const continued = new BlockAssembler()
-    for await (const chunk of ctx.llm.stream({
+    for await (const chunk of await stream({
       provider: 'openai-codex',
       model: 'gpt-5.6-sol',
       system: 'Preserve durable context.',

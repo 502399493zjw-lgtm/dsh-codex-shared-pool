@@ -66,13 +66,18 @@
 
 ## 安装
 
-当前正式版发布在 npm 的 `latest` tag。安装到 DSH Web profile：
+本分支适配官方 DSH `0.1.2-rc.1`，尚未发布到 npm。npm 上的 `0.1.3` 仍适用于旧基线 DSH `0.1.0-rc.8`；`latest` 和 `next` 暂不包含本次适配。
+
+使用本分支源码构建并安装到新版 DSH Web profile：
 
 ```bash
-dsh plugin --profile web add dsh-codex-shared-pool@0.1.3
+pnpm install --frozen-lockfile
+pnpm pack --out artifacts/dsh-codex-shared-pool.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./artifacts/dsh-codex-shared-pool.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
-也可以省略版本以安装 `latest`；如需跟随后续预发布版本，请使用 `dsh-codex-shared-pool@next`。
+升级已有实例前请备份 `DSH_HOME`（默认 `~/.dsh`），并退出旧 DSH 进程。现有账号文件和团队配置沿用原位置，不需要重新导入；其他社区插件需要分别确认新版兼容性。仓库的 `pnpm run test:stock` 和 CI 会使用固定依赖快照验证此版本的实际安装及启动。
 
 然后启动同一个 Web profile，进入：
 
@@ -186,8 +191,8 @@ pnpm pack
 
 本项目当前固定验证基线：
 
-- DSH `0.1.0-rc.8`
-- Cordis `4.0.1`
+- DSH `0.1.2-rc.1`
+- Cordis `4.0.2`
 - Node.js `^22.19.0` 或 `>=24.0.0`
 
 ## 已知限制

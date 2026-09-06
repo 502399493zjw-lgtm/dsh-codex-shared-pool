@@ -16,14 +16,16 @@ describe('OpenAI Codex model capabilities', () => {
     expect(OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES).toBe(20 * 1024 * 1024)
   })
 
-  it('exposes the Codex-native Sol reasoning menu without generic aliases', async () => {
+  it.each(['resolve', 'prepare'] as const)('exposes the Codex-native Sol reasoning menu through %s', async (entry) => {
     const adapter = createOpenAICodexAdapter(
       new OpenAICodexCredentialStore(),
       () => undefined,
       preferences,
     )
 
-    const resolved = await adapter.resolveModel('openai-codex', 'gpt-5.6-sol')
+    const resolved = entry === 'prepare'
+      ? (await adapter.prepareCall('openai-codex', 'gpt-5.6-sol')).model
+      : await adapter.resolveModel('openai-codex', 'gpt-5.6-sol')
 
     expect(resolved.reasoning?.defaultEffort).toBe('low')
     expect(resolved.reasoning?.efforts.map(effort => effort.id))

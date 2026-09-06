@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
@@ -26,7 +25,7 @@ export const DEFAULT_RESPONSE_API_PREFERENCES: ResponseApiPreferences = {
   useNativeCompaction: false,
 }
 
-const NAMESPACE = settingsNamespace('openai-codex')
+const NAMESPACE = 'openai-codex'
 const schema: z<OpenAICodexPreferences> = z.object({
   modifyReadImage: z.boolean().default(true),
   shareImagegenWithOtherModels: z.boolean().default(true),

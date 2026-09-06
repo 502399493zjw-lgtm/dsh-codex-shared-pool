@@ -8,6 +8,52 @@ permissions:
   contents: read
 
 jobs:
+  stock-compatibility:
+    name: Stock DSH 0.1.2-rc.1 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm and Node.js
+        uses: pnpm/setup@v2
+        with:
+          runtime: node@24
+
+      - name: Build, verify, and pack the plugin
+        run: pnpm pack --out artifacts/stock-plugin.tgz
+
+      - name: Install the published DSH release with a fixed dependency snapshot
+        run: >-
+          npm install --prefix artifacts/stock-dsh
+          --registry https://registry.npmjs.org/
+          --before 2026-09-04T00:00:00.000Z
+          --ignore-scripts --no-audit --no-fund
+          @deepseek-ai/dsh@0.1.2-rc.1
+
+      - name: Install tarball into isolated DSH and verify startup, routes, and boot manifest
+        run: >-
+          node scripts/smoke-stock-compat.mjs
+          --tarball artifacts/stock-plugin.tgz
+          --dsh-entry artifacts/stock-dsh/node_modules/@deepseek-ai/dsh/lib/bin.js
+          --artifacts artifacts/stock-smoke-evidence
+
+      - name: Preserve stock installation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-dsh-${{ matrix.os }}
+          path: artifacts/stock-smoke-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
   test:
     runs-on: ubuntu-latest
     services:

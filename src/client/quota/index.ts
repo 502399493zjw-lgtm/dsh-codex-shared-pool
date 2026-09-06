@@ -1,7 +1,8 @@
 /** Codex account-pool quota contribution for the sidebar footer. */
 
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
@@ -14,6 +15,7 @@ import { QUOTA_CLIENT_INJECT } from '../runtime-contract.ts'
 import {
   CODEX_SETTINGS_SECTION_ID,
   openSettingsSection,
+  type SettingsNavigationFace,
 } from '../settings-section-navigation.ts'
 
 export type {
@@ -50,7 +52,7 @@ export function apply(ctx: ClientContext): void {
     if (typeof value !== 'object' || value === null) throw new Error('codex quota returned malformed data')
     return value as Awaited<ReturnType<CodexQuotaReadFace['read']>>
   }
-  const settingsNavigation = ctx.get('settingsNavigation')
+  const settingsNavigation = ctx.get('settingsNavigation') as SettingsNavigationFace | undefined
   const settingsT = ctx.locale.bind('settings.openai-codex')
 
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({

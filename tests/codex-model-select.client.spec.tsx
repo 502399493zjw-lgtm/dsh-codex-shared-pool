@@ -49,7 +49,7 @@ const snapshot = {
 } as const
 
 describe('stock DSH Codex model selector', () => {
-  it('renders Fast and reasoning choices through the rc.8 model-seat contract', async () => {
+  it('renders Fast and reasoning choices through the published model-seat contract', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       useFastMode: false,
       useWebSocketContextReuse: false,

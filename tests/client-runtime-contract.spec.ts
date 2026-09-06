@@ -6,7 +6,7 @@ import {
 
 describe('published DSH browser runtime contract', () => {
   it('does not hard-wait on the optional Settings navigation service', () => {
-    expect(CLIENT_INJECT).toEqual(['slots', 'locale', 'sessions', 'modelDirectories'])
+    expect(CLIENT_INJECT).toEqual(['slots', 'locale', 'sessions', 'modelDirectories', 'remote', 'remote.session'])
     expect(QUOTA_CLIENT_INJECT).toEqual(['slots', 'locale'])
   })
 })
