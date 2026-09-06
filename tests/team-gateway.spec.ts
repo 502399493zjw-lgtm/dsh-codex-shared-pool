@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { DataType, newDb } from 'pg-mem'
 import type { Pool as PgPool } from 'pg'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
   TeamCredentialBroker,
   TeamCredentialRef,
@@ -73,14 +73,14 @@ function rawRequest(method: string, body: Buffer | undefined, headers: Record<st
   return stream
 }
 
-function chunkedResponse(chunks: readonly string[], contentType: string): Response {
+function chunkedResponse(chunks: readonly string[], contentType: string | null): Response {
   const encoder = new TextEncoder()
   return new Response(new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
       controller.close()
     },
-  }), { status: 200, headers: { 'content-type': contentType } })
+  }), { status: 200, headers: contentType === null ? {} : { 'content-type': contentType } })
 }
 
 async function response(
@@ -144,8 +144,11 @@ function postgresTestPool(): PgPool {
   return new adapter.Pool() as unknown as PgPool
 }
 
+afterEach(() => vi.useRealTimers())
+
 describe('Team Responses gateway', () => {
-  it('waits for a competing first-session request to release the shared slot', async () => {
+  it('waits beyond five seconds for a competing first-session request to release the sole shared slot', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const broker = new GatewayBroker()
     const store = new MemoryTeamStore()
     const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
@@ -163,9 +166,10 @@ describe('Team Responses gateway', () => {
       model: 'gpt-5.6-sol', input: [], stream: true,
     }, { authorization: `Bearer ${joined.apiKey}`, 'content-type': 'application/json' }))
     // The main request must remain pending while the title owns the sole slot.
-    await new Promise(resolve => setTimeout(resolve, 30))
+    await vi.advanceTimersByTimeAsync(8_000)
     expect(broker.forwarded).toHaveLength(0)
     await service.settleRequest(first.lease, 'success')
+    await vi.advanceTimersByTimeAsync(250)
     expect((await result).status).toBe(200)
     expect(broker.forwarded).toHaveLength(1)
   })
@@ -252,14 +256,14 @@ describe('Team Responses gateway', () => {
     expect(broker.forwarded).toHaveLength(0)
   })
 
-  it('captures chunk-split streamed Responses usage while forwarding bytes unchanged', async () => {
+  it.each(['text/event-stream', null])('captures chunk-split streamed Responses usage with content-type %s while forwarding bytes unchanged', async contentType => {
     const payload = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":120,"input_tokens_details":{"cached_tokens":40},"output_tokens":10}}}\n\n'
     const broker = new GatewayBroker()
     vi.spyOn(broker, 'forwardResponses').mockResolvedValueOnce(chunkedResponse([
       payload.slice(0, 17),
       payload.slice(17, 71),
       payload.slice(71),
-    ], 'text/event-stream'))
+    ], contentType))
     const store = new MemoryTeamStore()
     const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
     const boot = await store.bootstrap('Friends', 'Owner')
@@ -275,22 +279,23 @@ describe('Team Responses gateway', () => {
     expect(result.body).toBe(payload)
     expect(await store.listUsageEvents(owner, 10)).toMatchObject([{
       status: 'succeeded',
+      totalTokens: 130,
       credits: 130,
       creditsFormulaVersion: 'credits-v1',
     }])
   })
 
-  it('captures non-stream Responses usage and ignores malformed numeric metadata', async () => {
+  it.each(['application/json', null])('captures non-stream usage with content-type %s and ignores malformed numeric metadata', async contentType => {
     const broker = new GatewayBroker()
     vi.spyOn(broker, 'forwardResponses')
-      .mockResolvedValueOnce(new Response(JSON.stringify({
+      .mockResolvedValueOnce(chunkedResponse([JSON.stringify({
         id: 'response-1',
         usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 20 }, output_tokens: 5 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
+      })], contentType))
+      .mockResolvedValueOnce(chunkedResponse([JSON.stringify({
         id: 'response-2',
         usage: { input_tokens: -1, output_tokens: 'secret-not-a-number' },
-      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      })], contentType))
     const store = new MemoryTeamStore()
     const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
     const boot = await store.bootstrap('Friends', 'Owner')
@@ -308,6 +313,31 @@ describe('Team Responses gateway', () => {
     expect(events[1]).toMatchObject({ credits: 105, creditsFormulaVersion: 'credits-v1' })
     expect(events[0]).not.toHaveProperty('credits')
     expect(JSON.stringify(events)).not.toContain('secret-not-a-number')
+  })
+
+  it.each([
+    { name: 'SSE beyond the JSON buffer limit', chunks: [': heartbeat\n\n'.repeat(30_000), 'data: {"response":{"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":3}}}\n\n'], contentType: null, measured: true },
+    { name: 'oversized JSON', chunks: [JSON.stringify({ padding: 'x'.repeat(256 * 1024), usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 0 }, output_tokens: 3 } })], contentType: null, measured: false },
+    { name: 'oversized SSE usage event', chunks: ['data: ' + JSON.stringify({ padding: 'x'.repeat(128 * 1024), usage: { input_tokens: 12, input_tokens_details: { cached_tokens: 0 }, output_tokens: 3 } }) + '\n\n'], contentType: null, measured: false },
+    { name: 'missing cache counter', chunks: ['data: {"usage":{"input_tokens":12,"output_tokens":3}}\n\n'], contentType: null, measured: false },
+    { name: 'explicit non-Responses media type', chunks: ['data: {"usage":{"input_tokens":12,"input_tokens_details":{"cached_tokens":0},"output_tokens":3}}\n\n'], contentType: 'text/plain', measured: false },
+  ])('keeps usage validation and buffer bounds for $name', async ({ chunks, contentType, measured }) => {
+    const broker = new GatewayBroker()
+    vi.spyOn(broker, 'forwardResponses').mockResolvedValueOnce(chunkedResponse(chunks, contentType))
+    const store = new MemoryTeamStore()
+    const service = new TeamService({ store, broker, capacity: new TeamCapacityProvider(broker) })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = (await store.authenticateApiKey(boot.apiKey))!
+    const account = await store.createContributionAccount(owner, 'Owner Codex')
+    await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+    const result = await response(createTeamGatewayHandler(service), request('POST', {
+      model: 'gpt-5.4-mini', input: [], stream: true,
+    }, { authorization: `Bearer ${boot.apiKey}`, 'content-type': 'application/json' }))
+    expect(result.status).toBe(200)
+    expect(result.body).toBe(chunks.join(''))
+    const events = await store.listUsageEvents(owner, 10)
+    if (measured) expect(events[0]).toMatchObject({ totalTokens: 15 })
+    else expect(events[0]).not.toHaveProperty('totalTokens')
   })
 
   it('accepts the Host-only Codex bearer wrapper used by the Team client adapter', async () => {

@@ -1,7 +1,9 @@
-/** Short, abortable waits for an occupied shared slot; never replays provider calls. */
+/** Bounded, abortable waits for an occupied shared slot; never replays provider calls. */
 import { TeamRouteCapacityError } from './routing.ts'
 
-const WAIT_MS = 5_000
+// First-session title and body requests can overlap for longer than five seconds.
+// Keep the queue bounded without changing account concurrency or replaying provider calls.
+const WAIT_MS = 60_000
 const POLL_MS = 250
 
 export async function waitForTeamAdmission<T>(admit: () => Promise<T>, signal: AbortSignal): Promise<T> {

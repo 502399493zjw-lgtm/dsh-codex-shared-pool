@@ -15,15 +15,28 @@ describe('bounded Team admission wait', () => {
     expect(admit).toHaveBeenCalledTimes(2)
   })
 
-  it('stops waiting after five seconds with the specific capacity reason', async () => {
+  it('admits after a normal provider request holds the slot beyond five seconds', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const busy = new TeamRouteCapacityError('busy', ['shared_concurrency_reached'])
+    const admit = vi.fn().mockRejectedValue(busy)
+    const result = waitForTeamAdmission(admit, new AbortController().signal)
+    // Attach a rejection handler immediately, including on the old five-second implementation.
+    const settled = result.then(value => ({ value }), error => ({ error }))
+    await vi.advanceTimersByTimeAsync(8_000)
+    admit.mockResolvedValue('lease')
+    await vi.advanceTimersByTimeAsync(250)
+    expect(await settled).toEqual({ value: 'lease' })
+  })
+
+  it('stops waiting after sixty seconds with the specific capacity reason', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const busy = new TeamRouteCapacityError('busy', ['shared_concurrency_reached'])
     const admit = vi.fn().mockRejectedValue(busy)
     const result = waitForTeamAdmission(admit, new AbortController().signal)
     const rejection = expect(result).rejects.toBe(busy)
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(60_000)
     await rejection
-    expect(admit).toHaveBeenCalledTimes(21)
+    expect(admit).toHaveBeenCalledTimes(241)
   })
 
   it('cancels promptly without another admission attempt', async () => {
@@ -35,7 +48,7 @@ describe('bounded Team admission wait', () => {
     await vi.advanceTimersByTimeAsync(0)
     controller.abort()
     await rejection
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(60_000)
     expect(admit).toHaveBeenCalledOnce()
   })
 
