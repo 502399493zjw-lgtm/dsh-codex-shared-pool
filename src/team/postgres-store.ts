@@ -3298,18 +3298,8 @@ export class PostgresTeamStore implements TeamStore {
       }
       throw error
     }
-    await client.query(`
-      UPDATE team_invites
-      SET status = 'accepted', accepted_at = $1, token_hash = $2,
-          envelope_version = NULL, envelope_key_ref = NULL, envelope_wrapped_dek = NULL,
-          envelope_wrapped_dek_nonce = NULL, envelope_wrapped_dek_tag = NULL,
-          envelope_nonce = NULL, envelope_ciphertext = NULL, envelope_tag = NULL
-      WHERE id = $3
-    `, [
-      now,
-      revokedTokenHash(invite.id),
-      invite.id,
-    ])
+    // The Team/invite locks still serialize joins with revocation and lifecycle
+    // changes, but a successful join leaves this invitation reusable.
     const key = await this.createKey(client, team.id, member.id, 'member', now, suppliedApiKey)
     return { team: summaryTeam(team), member: summaryMember(member), apiKey: key.token }
   }

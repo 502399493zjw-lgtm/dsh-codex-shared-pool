@@ -248,6 +248,38 @@ async function applyTeamMigrationsThrough(pool: PgPool, lastVersion: number): Pr
 }
 
 describe('PostgreSQL Team store', () => {
+  it('reuses an invitation for distinct members until revoked or expired', async () => {
+    let now = 1_000
+    const pool = testPool()
+    const store = testStore({ pool, now: () => now })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const first = await store.acceptInvite(invite.inviteToken, 'First')
+    const suppliedKey = 'dsh_team_reusable-invite-test-key-1234567890'
+    const second = await store.acceptInviteWithApiKey(invite.inviteToken, 'Second', suppliedKey)
+    expect(second.member.id).not.toBe(first.member.id)
+    expect(second.member.role).toBe('member')
+    expect(first.apiKey).not.toBe(suppliedKey)
+    await expect(store.authenticateApiKey(first.apiKey)).resolves.toMatchObject({ memberId: first.member.id })
+    await expect(store.authenticateApiKey(suppliedKey)).resolves.toMatchObject({ memberId: second.member.id })
+    await expect(store.acceptInvite(invite.inviteToken, 'FIRST')).rejects.toThrow(/already in use/iu)
+    await expect(store.previewInvite(invite.inviteToken)).resolves.toMatchObject({ teamName: 'Friends' })
+    await expect(store.revealInvite(owner, invite.invite.id)).resolves.toMatchObject({ inviteToken: invite.inviteToken })
+    expect((await store.overview(owner)).invites).toEqual([expect.objectContaining({ id: invite.invite.id, status: 'pending', revealable: true })])
+    await store.revokeInvite(owner, invite.invite.id)
+    await expect(store.acceptInvite(invite.inviteToken, 'Third')).rejects.toThrow(/invalid or expired/iu)
+    await expect(store.revealInvite(owner, invite.invite.id)).rejects.toThrow(/no longer available/iu)
+    // Revocation prevents future joins without disconnecting existing members.
+    await expect(store.authenticateApiKey(first.apiKey)).resolves.toMatchObject({ memberId: first.member.id })
+    const expiring = await store.createInvite(owner, 60_000)
+    await store.acceptInvite(expiring.inviteToken, 'Before expiry')
+    now = expiring.invite.expiresAt
+    await expect(store.acceptInvite(expiring.inviteToken, 'At expiry')).rejects.toThrow(/invalid or expired/iu)
+    await pool.end()
+  })
+
   it('rejects stale usage schema even when migration history is current', async () => {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('team_usage_events')) throw Object.assign(new Error('missing column'), { code: '42703' })
@@ -1212,7 +1244,7 @@ describe('PostgreSQL Team store', () => {
     await pool.end()
   })
 
-  it('clears invitation envelopes on acceptance, revocation, and ownership transfer', async () => {
+  it('retains envelopes after joining and clears them on revocation and ownership transfer', async () => {
     const pool = testPool()
     const store = testStore({ pool, inviteCipher: testInviteCipher() })
     const boot = await store.bootstrap('Friends', 'Owner')
@@ -1241,7 +1273,7 @@ describe('PostgreSQL Team store', () => {
       ORDER BY id
     `, [accepted.invite.id, revoked.invite.id, transferred.invite.id])
     expect(rows.rows).toEqual([
-      { id: accepted.invite.id, status: 'accepted', envelope_version: null, envelope_ciphertext: null },
+      { id: accepted.invite.id, status: 'revoked', envelope_version: null, envelope_ciphertext: null },
       { id: revoked.invite.id, status: 'revoked', envelope_version: null, envelope_ciphertext: null },
       { id: transferred.invite.id, status: 'revoked', envelope_version: null, envelope_ciphertext: null },
     ].sort((left, right) => left.id.localeCompare(right.id)))
@@ -2036,7 +2068,7 @@ describe('PostgreSQL Team store', () => {
     await pool.end()
   })
 
-  it('keeps one-time invites and tenant data isolated', async () => {
+  it('keeps reusable invites and tenant data isolated', async () => {
     const pool = testPool()
     const store = testStore({ pool })
     const first = await store.bootstrap('First', 'Alice')
@@ -2046,7 +2078,7 @@ describe('PostgreSQL Team store', () => {
     if (firstAuth === undefined || secondAuth === undefined) throw new Error('keys should authenticate')
     const invite = await store.createInvite(firstAuth, 60_000)
     await store.acceptInvite(invite.inviteToken, 'Friend')
-    await expect(store.acceptInvite(invite.inviteToken, 'Second Friend')).rejects.toThrow(/invalid or expired/u)
+    await expect(store.acceptInvite(invite.inviteToken, 'Second Friend')).resolves.toMatchObject({ team: { id: first.team.id } })
 
     const contribution = await store.createContributionAccount(firstAuth, 'Alice Codex')
     await expect(store.updateContributionAccount(secondAuth, contribution.id, { status: 'paused' }))
@@ -2447,7 +2479,7 @@ describe('PostgreSQL Team store', () => {
         status: 'dissolved',
         lifecycleRevision: 2,
         terminatedMemberCount: 2,
-        revokedInviteCount: 1,
+        revokedInviteCount: 2,
         revokedKeyCount: 3,
         revokedContributionCount: 2,
       })

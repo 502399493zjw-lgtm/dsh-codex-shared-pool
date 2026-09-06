@@ -1063,11 +1063,8 @@ export class MemoryTeamStore implements TeamStore {
     this.members.set(member.id, member)
     team.memberIds.push(member.id)
     this.commitKey(key)
-    invite.status = 'accepted'
-    invite.acceptedAt = now
-    this.inviteHashes.delete(invite.tokenHash)
-    invite.tokenHash = hashToken(`accepted:${invite.id}`)
-    delete invite.envelope
+    // A successful join does not consume the invitation. Keep the token and
+    // envelope available until expiry or an explicit revocation.
     return { team: summaryTeam(team), member: summaryMember(member), apiKey: key.token }
   }
 
