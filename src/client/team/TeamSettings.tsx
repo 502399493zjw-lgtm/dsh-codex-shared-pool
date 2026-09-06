@@ -2297,7 +2297,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
     const renderContributionAccount = (account: TeamManagementContributionSummary) => {
       const accountUsage = usageProjection?.ownedAccounts?.find(item => item.accountId === account.id)
-      const weeklyUsed = formatWeeklyUsdMicros(accountUsage?.currentUtcWeek?.aggregate.estimatedCostUsdMicros)
+      const weeklyAggregate = accountUsage?.currentUtcWeek?.aggregate
+      const weeklyUsed = formatWeeklyUsdMicros(
+        weeklyAggregate?.requestCount === 0
+          || (usageProjection !== undefined && accountUsage === undefined)
+          ? 0
+          : weeklyAggregate?.estimatedCostUsdMicros,
+      )
       const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const activeCapacityReason = account.status === 'active'
