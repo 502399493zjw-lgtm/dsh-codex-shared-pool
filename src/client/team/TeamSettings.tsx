@@ -67,7 +67,6 @@ const TEAM_INVITE_TOKEN_PATTERN = /^dsh_invite_[A-Za-z0-9_-]{16,}$/u
 const LOCAL_PROFILE_DIRECTORY_PATH = '/plugins/dsh-openai-codex/profiles/directory'
 const LOCAL_PROFILES_PATH = '/plugins/dsh-openai-codex/profiles'
 const LOCAL_QUOTA_REFRESH_ERROR = 'quota_refresh_failed'
-const DEFAULT_PERSONAL_RESERVE_PERCENT = 20
 
 type ContributionCapacityReason = NonNullable<TeamManagementContributionSummary['capacity']>['buckets'][number]['reason']
 type AvailabilityDotState = 'done' | 'warning' | 'error'
@@ -176,6 +175,8 @@ interface RecentUsageTarget {
 }
 
 interface PendingLocalAuthorization {
+  readonly weeklyLimitUsd: string
+
   readonly id: string
   readonly label: string
   readonly authorizationContext: string
@@ -1484,15 +1485,31 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     sourceLocalProfileId?: string,
     onPresented?: () => void,
     expectedContextOverride?: TeamManagementExpectedContext,
+    sharingLimit?: ReturnType<typeof parseWeeklySharingLimitDraft>,
   ): Promise<void> => {
     const expectedContext = expectedContextOverride ?? teamExpectedContextRef.current
     if (expectedContext === undefined) return Promise.resolve()
     return presentOAuth(
       'browser',
       busyName,
-      async () => sourceLocalProfileId === undefined
-        ? await api.startOAuth(label.trim(), expectedContext, 'browser')
-        : await api.startOAuth(label.trim(), expectedContext, 'browser', sourceLocalProfileId),
+      async () => {
+        const result = sourceLocalProfileId === undefined
+          ? await api.startOAuth(label.trim(), expectedContext, 'browser')
+          : await api.startOAuth(label.trim(), expectedContext, 'browser', sourceLocalProfileId)
+        if (sharingLimit?.ok) {
+          try {
+            await api.updateContribution(result.account.id, {
+              ...sharingLimit.patch,
+              personalReservePercent: 0,
+            }, expectedContext)
+          } catch (cause) {
+            // Never open provider authorization with limits that failed to save.
+            await api.cancelOAuth(result.account.id, expectedContext, true)
+            throw cause
+          }
+        }
+        return result
+      },
       expectedContext,
       true,
       onPresented,
@@ -2172,6 +2189,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             onClick={() => {
               if (teamAuthorizationContext === undefined || teamExpectedContext === undefined) return
               setPendingLocalAuthorization({
+                weeklyLimitUsd: '',
                 id: profile.id,
                 label: profile.label,
                 authorizationContext: teamAuthorizationContext,
@@ -2950,6 +2968,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           key={JSON.stringify(recoveryExportContext)} api={api} t={t} expectedContext={recoveryExportContext} onClose={() => setRecoveryExportContext(undefined)} />}
 
       <Modal
+        className={styles.localAuthorizationDialog!}
         open={activePendingLocalAuthorization !== undefined}
         onClose={() => { if (busy === undefined) setPendingLocalAuthorization(undefined) }}
         title={t('localAuthorizationConfirmTitle', { label: activePendingLocalAuthorization?.label ?? '' })}
@@ -2966,7 +2985,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <Button
               size="sm"
               variant="primary"
-              disabled={busy !== undefined || authorizationSnapshotPending || activePendingLocalAuthorization === undefined}
+              disabled={busy !== undefined || authorizationSnapshotPending || activePendingLocalAuthorization === undefined || !parseWeeklySharingLimitDraft(activePendingLocalAuthorization).ok}
               aria-busy={activePendingLocalAuthorization === undefined ? false : busy === `share-local-${activePendingLocalAuthorization.id}`}
               onClick={() => {
                 const pending = activePendingLocalAuthorization
@@ -2975,12 +2994,15 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   || authorizationSnapshotPending
                   || pending.authorizationContext !== teamAuthorizationContext
                 ) return
+                const sharingLimit = parseWeeklySharingLimitDraft(pending)
+                if (!sharingLimit.ok) return
                 void startBrowserOAuth(
                   pending.label,
                   `share-local-${pending.id}`,
                   pending.id,
                   () => { setPendingLocalAuthorization(undefined) },
                   pending.expectedContext,
+                  sharingLimit,
                 )
               }}
             >{activePendingLocalAuthorization !== undefined && busy === `share-local-${activePendingLocalAuthorization.id}`
@@ -2992,27 +3014,33 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <div className={styles.localAuthorizationConfirmation}>
           <p>{t('localAuthorizationConfirmBody', { team: team.name })}</p>
           <section className={styles.sharingQuotaConfirmation} role="region" aria-label={t('sharingQuotaConfirmation')}>
-            <div className={styles.sharingQuotaMeter} aria-hidden="true">
-              <span style={{ width: `${activePendingLocalProfile?.remainingPercent ?? 0}%` }} />
-              <i style={{ left: `${DEFAULT_PERSONAL_RESERVE_PERCENT}%` }} />
-            </div>
             <dl className={styles.sharingQuotaFacts}>
               <div>
-                <dt>{t('sharingQuotaCurrent')}</dt>
-                <dd>{activePendingLocalProfile?.remainingPercent === undefined
+                <dt>{t('weeklyEstimate')}</dt>
+                <dd>{activePendingLocalProfile?.subscription?.weeklyEstimatedUsd === undefined
                   ? t('sharingQuotaUnavailable')
-                  : `${activePendingLocalProfile.remainingPercent}%`}</dd>
-              </div>
-              <div>
-                <dt>{t('sharingQuotaReserve')}</dt>
-                <dd>{DEFAULT_PERSONAL_RESERVE_PERCENT}%</dd>
-              </div>
-              <div>
-                <dt>{t('sharingQuotaWeeklyLimit')}</dt>
-                <dd>{t('sharingQuotaNoWeeklyLimit')}</dd>
+                  : `US$${activePendingLocalProfile.subscription.weeklyEstimatedUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</dd>
               </div>
             </dl>
-            <p className={styles.sharingQuotaHint}>{t('sharingQuotaConfirmationHint', { reserve: DEFAULT_PERSONAL_RESERVE_PERCENT })}</p>
+            <div className={styles.sharingQuotaField}>
+              <label htmlFor="team-authorization-weekly-limit">{t('sharingQuotaWeeklyLimit')}</label>
+              <Input
+                id="team-authorization-weekly-limit"
+                inputMode="decimal"
+                value={activePendingLocalAuthorization?.weeklyLimitUsd ?? ''}
+                placeholder={t('sharingQuotaNoWeeklyLimit')}
+                disabled={busy !== undefined}
+                aria-describedby="team-authorization-quota-hint"
+                aria-invalid={activePendingLocalAuthorization !== undefined && !parseWeeklySharingLimitDraft(activePendingLocalAuthorization).ok}
+                onChange={event => {
+                  const weeklyLimitUsd = event.target.value
+                  setPendingLocalAuthorization(current => current === undefined ? current : { ...current, weeklyLimitUsd })
+                }}
+              />
+            </div>
+            {activePendingLocalAuthorization !== undefined && !parseWeeklySharingLimitDraft(activePendingLocalAuthorization).ok
+              ? <p role="alert">{t('weeklyLimitValidation')}</p> : null}
+            <p id="team-authorization-quota-hint" className={styles.sharingQuotaHint}>{t('sharingQuotaConfirmationHint')}</p>
           </section>
           <p className={styles.localAuthorizationSafety}>
             <strong>{t('localCredentialBoundary')}</strong> {t('localAuthorizationConfirmSafety')}

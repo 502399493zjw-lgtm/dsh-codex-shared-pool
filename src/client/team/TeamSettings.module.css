@@ -1,6 +1,7 @@
 .page,
 .recentRequestsDialog,
-.inviteDialog {
+.inviteDialog,
+.localAuthorizationDialog {
   --team-blue: var(--dsw-alias-state-business-primary, #3964fe);
   --team-blue-strong: var(--team-blue);
   --team-green: var(--dsw-alias-state-success-primary, #168f61);
@@ -38,7 +39,8 @@
 
 :global(body[data-ds-dark-theme]) .page,
 :global(body[data-ds-dark-theme]) .recentRequestsDialog,
-:global(body[data-ds-dark-theme]) .inviteDialog {
+:global(body[data-ds-dark-theme]) .inviteDialog,
+:global(body[data-ds-dark-theme]) .localAuthorizationDialog {
   --team-context-layer: #272a2e;
   --team-workspace-layer: #2b2e32;
   --team-line: #383c42;
@@ -1520,37 +1522,30 @@
   border: 1px solid var(--team-line);
   border-radius: 10px;
   padding: 14px;
-  background: color-mix(in srgb, var(--team-blue) 3%, transparent);
+  background: var(--team-layer-soft);
 }
 
-.sharingQuotaMeter {
-  position: relative;
-  overflow: hidden;
-  height: 8px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--team-muted) 16%, transparent);
+.localAuthorizationDialog {
+  width: min(100%, 480px);
 }
 
-.sharingQuotaMeter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--team-green);
+.sharingQuotaField {
+  display: grid;
+  gap: 8px;
+  color: var(--team-ink);
+  font-size: 13px;
+  font-weight: 500;
 }
 
-.sharingQuotaMeter > i {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--team-ink);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--team-layer) 82%, transparent);
+.sharingQuotaField input {
+  width: 100%;
+  box-sizing: border-box;
+  font-variant-numeric: tabular-nums;
 }
 
 .sharingQuotaFacts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin: 0;
 }
@@ -1566,12 +1561,12 @@
 }
 
 .sharingQuotaFacts dd {
-  margin: 2px 0 0;
+  margin: 6px 0 0;
   color: var(--team-ink);
-  font-size: 14px;
+  font-size: 24px;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
-  line-height: 20px;
+  line-height: 32px;
 }
 
 .localAuthorizationConfirmation .sharingQuotaHint {
