@@ -1383,6 +1383,87 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('keeps invalid sharing limits beside the edit input with an accessible error', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
+
+    const dialog = screen.getByRole('dialog', { name: zh.editProtection })
+    const input = within(dialog).getByLabelText(zh.weeklyLimitLabel)
+    fireEvent.change(input, { target: { value: '-1' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+
+    const error = within(dialog).getByRole('alert')
+    expect(error.textContent).toBe(zh.weeklyLimitValidation)
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(error.id).not.toBe('')
+    expect(input.getAttribute('aria-describedby')?.split(/\s+/u)).toContain(error.id)
+    expect(input.parentElement?.contains(error)).toBe(true)
+    expect(input.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(managementApi.updateContribution).not.toHaveBeenCalled()
+    expect(input).toHaveProperty('value', '-1')
+
+    fireEvent.change(input, { target: { value: '25' } })
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('mine-active', {
+      weeklySharedEstimatedApiCostLimitMicros: 25_000_000,
+    }, expectedContext()))
+  })
+
+  it('keeps a failed sharing-limit request and its draft in the edit dialog for retry', async () => {
+    managementApi.updateContribution.mockRejectedValueOnce(new Error('Unable to save allowance'))
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
+    fireEvent.click(within(account).getByRole('button', { name: zh.editSharingLimit }))
+
+    const dialog = screen.getByRole('dialog', { name: zh.editProtection })
+    const input = within(dialog).getByLabelText(zh.weeklyLimitLabel)
+    fireEvent.change(input, { target: { value: '25' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+
+    const error = await within(dialog).findByRole('alert')
+    expect(error.textContent).toContain('Unable to save allowance')
+    expect(screen.getByRole('dialog', { name: zh.editProtection })).toBe(dialog)
+    expect(input).toHaveProperty('value', '25')
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    expect(error.id).not.toBe('')
+    expect(input.getAttribute('aria-describedby')?.split(/\s+/u)).toContain(error.id)
+    expect(input.parentElement?.contains(error)).toBe(true)
+    expect(within(dialog).getByRole('button', { name: zh.save })).toHaveProperty('disabled', false)
+
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.save }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: zh.editProtection })).toBeNull())
+  })
+
+  it('associates the first-sharing validation error with its input and clears it after correction', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const input = within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)
+    fireEvent.change(input, { target: { value: '-1' } })
+
+    const error = within(dialog).getByRole('alert')
+    expect(error.textContent).toBe(zh.weeklyLimitValidation)
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(error.id).not.toBe('')
+    expect(input.getAttribute('aria-describedby')?.split(/\s+/u)).toContain(error.id)
+    expect(input.parentElement?.contains(error)).toBe(true)
+    expect(input.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', true)
+    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: '25' } })
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', false)
+  })
+
   it('keeps an open sharing confirmation in sync with the slower quota refresh', async () => {
     let resolveQuota!: (value: Response) => void
     vi.mocked(fetch).mockImplementation((input) => {
@@ -1484,7 +1565,14 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true))
     expect(navigate).not.toHaveBeenCalled()
     await waitFor(() => expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', false))
-    expect(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)).toHaveProperty('value', '25')
+    const input = within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)
+    expect(input).toHaveProperty('value', '25')
+    const error = within(dialog).getByRole('alert')
+    expect(error.textContent).toContain('Unable to save allowance')
+    expect(input.getAttribute('aria-invalid')).toBe('false')
+    expect(error.id).not.toBe('')
+    expect(input.getAttribute('aria-describedby')?.split(/\s+/u)).toContain(error.id)
+    expect(input.parentElement?.contains(error)).toBe(true)
   })
 
   it('shows an immediate saving state while sharing limits are being updated', async () => {
@@ -2059,6 +2147,48 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByText('本机账号 A')).toBeDefined()
     expect(within(directory).getByText('账号 B')).toBeDefined()
     expect(within(directory).getByText('本机账号 B')).toBeDefined()
+  })
+
+  it('makes recognizable account names the main line and keeps aliases and statuses secondary', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(panel).getByRole('complementary')
+
+    for (const [label, status] of [
+      [mine.label, zh.contributedByMe],
+      [paused.label, zh.paused],
+      [friend.label, translate('contributedBy', { name: 'Mia' })],
+      ['本机账号 A', zh.localNotShared],
+    ] as const) {
+      const item = within(directory).getByRole('button', { name: new RegExp(label, 'u') })
+      const name = within(item).getByText(label)
+      const alias = within(item).getByText(/^账号 [A-Z]+$/u)
+      const statusLine = within(item).getByText(status, { exact: false })
+      expect(name.classList.contains(styles.accountNavLabel)).toBe(true)
+      expect(alias.classList.contains(styles.accountNavAlias)).toBe(true)
+      expect(name.compareDocumentPosition(alias) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+      expect(statusLine.closest(`.${styles.accountNavCopy}`)).not.toBeNull()
+    }
+  })
+
+  it('falls back to an account alias without exposing an unknown shared contributor identity', async () => {
+    overviewState = {
+      ...overviewState,
+      activeSharedAccounts: [{ ...friend, label: '  ', ownerMemberId: 'private-unknown-member-id' }],
+    }
+    render(<TeamSettings t={translate} embedded />)
+    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const directory = within(panel).getByRole('complementary')
+    const item = within(directory).getByRole('button', {
+      name: new RegExp(translate('contributedBy', { name: zh.member }), 'u'),
+    })
+
+    const visibleName = item.querySelector(`.${styles.accountNavLabel}`)?.textContent ?? ''
+    expect(visibleName).toMatch(/^账号 [A-Z]+$/u)
+    expect(item.getAttribute('aria-label')).toContain(visibleName)
+    expect(within(item).getByText(translate('contributedBy', { name: zh.member }))).toBeDefined()
+    expect(panel.textContent).not.toContain('private-unknown-member-id')
+    expect(item.getAttribute('aria-label')).not.toContain('private-unknown-member-id')
   })
 
   it('keeps sharing actions beside a truncated account title with an accessible status dot', async () => {
@@ -3505,18 +3635,17 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).getByRole('button', { name: zh.revokeInvite }).hasAttribute('disabled')).toBe(false)
   })
 
-  it('creates invitations without asking for a purpose and exposes Owner removal without legacy role controls', async () => {
+  it('opens invitation creation directly from Members and creates a distinguishable default label', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await openTeamSettings('members')
 
     fireEvent.click(within(settings).getByRole('button', { name: '邀请成员' }))
-    fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
     const inviteDialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
     expect(zh.createInviteTitle).toBe('生成邀请码')
     expect(zh.createInvite).toBe('生成邀请码')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
-    expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
+    expect(within(inviteDialog).getByRole('textbox', { name: zh.inviteLabel })).toHaveProperty('required', false)
     const expirySelect = within(inviteDialog).getByRole('combobox', { name: zh.inviteExpiry })
     expect(expirySelect.parentElement?.classList.contains(styles.selectControl)).toBe(true)
     const expiryArrow = expirySelect.parentElement?.querySelector('svg')
@@ -3525,7 +3654,7 @@ describe('Team subscription-pool workspace', () => {
     expect(expiryArrow?.getAttribute('focusable')).toBe('false')
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
-      expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
+      expect(managementApi.createInvite).toHaveBeenCalledWith(translate('defaultInviteLabel', { number: 1 }), 7 * 86_400_000, expectedContext())
     })
 
     const tokenDialog = await screen.findByRole('dialog', { name: zh.inviteCreated })
@@ -3550,6 +3679,38 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
     fireEvent.click(within(removeDialog).getByRole('button', { name: zh.confirmRemoveMember }))
     await waitFor(() => { expect(managementApi.removeMember).toHaveBeenCalledWith('member-mia', expectedContext()) })
+  })
+
+  it('sends an optional invitation purpose through the existing label field', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
+    const dialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: zh.inviteLabel }), {
+      target: { value: '  产品设计协作  ' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.createInvite }))
+
+    await waitFor(() => expect(managementApi.createInvite).toHaveBeenCalledWith(
+      '产品设计协作', 7 * 86_400_000, expectedContext(),
+    ))
+  })
+
+  it('uses an unused invitation label when the optional purpose is blank', async () => {
+    overviewState = {
+      ...overviewState,
+      invites: [pendingInvite('invite-1', '邀请码 1', true), pendingInvite('invite-2', '邀请码 2', true)],
+    }
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    fireEvent.click(within(settings).getByRole('button', { name: zh.inviteFriend }))
+    const dialog = screen.getByRole('dialog', { name: zh.createInviteTitle })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.createInvite }))
+
+    await waitFor(() => expect(managementApi.createInvite).toHaveBeenCalledWith(
+      translate('defaultInviteLabel', { number: 3 }), 7 * 86_400_000, expectedContext(),
+    ))
   })
 
   it('clears a newly-created invitation when the document is hidden', async () => {

@@ -977,7 +977,6 @@
 }
 
 .accountNavLabel,
-.accountNavOwner,
 .accountNavStatus {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -991,25 +990,20 @@
   line-height: 18px;
 }
 
-.accountNavOwner {
+.accountNavStatus {
   color: var(--team-muted);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 18px;
 }
 
-.accountNavStatus {
-  color: var(--team-faint);
-  font-size: 11px;
+.accountNavAlias {
+  border: 1px solid var(--team-line-strong);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--team-muted);
+  font-size: 12px;
   line-height: 16px;
-  text-align: right;
-}
-
-.accountNavStatus.pill {
-  border: 1px solid rgba(139, 184, 255, .3);
-  border-radius: 999px;
-  padding: 2px 7px;
-  background: rgba(93, 145, 237, .1);
-  color: #8bb8ff;
+  white-space: nowrap;
 }
 
 .accountDetail {
@@ -1167,9 +1161,9 @@
 }
 
 .prototypeSection {
-  margin-top: 26px;
+  margin-top: 20px;
   border-top: 1px solid var(--team-line-strong);
-  padding: 24px 0 28px;
+  padding: 18px 0 20px;
 }
 
 .prototypeSection h3 {
@@ -1632,8 +1626,8 @@
 
 .sharingQuotaFacts dt {
   color: var(--team-muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .sharingQuotaFacts dd {
@@ -1645,9 +1639,20 @@
   line-height: 32px;
 }
 
-.localAuthorizationConfirmation .sharingQuotaHint {
+.sharingQuotaField .sharingQuotaHint,
+.sharingQuotaField .sharingQuotaError {
+  margin: 0;
   font-size: 12px;
+  font-weight: 400;
   line-height: 18px;
+}
+
+.sharingQuotaField .sharingQuotaHint {
+  color: var(--team-muted);
+}
+
+.sharingQuotaField .sharingQuotaError {
+  color: var(--team-red);
 }
 
 .banner {
@@ -2157,8 +2162,8 @@
 
 .meta {
   color: var(--team-muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .accountCard {
@@ -2430,7 +2435,7 @@
 }
 
 .compactSummaryTitle {
-  margin: 0 0 20px;
+  margin: 0 0 14px;
   color: var(--team-ink);
   font-size: 15px;
   font-weight: 600;
@@ -2493,8 +2498,8 @@
   border-top: 1px solid var(--team-line);
   padding-top: 10px;
   color: var(--team-muted);
-  font-size: 11px;
-  line-height: 17px;
+  font-size: 13px;
+  line-height: 20px;
 }
 
 .accountAuxiliary .compactSummaryList > div {

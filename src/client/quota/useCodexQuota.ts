@@ -25,16 +25,19 @@ export interface CodexQuotaReadFace {
 export interface CodexQuotaViewState {
   readonly snapshot: CodexQuotaSnapshot | undefined
   readonly unavailable: boolean
+  /** The latest completed read failed; any retained snapshot is now stale. */
+  readonly refreshFailed: boolean
 }
 
 /**
  * Poll the credential-safe Codex quota Remote for one mounted view.
  * @param read - typed Remote read callback.
- * @returns the latest snapshot and its neutral unavailable state.
+ * @returns the last successful snapshot, availability, and read-failure state.
  */
 export function useCodexQuota(read: CodexQuotaReadFace['read']): CodexQuotaViewState {
   const [snapshot, setSnapshot] = useState<CodexQuotaSnapshot>()
   const [unavailable, setUnavailable] = useState(false)
+  const [refreshFailed, setRefreshFailed] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -45,8 +48,11 @@ export function useCodexQuota(read: CodexQuotaReadFace['read']): CodexQuotaViewS
         if (!active || revision !== requestRevision) return
         setSnapshot(next)
         setUnavailable(next.currentRemainingPercent === null)
+        setRefreshFailed(false)
       }, () => {
-        if (active && revision === requestRevision) setUnavailable(true)
+        if (!active || revision !== requestRevision) return
+        setUnavailable(true)
+        setRefreshFailed(true)
       })
     }
     refresh()
@@ -60,5 +66,5 @@ export function useCodexQuota(read: CodexQuotaReadFace['read']): CodexQuotaViewS
     }
   }, [read])
 
-  return { snapshot, unavailable }
+  return { snapshot, unavailable, refreshFailed }
 }

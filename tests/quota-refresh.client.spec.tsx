@@ -71,6 +71,41 @@ describe('Codex quota profile invalidation', () => {
 })
 
 describe('Codex quota refresh hook', () => {
+  it('distinguishes read failures from successful but unavailable snapshots and clears failures on recovery', async () => {
+    const initial = snapshot(3, 39)
+    const read = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockRejectedValueOnce(new Error('private transport error'))
+      .mockResolvedValueOnce(snapshot(0))
+    const view = renderHook(() => useCodexQuota(read))
+    expect(view.result.current).toEqual({ snapshot: undefined, unavailable: false, refreshFailed: false })
+    await waitFor(() => { expect(view.result.current.snapshot).toBe(initial) })
+
+    act(() => { invalidateCodexQuota() })
+    await waitFor(() => { expect(view.result.current.refreshFailed).toBe(true) })
+    expect(view.result.current).toEqual({ snapshot: initial, unavailable: true, refreshFailed: true })
+
+    act(() => { invalidateCodexQuota() })
+    await waitFor(() => { expect(view.result.current.snapshot?.poolAccountCount).toBe(0) })
+    expect(view.result.current).toMatchObject({ unavailable: true, refreshFailed: false })
+  })
+
+  it('does not let an older rejected read mark a newer successful response as stale', async () => {
+    const older = Promise.withResolvers<CodexQuotaSnapshot>()
+    const read = vi.fn()
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(snapshot(3, 39))
+    const view = renderHook(() => useCodexQuota(read))
+    act(() => { invalidateCodexQuota() })
+    await waitFor(() => { expect(view.result.current.snapshot?.poolAccountCount).toBe(3) })
+
+    await act(async () => {
+      older.reject(new Error('private stale error'))
+      await older.promise.catch(() => undefined)
+    })
+    expect(view.result.current).toMatchObject({ unavailable: false, refreshFailed: false })
+  })
+
   it('refreshes immediately when Settings invalidates the profile projection', async () => {
     const read = vi.fn()
       .mockResolvedValueOnce(snapshot(0))

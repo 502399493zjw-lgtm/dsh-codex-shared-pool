@@ -122,6 +122,8 @@ export interface TeamSettingsProps extends Partial<TeamSettingsInjected> {
 }
 
 interface InviteDraft {
+  readonly label: string
+  readonly defaultLabel: string
   readonly expiresInMs: number
   readonly authorizationContext: string
 }
@@ -2057,6 +2059,21 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     ? overview.invites.filter(invite => invite.status === 'pending' && invite.expiresAt > Date.now())
     : []
   const pendingInviteCount = pendingInvites.length
+  const openInviteDraft = () => {
+    if (team.status !== 'active' || ownerAuthorizationContext === undefined || overview.viewerRole !== 'owner') return
+    const usedLabels = new Set(overview.invites.map(invite => invite.label))
+    let number = 1
+    while (usedLabels.has(t('defaultInviteLabel', { number }))) number += 1
+    inviteCreationPresentationId.current += 1
+    teamSettingsReturnFocus.current = 'invite'
+    setError(undefined)
+    setInviteDraft({
+      label: '',
+      defaultLabel: t('defaultInviteLabel', { number }),
+      expiresInMs: 7 * 86_400_000,
+      authorizationContext: ownerAuthorizationContext,
+    })
+  }
   const contributionGroups = groupTeamContributions(overview.contributions, overview.currentMember.id)
   const localTeamProfiles = localProfilesAvailableForTeam(
     localProfiles,
@@ -2197,6 +2214,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             aria-busy={authorizationBusy}
             onClick={() => {
               if (teamAuthorizationContext === undefined || teamExpectedContext === undefined) return
+              setError(undefined)
               setPendingLocalAuthorization({
                 weeklyLimitUsd: '',
                 id: profile.id,
@@ -2351,6 +2369,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           : t(CAPACITY_REASON_LOCALE_KEYS[activeCapacityReason ?? 'runtime_unavailable'])}`
         : t(account.status)
       const openProtection = () => {
+        setError(undefined)
         setProtectionEdit({
           account,
           weeklyLimitUsd: account.weeklySharedEstimatedApiCostLimitMicros == null
@@ -2423,6 +2442,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     }
 
     const renderContributionNavigation = (account: TeamManagementContributionSummary) => {
+      const alias = accountAliases.get(contributionSelectionKey(account.id))
+      const displayName = account.label.trim() || alias
       const navigationStatus = account.status === 'active' ? t('contributedByMe') : t(account.status)
       const activeCapacityReason = account.status === 'active'
         ? activeContributionCapacityReason(account)
@@ -2433,7 +2454,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           className={styles.accountNavItem}
           data-selected={selectedAccount?.kind === 'contribution' && selectedAccount.account.id === account.id}
           aria-pressed={selectedAccount?.kind === 'contribution' && selectedAccount.account.id === account.id}
-          aria-label={`${account.label} · ${navigationStatus}`}
+          aria-label={`${displayName} · ${navigationStatus}`}
           onClick={() => { setSelectedAccountId(contributionSelectionKey(account.id)) }}
           key={account.id}
         >
@@ -2445,19 +2466,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 ? 'warning'
                 : 'error'} />
           <span className={styles.accountNavCopy}>
-            <span className={styles.accountNavLabel}>{accountAliases.get(contributionSelectionKey(account.id))}</span>
-            <span className={styles.accountNavOwner}>{account.label}</span>
-          </span>
-          {account.status === 'active' ? (
-            <Pill className={`${styles.accountNavStatus} ${styles.pill}`}>{navigationStatus}</Pill>
-          ) : (
+            <span className={styles.accountNavLabel} title={displayName}>{displayName}</span>
             <span className={styles.accountNavStatus}>{navigationStatus}</span>
-          )}
+          </span>
+          <span className={styles.accountNavAlias}>{alias}</span>
         </button>
       )
     }
 
     const renderSharedDirectoryNavigation = (account: TeamManagementSharedAccountDirectoryEntry) => {
+      const alias = accountAliases.get(sharedDirectorySelectionKey(account.id))
+      const displayName = account.label.trim() || alias
       const contributionLabel = t('contributedBy', { name: contributorNameFor(account) })
       const selected = selectedAccount?.kind === 'shared-directory' && selectedAccount.account.id === account.id
       return (
@@ -2466,21 +2485,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           className={styles.accountNavItem}
           data-selected={selected}
           aria-pressed={selected}
-          aria-label={`${account.label} · ${contributionLabel}`}
+          aria-label={`${displayName} · ${contributionLabel}`}
           onClick={() => { setSelectedAccountId(sharedDirectorySelectionKey(account.id)) }}
           key={account.id}
         >
           <StateDot state="done" />
           <span className={styles.accountNavCopy}>
-            <span className={styles.accountNavLabel}>{accountAliases.get(sharedDirectorySelectionKey(account.id))}</span>
-            <span className={styles.accountNavOwner}>{account.label}</span>
+            <span className={styles.accountNavLabel} title={displayName}>{displayName}</span>
+            <span className={styles.accountNavStatus}>{contributionLabel}</span>
           </span>
-          <Pill className={`${styles.accountNavStatus} ${styles.pill}`}>{contributionLabel}</Pill>
+          <span className={styles.accountNavAlias}>{alias}</span>
         </button>
       )
     }
 
     const renderLocalNavigation = (profile: LocalCodexProfileSummary) => {
+      const alias = accountAliases.get(localSelectionKey(profile.id))
+      const displayName = profile.label.trim() || alias
       const localConnectionStatus = profile.quotaError === undefined
         ? t('localSignedIn')
         : t('capacityQuotaError')
@@ -2490,16 +2511,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           className={styles.accountNavItem}
           data-selected={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
           aria-pressed={selectedAccount?.kind === 'local' && selectedAccount.account.id === profile.id}
-          aria-label={`${profile.label} · ${localConnectionStatus} · ${t('localNotShared')}`}
+          aria-label={`${displayName} · ${localConnectionStatus} · ${t('localNotShared')}`}
           onClick={() => { setSelectedAccountId(localSelectionKey(profile.id)) }}
           key={profile.id}
         >
           <StateDot state={profile.quotaError === undefined ? 'done' : 'error'} />
           <span className={styles.accountNavCopy}>
-            <span className={styles.accountNavLabel}>{accountAliases.get(localSelectionKey(profile.id))}</span>
-            <span className={styles.accountNavOwner}>{profile.label}</span>
+            <span className={styles.accountNavLabel} title={displayName}>{displayName}</span>
+            <span className={styles.accountNavStatus}>{localConnectionStatus} · {t('localNotShared')}</span>
           </span>
-          <span className={styles.accountNavStatus}>{t('localNotShared')}</span>
+          <span className={styles.accountNavAlias}>{alias}</span>
         </button>
       )
     }
@@ -2613,7 +2634,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   return (
     <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
-      {error === undefined || teamSettingsOpen ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
+      {error === undefined || teamSettingsOpen || activePendingLocalAuthorization !== undefined || protectionEdit !== undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
       {!teamContextChanged || teamSettingsOpen ? null : (
         <Notice tone="warning" title={t('teamContextChangedTitle')} detail={t('teamContextChangedHint')} live="polite" />
       )}
@@ -2826,9 +2847,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   <p className={styles.hint}>{t('membersIntro', { count: activeMembers.length })}</p>
                 </div>
                 {canManageTeam ? (
-                  <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} onClick={() => {
-                    setWorkspaceView('invitations')
-                  }}>{t('inviteFriend')}</Button>
+                  <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} data-team-settings-focus="invite" disabled={busy !== undefined || team.status !== 'active'} onClick={openInviteDraft}>{t('inviteFriend')}</Button>
                 ) : null}
               </div>
               <div className={styles.memberList} role="list" aria-label={t('membersTitle')}>
@@ -2883,15 +2902,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   <h3 id="team-invites-title" className={styles.workspaceSectionTitle}>{t('invitationsTitle')}</h3>
                   <p className={styles.hint}>{t('invitationsIntro')}</p>
                 </div>
-                <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} data-team-settings-focus="invite" disabled={busy !== undefined || team.status !== 'active'} onClick={() => {
-                  if (team.status !== 'active' || ownerAuthorizationContext === undefined) return
-                  inviteCreationPresentationId.current += 1
-                  teamSettingsReturnFocus.current = 'invite'
-                  setInviteDraft({
-                    expiresInMs: 7 * 86_400_000,
-                    authorizationContext: ownerAuthorizationContext,
-                  })
-                }}>
+                <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} data-team-settings-focus="invite" disabled={busy !== undefined || team.status !== 'active'} onClick={openInviteDraft}>
                   {t('inviteFriend')}
                 </Button>
               </div>
@@ -3038,25 +3049,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   : `US$${activePendingLocalProfile.subscription.weeklyEstimatedUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</dd>
               </div>
             </dl>
-            <div className={styles.sharingQuotaField}>
-              <label htmlFor="team-authorization-weekly-limit">{t('sharingQuotaWeeklyLimit')}</label>
-              <Input
-                id="team-authorization-weekly-limit"
-                inputMode="decimal"
-                value={activePendingLocalAuthorization?.weeklyLimitUsd ?? ''}
-                placeholder={t('sharingQuotaNoWeeklyLimit')}
-                disabled={busy !== undefined}
-                aria-describedby="team-authorization-quota-hint"
-                aria-invalid={activePendingLocalAuthorization !== undefined && !parseWeeklySharingLimitDraft(activePendingLocalAuthorization).ok}
-                onChange={event => {
-                  const weeklyLimitUsd = event.target.value
-                  setPendingLocalAuthorization(current => current === undefined ? current : { ...current, weeklyLimitUsd })
-                }}
-              />
-            </div>
-            {activePendingLocalAuthorization !== undefined && !parseWeeklySharingLimitDraft(activePendingLocalAuthorization).ok
-              ? <p role="alert">{t('weeklyLimitValidation')}</p> : null}
-            <p id="team-authorization-quota-hint" className={styles.sharingQuotaHint}>{t('sharingQuotaConfirmationHint')}</p>
+            <WeeklySharingLimitField
+              id="team-authorization-weekly-limit"
+              label={t('sharingQuotaWeeklyLimit')}
+              value={activePendingLocalAuthorization?.weeklyLimitUsd ?? ''}
+              placeholder={t('sharingQuotaNoWeeklyLimit')}
+              hint={t('sharingQuotaConfirmationHint')}
+              validationMessage={t('weeklyLimitValidation')}
+              requestError={error}
+              disabled={busy !== undefined}
+              onChange={weeklyLimitUsd => {
+                setError(undefined)
+                setPendingLocalAuthorization(current => current === undefined ? current : { ...current, weeklyLimitUsd })
+              }}
+            />
           </section>
           <p className={styles.localAuthorizationSafety}>
             <strong>{t('localCredentialBoundary')}</strong> {t('localAuthorizationConfirmSafety')}
@@ -3115,6 +3121,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       </Modal>
 
       <Modal
+        className={styles.localAuthorizationDialog!}
         open={protectionEdit !== undefined}
         onClose={() => { if (busy === undefined) setProtectionEdit(undefined) }}
         title={t('editProtection')}
@@ -3122,13 +3129,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         footer={(
           <div className={styles.modalActions}>
             <Button size="sm" variant="ghost" disabled={busy !== undefined} onClick={() => { setProtectionEdit(undefined) }}>{t('cancel')}</Button>
-            <Button size="sm" variant="primary" disabled={busy !== undefined} aria-busy={busy?.startsWith('protection-') === true} onClick={() => {
+            <Button size="sm" variant="primary" disabled={busy !== undefined || protectionEdit === undefined || !parseWeeklySharingLimitDraft(protectionEdit).ok} aria-busy={busy?.startsWith('protection-') === true} onClick={() => {
               if (protectionEdit === undefined) return
               const result = parseWeeklySharingLimitDraft(protectionEdit)
-              if (!result.ok) {
-                setError(t('weeklyLimitValidation'))
-                return
-              }
+              if (!result.ok) return
               void run(`protection-${protectionEdit.account.id}`, async () => {
                 const expectedContext = teamExpectedContextRef.current
                 if (expectedContext === undefined) return
@@ -3144,11 +3148,20 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       >
         {protectionEdit === undefined ? null : (
           <div className={styles.connectionGrid}>
-            <div className={styles.field}>
-              <label className={styles.label} htmlFor="team-account-weekly-limit">{t('weeklyLimitLabel')}</label>
-              <Input id="team-account-weekly-limit" value={protectionEdit.weeklyLimitUsd} placeholder={t('weeklyLimitPlaceholder')} onChange={event => { setProtectionEdit(current => current === undefined ? current : { ...current, weeklyLimitUsd: event.target.value }) }} />
-              <span className={styles.hint}>{t('weeklyLimitHint')}</span>
-            </div>
+            <WeeklySharingLimitField
+              id="team-account-weekly-limit"
+              label={t('weeklyLimitLabel')}
+              value={protectionEdit.weeklyLimitUsd}
+              placeholder={t('weeklyLimitPlaceholder')}
+              hint={t('weeklyLimitHint')}
+              validationMessage={t('weeklyLimitValidation')}
+              requestError={error}
+              disabled={busy !== undefined}
+              onChange={weeklyLimitUsd => {
+                setError(undefined)
+                setProtectionEdit(current => current === undefined ? current : { ...current, weeklyLimitUsd })
+              }}
+            />
           </div>
         )}
       </Modal>
@@ -3324,7 +3337,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               const expectedContext = ownerExpectedContextRef.current
               if (expectedContext === undefined) return
               const presentationId = ++inviteCreationPresentationId.current
-              const result = await api.createInvite(t('inviteFriend'), activeInviteDraft.expiresInMs, expectedContext)
+              const result = await api.createInvite(activeInviteDraft.label.trim() || activeInviteDraft.defaultLabel, activeInviteDraft.expiresInMs, expectedContext)
               if (inviteCreationPresentationId.current !== presentationId) {
                 await refresh(false)
                 return
@@ -3361,6 +3374,16 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </div>
+            </Field>
+            <Field label={t('inviteLabel')}>
+              <Input
+                aria-label={t('inviteLabel')}
+                value={activeInviteDraft.label}
+                placeholder={activeInviteDraft.defaultLabel}
+                maxLength={120}
+                disabled={busy !== undefined}
+                onChange={event => { setInviteDraft({ ...activeInviteDraft, label: event.target.value }) }}
+              />
             </Field>
           </div>
         )}
@@ -3610,6 +3633,38 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {hint === undefined ? null : <span className={styles.hint}>{hint}</span>}
     </label>
   )
+}
+
+function WeeklySharingLimitField({ id, label, value, placeholder, hint, validationMessage, requestError, disabled, onChange }: {
+  readonly id: string
+  readonly label: string
+  readonly value: string
+  readonly placeholder: string
+  readonly hint: string
+  readonly validationMessage: string
+  readonly requestError: string | undefined
+  readonly disabled: boolean
+  readonly onChange: (value: string) => void
+}) {
+  const invalid = !parseWeeklySharingLimitDraft({ weeklyLimitUsd: value }).ok
+  const message = invalid ? validationMessage : requestError
+  const hintId = `${id}-hint`
+  const errorId = `${id}-error`
+  return <div className={styles.sharingQuotaField}>
+    <label htmlFor={id}>{label}</label>
+    <Input
+      id={id}
+      inputMode="decimal"
+      value={value}
+      placeholder={placeholder}
+      disabled={disabled}
+      aria-invalid={invalid}
+      aria-describedby={message === undefined ? hintId : `${hintId} ${errorId}`}
+      onChange={event => { onChange(event.target.value) }}
+    />
+    {message === undefined ? null : <p id={errorId} className={styles.sharingQuotaError} role="alert">{message}</p>}
+    <p id={hintId} className={styles.sharingQuotaHint}>{hint}</p>
+  </div>
 }
 
 function RouteNode({ number, label, hint, current = false }: { number: string; label: string; hint: string; current?: boolean }) {

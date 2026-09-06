@@ -40,15 +40,39 @@ export function formatCodexResetTime(epochMs: number): string {
   return `${month}月${day} ${hour}:${minute}`
 }
 
+/** Format the snapshot timestamp in local time with an unambiguous numeric date. */
+function formatCodexQuotaUpdateTime(epochMs: number): string {
+  const updatedAt = new Date(epochMs)
+  const month = String(updatedAt.getMonth() + 1).padStart(2, '0')
+  const day = String(updatedAt.getDate()).padStart(2, '0')
+  const hour = String(updatedAt.getHours()).padStart(2, '0')
+  const minute = String(updatedAt.getMinutes()).padStart(2, '0')
+  return `${updatedAt.getFullYear()}-${month}-${day} ${hour}:${minute}`
+}
+
 /** Render active-account identity and quota directly above sidebar bottom actions. */
 export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFooterProps) {
-  const { snapshot, unavailable } = useCodexQuota(read)
+  const { snapshot, unavailable, refreshFailed } = useCodexQuota(read)
 
   if (!wide) return null
+  const stale = refreshFailed && snapshot !== undefined
+  const feedback = (
+    <div key="feedback" className={css.feedback} role="status" aria-atomic="true">
+      {stale && (
+        <>
+          <span className={css.updateFailed}>{t('updateFailed')}</span>
+          {' '}
+          <time dateTime={new Date(snapshot.refreshedAt).toISOString()}>
+            {t('lastUpdated', { time: formatCodexQuotaUpdateTime(snapshot.refreshedAt) })}
+          </time>
+        </>
+      )}
+    </div>
+  )
   if (snapshot === undefined || snapshot.currentAccountName === null
     || snapshot.currentRemainingPercent === null) {
     return (
-      <section className={css.root} aria-label={t('aria')}>
+      <section className={css.root} aria-label={t('aria')} data-stale={stale || undefined}>
         <div className={css.primary}>
           <div className={css.status} aria-live="polite">
             {unavailable ? t('unavailable') : t('loading')}
@@ -69,12 +93,13 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
             )}
           </div>
         )}
+        {feedback}
       </section>
     )
   }
 
   return (
-    <section className={css.root} aria-label={t('aria')}>
+    <section className={css.root} aria-label={t('aria')} data-stale={stale || undefined}>
       <div className={css.primary}>
         <div className={css.accountLine} aria-live="polite">
           <span className={css.accountLabel}>{t('account')}</span>
@@ -102,6 +127,7 @@ export function CodexQuotaFooter({ wide, read, openSettings, t }: CodexQuotaFoot
           ? <span>—</span>
           : <span>{snapshot.poolRemainingPercent}%</span>}
       </div>
+      {feedback}
     </section>
   )
 }

@@ -27,20 +27,20 @@
 }
 
 .header {
-  padding-bottom: 26px;
+  padding-bottom: 18px;
 }
 
 .title {
   margin: 0;
-  font-size: 30px;
-  font-weight: 680;
-  letter-spacing: -0.035em;
-  line-height: 36px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 32px;
 }
 
 .intro {
   max-width: 760px;
-  margin: 10px 0 0;
+  margin: 6px 0 0;
   color: var(--subscription-pool-muted, var(--dsw-alias-label-secondary));
   font-size: 14px;
   line-height: 22px;
@@ -55,7 +55,7 @@
 .tab {
   position: relative;
   min-width: 56px;
-  padding: 0 2px 12px;
+  padding: 0 2px 10px;
   border: 0;
   color: var(--subscription-pool-muted, var(--dsw-alias-label-secondary));
   font: inherit;
@@ -91,7 +91,7 @@
 
 .content {
   min-width: 0;
-  padding-top: 18px;
+  padding-top: 16px;
 }
 
 @media (max-width: 640px) {
@@ -105,11 +105,11 @@
   }
 
   .header {
-    padding-bottom: 20px;
+    padding-bottom: 16px;
   }
 
   .title {
-    font-size: 26px;
-    line-height: 32px;
+    font-size: 22px;
+    line-height: 30px;
   }
 }
