@@ -1,6 +1,6 @@
 /** Invite-only Team capacity management inside the dsh Settings shell. */
 
-import { MoreHorizontal } from 'lucide-react'
+import { ArrowLeft, MoreHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { TeamConnections } from './TeamConnections.tsx'
 import { TeamFloatingMenu } from './TeamFloatingMenu.tsx'
@@ -1914,12 +1914,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         {embedded ? null : <PageHeading t={t} />}
         {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
         <section className={styles.section}>
+          {status.keyConfigured && !status.pendingJoinConfigured ? (
+            <button type="button" className={styles.joinBackButton} disabled={busy !== undefined} onClick={() => {
+              setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); previewRequestId.current += 1
+            }}>
+              <ArrowLeft size={16} aria-hidden="true" />
+              <span>{t('returnToTeam')}</span>
+            </button>
+          ) : null}
           <div className={styles.sectionCopy}>
             <h2 className={styles.sectionTitle}>{t(status.keyConfigured ? 'joinOtherTeam' : 'notConnected')}</h2>
             <p className={styles.hint}>{t(status.keyConfigured ? 'joinOtherHint' : 'notConnectedHint')}</p>
-            {status.keyConfigured && !status.pendingJoinConfigured ? <Button variant="ghost" disabled={busy !== undefined} onClick={() => {
-              setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); previewRequestId.current += 1
-            }}>{t('returnToTeam')}</Button> : null}
             {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.compactActions}>
               <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable}
                 onCreate={() => openSetup('create')} onChanged={async () => { await refresh(true) }} />
