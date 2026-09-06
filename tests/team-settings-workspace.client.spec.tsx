@@ -63,8 +63,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     variant?: string
   }) => <button type="button" {...props}>{children}</button>,
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
-  Modal: ({ open, title, description, children, footer, className }: {
+  Modal: ({ open, title, description, children, footer, className, contentClassName }: {
     className?: string
+    contentClassName?: string
     open: boolean
     title: string
     description?: string
@@ -72,9 +73,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     footer?: React.ReactNode
   }) => open ? (
     <div role="dialog" aria-label={title} className={className}>
-      <h2>{title}</h2>
-      {description === undefined ? null : <p>{description}</p>}
-      {children}
+      <div className={contentClassName}>
+        <h2>{title}</h2>
+        {description === undefined ? null : <p>{description}</p>}
+        <div>{children}</div>
+      </div>
       {footer}
     </div>
   ) : null,
@@ -1426,18 +1429,62 @@ describe('Team subscription-pool workspace', () => {
             label: '本机账号 A',
             createdAt: 1,
             updatedAt: 1,
-            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
             inUse: true,
           }],
         }),
       } as Response)
     })
 
-    expect(within(quota).getByText('68%')).toBeDefined()
+    expect(within(quota).getByText('US$2,100.00')).toBeDefined()
     expect(within(quota).queryByText(zh.sharingQuotaUnavailable)).toBeNull()
-    expect(within(quota).getByText('20%')).toBeDefined()
-    expect(within(quota).getByText(zh.sharingQuotaNoWeeklyLimit)).toBeDefined()
-    expect(managementApi.startOAuth).not.toHaveBeenCalled()
+    expect(within(quota).queryByText('20%')).toBeNull()
+    expect(within(quota).queryByText('为自己保留')).toBeNull()
+    const limit = within(quota).getByLabelText('共享额度（USD / 周）')
+    fireEvent.change(limit, { target: { value: '-1' } })
+    expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', true)
+    fireEvent.change(limit, { target: { value: '25' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('oauth-new', {
+      personalReservePercent: 0, weeklySharedEstimatedApiCostLimitMicros: 25_000_000,
+    }, expectedContext()))
+    expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves unlimited sharing without a reserve before opening provider authorization', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close: vi.fn() })
+    let resolveSave!: () => void
+    managementApi.updateContribution.mockImplementationOnce(() => new Promise<void>(resolve => { resolveSave = resolve }))
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    expect(dialog.className).toContain(styles.localAuthorizationDialog)
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('oauth-new', {
+      personalReservePercent: 0, weeklySharedEstimatedApiCostLimitMicros: null,
+    }, expectedContext()))
+    expect(navigate).not.toHaveBeenCalled()
+    expect(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)).toHaveProperty('disabled', true)
+    await act(async () => resolveSave())
+    await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
+  })
+
+  it('cancels the new authorization if the sharing allowance cannot be saved', async () => {
+    const navigate = vi.fn().mockResolvedValue(true)
+    authorizationPopupBridge.open.mockReturnValueOnce({ window: null, navigate, close: vi.fn() })
+    managementApi.updateContribution.mockRejectedValueOnce(new Error('Unable to save allowance'))
+    render(<TeamSettings t={translate} embedded />)
+    fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
+    fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
+    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    fireEvent.change(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit), { target: { value: '25' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
+    await waitFor(() => expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true))
+    expect(navigate).not.toHaveBeenCalled()
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction })).toHaveProperty('disabled', false))
+    expect(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)).toHaveProperty('value', '25')
   })
 
   it('shows an immediate saving state while sharing limits are being updated', async () => {
@@ -1474,7 +1521,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(teamBar).getByText(translate('membersCount', { count: 2 }))).toBeDefined()
     expect(within(teamBar).queryByText(translate('connectedAs', { name: 'Edison' }))).toBeNull()
     expect(within(contribution).getByText(zh.contributedByMe)).toBeDefined()
-    expect(within(account).getByText('本机已登录 · 团队可用')).toBeDefined()
+    expect(within(account).getByRole('img', { name: '本机已登录 · 团队可用' })).toBeDefined()
     expect(within(account).getByRole('button', { name: '终止共享' })).toBeDefined()
     expect(within(account).queryByText(zh.contributionActiveHint)).toBeNull()
   })
@@ -1498,7 +1545,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
 
     expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
-    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.capacityProviderUnavailable}`)).toBeDefined()
+    expect(within(account).getByRole('img', { name: `${zh.localSignedIn} · ${zh.capacityProviderUnavailable}` })).toBeDefined()
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
     expect(within(account).queryByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(account).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
@@ -1526,7 +1573,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
 
     expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('done')
-    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeDefined()
+    expect(within(account).getByRole('img', { name: `${zh.localSignedIn} · ${zh.teamAvailable}` })).toBeDefined()
   })
 
   it.each([[undefined, 74], [61, 61]])('uses the tightest valid local quota window and individual limit %s', async (individualRemaining, expected) => {
@@ -1664,7 +1711,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(details).getByRole('heading', { name: friend.label }).closest('article')!
     expect(account).toBeDefined()
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('done')
-    expect(within(details).getByText(`${contributionLabel} · ${zh.teamShared}`)).toBeDefined()
+    expect(within(details).getByRole('img', { name: `${contributionLabel} · ${zh.teamShared}` })).toBeDefined()
     expect(within(details).queryByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(details).getByText(zh.sharedAccountReadonlyHint)).toBeDefined()
     expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
@@ -1687,7 +1734,7 @@ describe('Team subscription-pool workspace', () => {
     for (const account of [paused, reauthRequired]) {
       const status = zh[account.status]
       fireEvent.click(within(directory).getByRole('button', { name: `${account.label} · ${status}` }))
-      expect(within(details).getByText(status)).toBeDefined()
+      expect(within(details).getByRole('img', { name: status })).toBeDefined()
     }
 
     expect(within(details).getByText(zh.contributionReauthHint)).toBeDefined()
@@ -1928,6 +1975,7 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
+    expect(recent.firstElementChild?.classList.contains(styles.recentRequestsContent)).toBe(true)
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
     expect(within(recent).getByText('2,500 tokens')).toBeDefined()
     expect(within(recent).getAllByText(`消耗人：${consumerDisplayName ?? '成员信息不可用'}`).length).toBeGreaterThan(0)
@@ -2012,6 +2060,23 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByText('本机账号 B')).toBeDefined()
   })
 
+  it('keeps sharing actions beside a truncated account title with an accessible status dot', async () => {
+    const label = '这是一个超过十二个中文字符的账号完整名称'
+    overviewState = { ...overviewState, contributions: [{ ...mine, label }] }
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: label })
+    expect(heading.getAttribute('title')).toBe(label)
+    const header = heading.closest('header')!
+    expect(within(header).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
+    expect(header.querySelector(`.${styles.connectionStatus}`)?.textContent).toBe('')
+    expect(header.querySelector(`.${styles.connectionStatus}`)?.getAttribute('aria-label')).toContain(zh.localSignedIn)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(within(settings).getByRole('complementary')).getByRole('button', { name: /本机账号 A/u }))
+    const localHeader = within(settings).getByRole('heading', { name: '本机账号 A' }).closest('header')!
+    expect(within(localHeader).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
+    expect(localHeader.querySelector(`.${styles.connectionStatus}`)?.textContent).toBe('')
+  })
+
   it('renders the prototype local-account detail and credential boundary after selection', async () => {
     render(<TeamSettings t={translate} embedded />)
 
@@ -2022,22 +2087,61 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
 
     expect(within(details).getByRole('heading', { name: '本机账号 A' })).toBeDefined()
-    expect(within(details).getAllByText('本机正在使用')).toHaveLength(1)
+    expect(within(details).getByRole('img', { name: '本机正在使用' })).toBeDefined()
     expect(details.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(details.textContent).toContain('不会上传本机 auth.json。')
     const shareRegion = within(details).getByRole('region', { name: zh.shareToTeam })
     expect(shareRegion.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(shareRegion.textContent).toContain(zh.localCredentialBoundary)
     expect(shareRegion.textContent).not.toContain(zh.localCredentialBoundaryHint)
-    expect(within(shareRegion).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
+    expect(within(details.querySelector('header')!).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
     expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
-    expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
+    expect(within(details).getByText('68%')).toBeDefined()
+    expect(within(details).getByText(zh.accountRemainingCapacity)).toBeDefined()
+    expect(within(details).getByRole('button', { name: zh.refreshQuota })).toBeDefined()
     expect(within(details).getByText('Plus')).toBeDefined()
     expect(within(details).getByText('US$100.00')).toBeDefined()
     expect(within(details).queryByText(/US\$68|周剩余预估/)).toBeNull()
     expect(within(details).getByRole('button', { name: zh.recentRequests })).toBeDefined()
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('refreshes unshared local quota inline, prevents duplicate requests, and permits retry', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name: /本机账号 A/u }))
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const quotaLabel = within(details).getByText(zh.accountRemainingCapacity)
+    const row = quotaLabel.closest('div')!
+    expect(within(row).getByText('68%')).toBeDefined()
+    expect(within(details).queryByRole('progressbar')).toBeNull()
+    const refresh = within(row).getByRole('button', { name: zh.refreshQuota })
+    await waitFor(() => { expect(refresh).toHaveProperty('disabled', false) })
+    vi.mocked(fetch).mockClear()
+    let rejectRefresh!: (reason: Error) => void
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRefresh = reject }))
+    fireEvent.click(refresh)
+    fireEvent.click(refresh)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith('/plugins/dsh-openai-codex/profiles', {
+      credentials: 'same-origin', headers: { accept: 'application/json' },
+    })
+    expect(refresh).toHaveProperty('disabled', true)
+    expect(refresh.getAttribute('aria-busy')).toBe('true')
+    expect(within(row).getByText('68%')).toBeDefined()
+    await act(async () => { rejectRefresh(new Error('private-upstream-detail')) })
+    expect(within(details).getByText(zh.capacityQuotaStaleHint)).toBeDefined()
+    expect(details.textContent).not.toContain('private-upstream-detail')
+    expect(refresh).toHaveProperty('disabled', false)
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, json: async () => ({
+      status: 'ready', profiles: [{ id: 'local-a', label: '本机账号 A', createdAt: 1, updatedAt: 1,
+        usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 25, windowSeconds: 604800 }] }] }, inUse: true }],
+    }) } as Response)
+    fireEvent.click(refresh)
+    expect(await within(row).findByText('25%')).toBeDefined()
+    expect(within(details).queryByText(zh.capacityQuotaStaleHint)).toBeNull()
+    expect(refresh).toHaveProperty('disabled', false)
   })
 
   it('moves a durably bound local profile into shared accounts immediately and after remount', async () => {
@@ -2125,14 +2229,14 @@ describe('Team subscription-pool workspace', () => {
     const account = within(details).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     expect(localAccountNavigation.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
-    expect(within(account.querySelector('header')!).getByText(zh.capacityQuotaError)).toBeDefined()
+    expect(within(account.querySelector('header')!).getByRole('img', { name: zh.capacityQuotaError })).toBeDefined()
     expect(within(account).queryByText(zh.localInUse)).toBeNull()
     expect(within(capacity).getByText(zh.capacityQuotaError)).toBeDefined()
     expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
     expect(capacity.textContent).not.toContain('telemetry unavailable')
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(within(capacity).queryByRole('progressbar')).toBeNull()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
   })
 
   it.each([
@@ -2190,7 +2294,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(within(capacity).queryByRole('progressbar')).toBeNull()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
     expect(settings.textContent).not.toMatch(
       /upstream-secret|proxy-secret|unexpected token|socket failed|empty-shape-secret|pending-shape-secret|profiles-shape-secret/u,
     )
@@ -2261,7 +2365,7 @@ describe('Team subscription-pool workspace', () => {
     expect(quotaStatus.textContent).toBe(zh.loadingLocalQuota)
     expect(quotaStatus.classList.contains(styles.screenReaderOnly)).toBe(true)
     expect(workspace?.querySelector(`.${styles.quotaValueSkeleton}`)).not.toBeNull()
-    expect(workspace?.querySelector(`.${styles.quotaTrack}[data-loading='true']`)).not.toBeNull()
+    expect(within(workspace!).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', true)
 
     await act(async () => {
       resolveQuota({
@@ -2273,7 +2377,7 @@ describe('Team subscription-pool workspace', () => {
             label: '本机账号 A',
             createdAt: 1,
             updatedAt: 1,
-            usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+            usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
             inUse: true,
           }],
         }),
@@ -2332,7 +2436,7 @@ describe('Team subscription-pool workspace', () => {
               label: '本机账号 A',
               createdAt: 1,
               updatedAt: 1,
-              usage: { rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
+              usage: { planType: 'pro', rateLimits: [{ id: 'codex', windows: [{ remainingPercent: 68, windowSeconds: 604800 }] }] },
               inUse: true,
             }],
           }),
@@ -2365,7 +2469,7 @@ describe('Team subscription-pool workspace', () => {
     expect(capacity.getAttribute('data-tone')).toBe('warning')
     expect(capacity.getAttribute('data-stale')).toBe('true')
     expect(within(capacity).getByText(zh.capacityQuotaStaleHint)).toBeDefined()
-    expect(capacity.querySelector(`.${styles.quotaTrack}`)?.getAttribute('data-error')).toBe('true')
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota })).toHaveProperty('disabled', false)
     expect(capacity.textContent).not.toMatch(/quota telemetry timed out|background-shape-secret/u)
   })
 
@@ -3337,6 +3441,22 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('keeps invitation rows concise with creation details collapsed and named actions', async () => {
+    overviewState = { ...overviewState, invites: [pendingInvite('invite-1', '产品设计协作', true)] }
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    const summary = within(settings).getByText('产品设计协作')
+    expect(summary.tagName).toBe('SUMMARY')
+    const details = summary.closest('details')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('Edison')
+    expect(within(settings).getByText('每码可供多人使用')).toBeDefined()
+    expect(within(settings).getByRole('button', { name: zh.revealInvite }).textContent).toBe('查看')
+    expect(within(settings).getByRole('button', { name: zh.revokeInvite }).textContent).toBe('')
+    expect(managementApi.revealInvite).not.toHaveBeenCalled()
+    expect(settings.textContent).not.toContain(REVEALED_INVITE_TOKEN)
+  })
+
   it('blocks new invitations while paused but keeps existing invitation controls available', async () => {
     overviewState = {
       ...overviewState,
@@ -3365,7 +3485,12 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
     expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
-    expect(within(inviteDialog).getByLabelText(zh.inviteExpiry)).toBeDefined()
+    const expirySelect = within(inviteDialog).getByRole('combobox', { name: zh.inviteExpiry })
+    expect(expirySelect.parentElement?.classList.contains(styles.selectControl)).toBe(true)
+    const expiryArrow = expirySelect.parentElement?.querySelector('svg')
+    expect(expiryArrow?.classList.contains(styles.selectArrow)).toBe(true)
+    expect(expiryArrow?.getAttribute('aria-hidden')).toBe('true')
+    expect(expiryArrow?.getAttribute('focusable')).toBe('false')
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
       expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
@@ -4235,6 +4360,20 @@ it.each(['周末造物局', '这是一个很长的团队名称用来验证省略
   expect(settingsTrigger.closest('h2')?.className).toBe(styles.workspaceTeamName)
 })
 
+it('omits redundant saved-Team copy when the Team menu has no other connections', async () => {
+  managementApi.connections.mockResolvedValue([])
+  render(<TeamSettings t={translate} embedded />)
+  fireEvent.click(await screen.findByRole('button', { name: '周末造物局' }))
+  const menu = screen.getByRole('menu', { name: zh.switchTeam })
+  await waitFor(() => expect(within(menu).queryByRole('status')).toBeNull())
+  expect(within(menu).queryByText('已保存的团队')).toBeNull()
+  expect(within(menu).queryByText('本机暂时没有其他已保存的团队。')).toBeNull()
+  expect(within(menu).getByRole('menuitemradio', { name: /周末造物局/u })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.recoverOwner })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.joinTeamAction })).toBeDefined()
+  expect(within(menu).getByRole('menuitem', { name: zh.createTeam })).toBeDefined()
+})
+
 it('places the selected Team and bottom join/create actions in the Team-name dropdown in both views', async () => {
   render(<TeamSettings t={translate} embedded />)
   expect(screen.queryByRole('button', { name: zh.switchTeam })).toBeNull()
@@ -4393,4 +4532,25 @@ it.each([false, true])('explains rejected owner recovery without blaming a serve
   expect(managementApi.disconnect).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: zh.returnToTeam }))
   expect(await screen.findByRole('button', { name: '周末造物局' })).toBeDefined()
+})
+
+
+it('portals member actions outside the clipped workspace and restores trigger focus', async () => {
+  render(<TeamSettings t={translate} embedded />)
+  const settings = await openTeamSettings('members')
+  const trigger = within(settings).getByRole('button', { name: '管理 Mia' })
+  fireEvent.click(trigger)
+  const menu = screen.getByRole('menu', { name: '管理 Mia' })
+  expect(settings.contains(menu)).toBe(false)
+  expect(menu.style.position).toBe('fixed')
+  fireEvent.keyDown(menu, { key: 'ArrowDown' })
+  expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: zh.removeMember }))
+  fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+  expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  fireEvent.click(trigger)
+  fireEvent.pointerDown(document.body)
+  expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+  expect(managementApi.removeMember).not.toHaveBeenCalled()
 })

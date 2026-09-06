@@ -1209,7 +1209,7 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
-  it('accepts the same invitation exactly once under real PostgreSQL concurrency', async () => {
+  it('accepts concurrent members with distinct supplied keys using the same invitation', async () => {
     const connectionString = requiredDatabaseUrl()
     const suffix = randomUUID().replaceAll('-', '')
     const schema = `dsh_team_it_${suffix}`
@@ -1237,18 +1237,15 @@ describePostgres('real PostgreSQL Team concurrency', () => {
 
       const results = await Promise.allSettled(suppliedKeys.map((apiKey, index) =>
         store.acceptInviteWithApiKey(invite.inviteToken, `Friend ${index + 1}`, apiKey)))
-      const succeededIndex = results.findIndex(result => result.status === 'fulfilled')
-      const failedIndex = results.findIndex(result => result.status === 'rejected')
-
-      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
-      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
-      expect(String((results[failedIndex] as PromiseRejectedResult | undefined)?.reason)).toMatch(/invite is invalid or expired/iu)
+      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(2)
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(0)
       const memberCount = await pool.query<{ count: string }>('SELECT COUNT(*) AS count FROM team_members WHERE team_id = $1', [owner.teamId])
-      expect(Number(memberCount.rows[0]?.count)).toBe(2)
+      expect(Number(memberCount.rows[0]?.count)).toBe(3)
       const inviteRow = await pool.query<{ status: string }>('SELECT status FROM team_invites WHERE id = $1', [invite.invite.id])
-      expect(inviteRow.rows).toEqual([{ status: 'accepted' }])
-      await expect(store.authenticateApiKey(suppliedKeys[succeededIndex]!)).resolves.toMatchObject({ role: 'member' })
-      await expect(store.authenticateApiKey(suppliedKeys[failedIndex]!)).resolves.toBeUndefined()
+      expect(inviteRow.rows).toEqual([{ status: 'pending' }])
+      const authenticated = await Promise.all(suppliedKeys.map(apiKey => store.authenticateApiKey(apiKey)))
+      for (const member of authenticated) expect(member).toMatchObject({ role: 'member', teamId: owner.teamId })
+      expect(new Set(authenticated.map(member => member?.memberId)).size).toBe(2)
     } finally {
       await pool.end().catch(() => undefined)
       await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`).catch(() => undefined)

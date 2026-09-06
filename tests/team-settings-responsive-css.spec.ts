@@ -19,6 +19,12 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('bounds recent requests to the viewport and scrolls only the body', () => {
+    expect(css).toMatch(/\.recentRequestsDialog\s*\{[^}]*height:\s*min\(640px,\s*calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s)
+    expect(css).toMatch(/\.recentRequestsContent\s*\{[^}]*min-height:\s*0;[^}]*display:\s*grid;[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/s)
+    expect(css).toMatch(/\.recentRequestsContent > :last-child\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+  })
+
   it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
     expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
     expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
@@ -132,13 +138,13 @@ describe('Team Settings responsive container contract', () => {
 
   it('pins the approved Team prototype palette inside the DSH dark-theme scope', () => {
     expect(css).toMatch(
-      /:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-context-layer:\s*#272a2e;[^}]*--team-workspace-layer:\s*#2b2e32;/s,
+      /:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-context-layer:\s*#272a2e;[^}]*--team-workspace-layer:\s*#2b2e32;/s,
     )
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-line:\s*#383c42;[^}]*--team-line-strong:\s*#44484f;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-skeleton-strong:\s*#474c53;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-ink:\s*#f3f5f7;[^}]*--team-muted:\s*#afb5bd;[^}]*--team-faint:\s*#7f8791;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-blue:\s*#8bb8ff;[^}]*--team-blue-strong:\s*#5d91ed;[^}]*--team-green:\s*#50d890;[^}]*--team-red:\s*#ff747b;/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-selected-layer:\s*#333c4c;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-line:\s*#383c42;[^}]*--team-line-strong:\s*#44484f;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-skeleton-strong:\s*#474c53;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-ink:\s*#f3f5f7;[^}]*--team-muted:\s*#afb5bd;[^}]*--team-faint:\s*#7f8791;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-blue:\s*#8bb8ff;[^}]*--team-blue-strong:\s*#5d91ed;[^}]*--team-green:\s*#50d890;[^}]*--team-red:\s*#ff747b;/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.page,\s*:global\(body\[data-ds-dark-theme\]\) \.recentRequestsDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-selected-layer:\s*#333c4c;/s)
     expect(css).toMatch(/\.accountNavItem\[data-selected='true'\]\s*\{[^}]*border-color:\s*var\(--team-blue-strong\);[^}]*background:\s*var\(--team-selected-layer\);/s)
     expect(css).toMatch(/\.page \.stopSharingButton\s*\{[^}]*background:\s*rgba\(255,\s*116,\s*123,\s*\.08\);/s)
     expect(subscriptionPoolCss).toMatch(
@@ -206,6 +212,11 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
   })
 
+  it('gives the Team settings entry a visible button surface at rest and pressed feedback', () => {
+    expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*border-color:\s*var\(--team-line-strong\);[^}]*background:\s*color-mix\(in srgb, var\(--team-ink\) 6%, var\(--team-layer\)\);/s)
+    expect(css).toMatch(/\.teamSettingsTrigger:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--team-blue\) 12%, var\(--team-layer\)\);/s)
+  })
+
   it('keeps the prototype compact Team bar and detail rhythm', () => {
     expect(css).toMatch(/\.teamIdentity \.hint\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
     expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*font-size:\s*13px;/s)
@@ -242,8 +253,8 @@ describe('Team Settings responsive container contract', () => {
 
 describe('invitation visual layout', () => {
   it('shares theme tokens with body-portaled invitation dialogs', () => {
-    expect(css).toMatch(/\.page,\s*\.recentRequestsDialog,\s*\.inviteDialog\s*\{[^}]*--team-line:/s)
-    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.inviteDialog\s*\{[^}]*--team-ink:/s)
+    expect(css).toMatch(/\.page,\s*\.recentRequestsDialog,\s*\.inviteDialog,\s*\.localAuthorizationDialog\s*\{[^}]*--team-line:/s)
+    expect(css).toMatch(/:global\(body\[data-ds-dark-theme\]\) \.inviteDialog,\s*:global\(body\[data-ds-dark-theme\]\) \.localAuthorizationDialog\s*\{[^}]*--team-ink:/s)
   })
 
   it('keeps invitation actions together and allows wrapping in narrow slots', () => {
@@ -283,3 +294,16 @@ it('gives join and create a visible button surface and distinct interaction stat
   expect(css).toMatch(/\.inviteSecretBody \.code\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*line-height:\s*22px;/s)
   expect(css).toMatch(/\.inviteDialog \.modalActions > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s)
  })
+
+it('truncates account titles while keeping inline status and actions from shrinking', () => {
+  expect(css).toMatch(/\.detailTitle\s*\{[^}]*max-width:\s*12em;[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s)
+  expect(css).toMatch(/\.detailHeading\s*\{[^}]*flex-wrap:\s*nowrap;/s)
+})
+
+describe('Invite expiry arrow positioning', () => {
+  it('insets and centers one non-interactive arrow inside the select control', () => {
+    expect(css).toMatch(/\.selectControl\s*\{[^}]*position:\s*relative;/s)
+    expect(css).toMatch(/\.select\s*\{[^}]*appearance:\s*none;/s)
+    expect(css).toMatch(/\.selectArrow\s*\{[^}]*position:\s*absolute;[^}]*right:\s*12px;[^}]*top:\s*50%;[^}]*transform:\s*translateY\(-50%\);[^}]*pointer-events:\s*none;/s)
+  })
+})
