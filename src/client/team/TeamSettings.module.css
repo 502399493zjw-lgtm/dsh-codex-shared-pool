@@ -1703,6 +1703,44 @@
   padding-top: 20px;
 }
 
+.joinBackButton {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 36px;
+  margin-inline-start: -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--team-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.joinBackButton svg { flex-shrink: 0; }
+
+.joinBackButton:hover:not(:disabled) {
+  background: var(--team-layer-soft);
+  color: var(--team-ink);
+}
+
+.joinBackButton:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 2px;
+}
+
+.joinBackButton:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 .sectionHeader {
   display: flex;
   align-items: flex-start;
