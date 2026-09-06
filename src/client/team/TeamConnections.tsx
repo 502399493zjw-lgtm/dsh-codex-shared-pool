@@ -54,12 +54,11 @@ export function TeamConnections({ api, t, expectedContext, disabled, teamName, m
       <span className={styles.teamSelectorName}>{teamName ?? t('savedTeams')}</span><span className={styles.teamSelectorChevron} aria-hidden="true"><IconChevronDownOutline14 /></span>
     </button>
     {open ? <TeamFloatingMenu anchorRef={anchorRef} label={t('switchTeam')} className={styles.teamConnectionsMenu!} onClose={() => { if (!switching) setOpen(false) }}>
-      <p className={styles.teamMenuLabel}>{t('savedTeams')}</p>
       {teamName === undefined ? null : <button type="button" role="menuitemradio" aria-checked="true" disabled>
         <span className={styles.savedTeamIdentity}><strong>{teamName}</strong><small>{memberName}</small></span><span aria-hidden="true">✓</span>
       </button>}
       {error === undefined ? null : <p className={styles.teamMenuHint} role="alert">{error}</p>}
-      {loading ? <p className={styles.teamMenuHint} role="status">{t('loading')}</p> : others.length === 0 ? <p className={styles.teamMenuHint}>{t('noSavedTeams')}</p> : others.map(item =>
+      {loading ? <p className={styles.teamMenuHint} role="status">{t('loading')}</p> : others.map(item =>
         <button key={item.id} type="button" role="menuitemradio" aria-checked="false" aria-label={`${item.teamName} · ${item.memberName}`} disabled={disabled || switching} onClick={() => { void select(item.id) }}>
           <span className={styles.savedTeamIdentity}><strong>{item.teamName}</strong><small>{item.memberName}</small></span>
         </button>)}
