@@ -3301,13 +3301,18 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <div className={styles.modalBody}>
             {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
             <Field label={t('inviteExpiry')}>
-              <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
-                setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
-              }}>
-                <option value={86_400_000}>{t('inviteOneDay')}</option>
-                <option value={7 * 86_400_000}>{t('inviteSevenDays')}</option>
-                <option value={30 * 86_400_000}>{t('inviteThirtyDays')}</option>
-              </select>
+              <div className={styles.selectControl}>
+                <select aria-label={t('inviteExpiry')} className={styles.select} data-team-dialog-focus="invite" value={activeInviteDraft.expiresInMs} onChange={event => {
+                  setInviteDraft({ ...activeInviteDraft, expiresInMs: Number(event.target.value) })
+                }}>
+                  <option value={86_400_000}>{t('inviteOneDay')}</option>
+                  <option value={7 * 86_400_000}>{t('inviteSevenDays')}</option>
+                  <option value={30 * 86_400_000}>{t('inviteThirtyDays')}</option>
+                </select>
+                <svg className={styles.selectArrow} viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+                  <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
             </Field>
           </div>
         )}

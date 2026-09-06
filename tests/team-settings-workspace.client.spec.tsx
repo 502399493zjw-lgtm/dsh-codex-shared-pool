@@ -3408,7 +3408,12 @@ describe('Team subscription-pool workspace', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.queryByRole('dialog', { name: zh.teamSettingsTitle })).toBeNull()
     expect(within(inviteDialog).queryByText('邀请用途')).toBeNull()
-    expect(within(inviteDialog).getByLabelText(zh.inviteExpiry)).toBeDefined()
+    const expirySelect = within(inviteDialog).getByRole('combobox', { name: zh.inviteExpiry })
+    expect(expirySelect.parentElement?.classList.contains(styles.selectControl)).toBe(true)
+    const expiryArrow = expirySelect.parentElement?.querySelector('svg')
+    expect(expiryArrow?.classList.contains(styles.selectArrow)).toBe(true)
+    expect(expiryArrow?.getAttribute('aria-hidden')).toBe('true')
+    expect(expiryArrow?.getAttribute('focusable')).toBe('false')
     fireEvent.click(within(inviteDialog).getByRole('button', { name: zh.createInvite }))
     await waitFor(() => {
       expect(managementApi.createInvite).toHaveBeenCalledWith(zh.inviteFriend, 7 * 86_400_000, expectedContext())
