@@ -1922,9 +1922,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             }}>{t('returnToTeam')}</Button> : null}
             {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.compactActions}>
               <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable}
-                onCreate={() => openSetup('create')} onRecover={() => openSetup('recover')} onChanged={async () => { await refresh(true) }} />
+                onCreate={() => openSetup('create')} onChanged={async () => { await refresh(true) }} />
               <Button variant="ghost" disabled={busy !== undefined || !status.keyWritable} onClick={() => openSetup('create')}>{t('createTeam')}</Button>
-              <Button variant="ghost" disabled={busy !== undefined || !status.keyWritable} onClick={() => openSetup('recover')}>{t('recoverOwner')}</Button>
             </div> : null}
           </div>
           {status.pendingJoinConfigured ? (
@@ -1994,6 +1993,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               </div>
             </div>
           ) : <Notice tone="warning" title={t('readOnlyKey')} detail={status.keySource} />}
+          {!status.keyConfigured && !status.pendingJoinConfigured && status.keyWritable ? (
+            <div className={styles.recoveryEntry}>
+              <button type="button" className={styles.recoveryEntryLink} disabled={busy !== undefined} onClick={() => openSetup('recover')}>
+                {t('recoverOwnerEntry')}
+              </button>
+            </div>
+          ) : null}
         </section>
       </main>
     )
@@ -2691,11 +2697,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                             authorizationContext: ownerAuthorizationContext,
                           })
                         }}>{team.status === 'active' ? t('pauseTeam') : t('resumeTeam')}</button>
-                        <span className={styles.teamMenuLabel}>{t('ownershipGroup')}</span>
+                        <span className={styles.teamMenuLabel}>{t('securityRecoveryGroup')}</span>
                         <button type="button" role="menuitem" onClick={() => {
                           if (ownerExpectedContext === undefined) return
                           setTeamMenuOpen(false); setRecoveryExportContext(ownerExpectedContext)
                         }}>{t('saveRecoveryCode')}</button>
+                        <span className={styles.teamMenuLabel}>{t('ownershipGroup')}</span>
                         <button type="button" role="menuitem" disabled={eligibleOwnershipTargets.length === 0 || ownershipTransfer !== undefined} onClick={() => {
                           if (ownerAuthorizationContext === undefined) return
                           setTeamMenuOpen(false)
