@@ -438,11 +438,77 @@
 }
 
 .workspaceSection .memberRow {
-  min-height: 66px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  min-height: 80px;
   border: 0;
   border-bottom: 1px solid var(--team-line);
   border-radius: 0;
-  padding: 11px 2px;
+  padding: 16px 4px;
+  background: transparent;
+}
+
+.workspaceSection .memberRow:last-child {
+  border-bottom: 0;
+}
+
+.membersSection .workspaceSectionTitle {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+.membersSection .hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.memberRow .identity {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.memberRow .name {
+  max-width: 100%;
+  white-space: normal;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+
+.memberRole {
+  color: var(--team-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.memberActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.memberMenu > button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 8px;
+  color: var(--team-muted);
+}
+
+.memberMenu > button:hover,
+.memberMenu > button[aria-expanded='true'] {
+  background: var(--team-layer-soft);
+  color: var(--team-ink);
+}
+
+.memberMenu > button:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 2px;
 }
 
 .workspaceSection .inviteRow {
@@ -1942,12 +2008,7 @@
 }
 
 .memberMenuPopover {
-  min-width: 0;
-  border: 1px solid var(--team-line);
-  border-radius: 8px;
-  padding: 4px;
-  background: var(--team-layer);
-  box-shadow: 0 12px 30px rgba(31, 35, 41, 0.14);
+  position: fixed;
 }
 
 .memberMenuPopover button {
@@ -2826,7 +2887,6 @@
 
 @container team-settings (max-width: 620px) {
   .workspaceSectionHeader,
-  .memberRow,
   .inviteRow {
     align-items: stretch;
     flex-direction: column;
@@ -2854,10 +2914,6 @@
 
   .inviteNotRevealable {
     text-align: left;
-  }
-
-  .memberRow .compactActions {
-    padding-left: 0;
   }
 
   .usageCards[data-owner='true'] {
@@ -3027,7 +3083,6 @@
   .settingsPageHeader,
   .settingsStatus,
   .settingsCardHeader,
-  .memberRow,
   .inviteRow {
     align-items: stretch;
     flex-direction: column;
@@ -3051,7 +3106,6 @@
 
   .settingsCard { padding: 15px; }
 
-  .memberRow,
   .inviteRow { gap: 9px; }
 
   .inviteActions {
@@ -3060,8 +3114,6 @@
   }
 
   .inviteNotRevealable { text-align: left; }
-
-  .memberRow .compactActions { padding-left: 0; }
 
   .connectionGrid,
   .accountGroups { grid-template-columns: 1fr; }
