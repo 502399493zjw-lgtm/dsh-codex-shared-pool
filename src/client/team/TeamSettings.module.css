@@ -3365,3 +3365,78 @@
 .compactSummaryList dd { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 .compactSummaryList dd > .inlineLimitButton { margin-inline-start: 8px; }
+
+/* Keep invite scanning and actions compact, including in narrow settings panes. */
+.invitationSection .workspaceSectionHeader {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.invitationSection .workspaceSectionHeader > button {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.invitationSection .inviteRow {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.invitationSection .inviteIdentity {
+  flex: 1;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.inviteDetails {
+  min-width: 0;
+  width: 100%;
+}
+
+.inviteDetails > summary {
+  display: list-item;
+  cursor: pointer;
+}
+
+.inviteDetails > summary::marker {
+  color: var(--team-faint);
+  font-size: 10px;
+}
+
+.inviteDetails > summary:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.inviteDetails[open] > .meta {
+  display: block;
+  margin-top: 4px;
+}
+
+.invitationSection .inviteActions {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.invitationSection .inviteActions > button {
+  min-width: 44px;
+}
+
+.invitationSection .inviteNotRevealable {
+  max-width: 140px;
+}
+
+@container team-settings (max-width: 380px) {
+  .invitationSection .inviteRow {
+    flex-wrap: wrap;
+  }
+
+  .invitationSection .inviteIdentity {
+    flex-basis: 100%;
+  }
+}

@@ -3341,6 +3341,22 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
+  it('keeps invitation rows concise with creation details collapsed and named actions', async () => {
+    overviewState = { ...overviewState, invites: [pendingInvite('invite-1', '产品设计协作', true)] }
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('invitations')
+    const summary = within(settings).getByText('产品设计协作')
+    expect(summary.tagName).toBe('SUMMARY')
+    const details = summary.closest('details')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain('Edison')
+    expect(within(settings).getByText('每码限一人使用')).toBeDefined()
+    expect(within(settings).getByRole('button', { name: zh.revealInvite }).textContent).toBe('查看')
+    expect(within(settings).getByRole('button', { name: zh.revokeInvite }).textContent).toBe('')
+    expect(managementApi.revealInvite).not.toHaveBeenCalled()
+    expect(settings.textContent).not.toContain(REVEALED_INVITE_TOKEN)
+  })
+
   it('blocks new invitations while paused but keeps existing invitation controls available', async () => {
     overviewState = {
       ...overviewState,
