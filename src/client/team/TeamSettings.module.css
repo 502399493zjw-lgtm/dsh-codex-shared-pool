@@ -2518,7 +2518,7 @@
   height: 24px;
   border: 0;
   border-radius: 4px;
-  padding: 5px;
+  padding: 6px;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -2526,8 +2526,9 @@
 
 .quietRefreshButton svg,
 .quietRefreshButton .actionSpinner {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
+  margin: 0;
 }
 
 .quietRefreshButton:hover:not(:disabled) {
