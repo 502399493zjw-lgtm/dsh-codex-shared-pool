@@ -68,7 +68,7 @@ describe('OpenAI Codex local routing monitor', () => {
       return response({})
     }))
     render(<OpenAICodexSettings t={t} />)
-    const title = await screen.findByRole('heading', { name: en.usageLimits })
+    const title = await screen.findByRole('heading', { name: en.subscriptionDetails })
     const summary = title.parentElement!
     expect(within(summary).getByText(en.subscriptionTier)).toBeDefined()
     expect(summary.style.gap).toBe('10px')
