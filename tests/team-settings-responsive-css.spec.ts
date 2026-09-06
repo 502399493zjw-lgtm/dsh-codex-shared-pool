@@ -299,6 +299,11 @@ it('gives join and create a visible button surface and distinct interaction stat
   expect(css).toMatch(/\.inviteDialog \.modalActions > button\s*\{[^}]*flex-shrink:\s*0;[^}]*white-space:\s*nowrap;/s)
  })
 
+it('aligns shared account actions to the trailing edge while keeping status beside the title', () => {
+  expect(css).toMatch(/\.detailHeading > \.headingActions\s*\{[^}]*margin-inline-start:\s*auto;/s)
+  expect(css).toMatch(/\.detailHeading\s*\{[^}]*justify-content:\s*flex-start;/s)
+})
+
 it('truncates account titles while keeping inline status and actions from shrinking', () => {
   expect(css).toMatch(/\.detailTitle\s*\{[^}]*max-width:\s*12em;[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/s)
   expect(css).toMatch(/\.detailHeading\s*\{[^}]*flex-wrap:\s*nowrap;/s)

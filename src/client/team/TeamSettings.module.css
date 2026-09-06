@@ -1142,6 +1142,10 @@
   flex-shrink: 0;
 }
 
+.detailHeading > .headingActions {
+  margin-inline-start: auto;
+}
+
 .teamActionPanel {
   display: block;
   margin-top: 18px;
