@@ -471,6 +471,8 @@
 }
 
 .memberRow .name {
+  max-width: 100%;
+  white-space: normal;
   font-size: 14px;
   font-weight: 600;
   line-height: 22px;

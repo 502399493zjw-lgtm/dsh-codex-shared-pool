@@ -19,6 +19,10 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('allows long member names to wrap without displacing the action column', () => {
+    expect(css).toMatch(/\.memberRow \.name\s*\{[^}]*max-width:\s*100%;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s)
+  })
+
   it('bounds recent requests to the viewport and scrolls only the body', () => {
     expect(css).toMatch(/\.recentRequestsDialog\s*\{[^}]*height:\s*min\(640px,\s*calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s)
     expect(css).toMatch(/\.recentRequestsContent\s*\{[^}]*min-height:\s*0;[^}]*display:\s*grid;[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/s)
