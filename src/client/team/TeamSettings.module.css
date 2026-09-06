@@ -3296,9 +3296,3 @@
 .compactSummaryList dd { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 
 .compactSummaryList dd > .inlineLimitButton { margin-inline-start: 8px; }
-
-.sharingDetails { margin-top: 16px; color: var(--team-muted); font-size: 12px; }
-.sharingDetails > summary { cursor: pointer; }
-.sharingDetails[open] > summary { margin-bottom: 12px; }
-
-.capacityDetail { display: grid; gap: 6px; margin-top: 12px; }

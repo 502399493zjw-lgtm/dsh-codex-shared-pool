@@ -1595,26 +1595,9 @@ describe('Team subscription-pool workspace', () => {
       expect(within(summary).getByText(zh.weeklySharedAmount)).toBeDefined()
       expect(within(summary).getByText(zh.accountRemainingCapacity)).toBeDefined()
       expect(within(account).queryByRole('progressbar')).toBeNull()
+      expect(account.querySelector('details')).toBeNull()
+      expect(within(account).queryByText(zh.editProtection)).toBeNull()
     }
-  })
-
-  it('keeps secondary quota and admission diagnostics in the compact disclosure', async () => {
-    overviewState = { ...overviewState, activeSharedAccounts: [{ ...friend,
-      capacity: { sharedInFlight: 2, buckets: [
-        { id: 'codex', reason: 'request_cap_reached', remainingPercent: 74, sharedRequestsUsed: 100, resetAt: NOW },
-        { id: 'codex_spark', reason: 'ready', remainingPercent: 31 },
-      ] },
-    }] }
-    render(<TeamSettings t={translate} embedded />)
-    const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
-    fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
-    const account = within(panel).getByRole('heading', { name: friend.label }).closest('article')!
-    fireEvent.click(within(account).getByText(zh.editProtection))
-    expect(within(account).getByText(/Codex Spark.*31%/)).toBeDefined()
-    expect(within(account).getByText(zh.capacityRequestCapReached)).toBeDefined()
-    expect(within(account).getByText(translate('capacityRequestsUsed', { count: 100, cap: '∞' }))).toBeDefined()
-    expect(within(account).getByText(translate('capacityResetAt', { time: new Date(NOW).toLocaleString() }))).toBeDefined()
-    expect(within(account).getByText(translate('capacityInFlight', { count: 2 }))).toBeDefined()
   })
 
   it('shows teammate quota and limits as read-only details', async () => {
@@ -1630,10 +1613,8 @@ describe('Team subscription-pool workspace', () => {
     const details = within(panel).getByRole('region', { name: zh.accountDetails })
     expect(within(details).getByText('74%')).toBeDefined()
     expect(within(details).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
-    fireEvent.click(within(details).getByText(zh.editProtection))
-    expect(within(details).getByText('$50.00')).toBeDefined()
-    expect(within(details).getByText('20%')).toBeDefined()
-    expect(within(details).getByText('gpt-5-codex')).toBeDefined()
+    expect(within(details).getByText('— / $50.00')).toBeDefined()
+    expect(within(details).getByRole('button', { name: zh.refreshQuota })).toBeDefined()
     expect(within(details).queryByRole('button', { name: zh.editSharingLimit })).toBeNull()
     expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
   })
