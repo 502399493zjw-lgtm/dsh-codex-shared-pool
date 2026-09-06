@@ -3514,7 +3514,7 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('members')
     const memberList = within(settings).getByRole('list', { name: zh.membersTitle })
     const rows = within(memberList).getAllByRole('listitem')
-    expect(rows.map(row => row.firstElementChild?.textContent)).toEqual([
+    expect(rows.map(row => row.querySelector(`.${styles.name}`)?.textContent)).toEqual([
       'Edison',
       'Mia',
       'Bob',
@@ -3527,6 +3527,26 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(settings).getByRole('button', { name: '管理 Mia' }))
     const menu = screen.getByRole('menu', { name: '管理 Mia' })
     expect(within(menu).getByRole('menuitem', { name: zh.removeMember })).toBeDefined()
+  })
+
+  it('portals member actions out of the settings scroller and restores keyboard focus', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await openTeamSettings('members')
+    const trigger = within(settings).getByRole('button', { name: '管理 Mia' })
+    fireEvent.click(trigger)
+    const menu = screen.getByRole('menu', { name: '管理 Mia' })
+    expect(menu.parentElement).toBe(document.body)
+    expect(menu.style.position).toBe('fixed')
+    expect(menu.style.width).toBe('184px')
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(within(menu).getByRole('menuitem', { name: zh.removeMember }))
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('menu', { name: '管理 Mia' })).toBeNull()
+    expect(managementApi.removeMember).not.toHaveBeenCalled()
   })
 
   it('lets the Owner request a two-phase transfer without changing either role', async () => {
