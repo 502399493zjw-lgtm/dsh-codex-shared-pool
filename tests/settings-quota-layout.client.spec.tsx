@@ -101,6 +101,8 @@ describe('local account quota presentation', () => {
     render(<OpenAICodexSettings t={t} />)
     await screen.findByRole('heading', { name: locale === en ? 'Subscription details' : '订阅信息' })
     const quotas = screen.getByRole('region', { name: locale === en ? 'Model quotas' : '模型额度' })
+    expect(within(quotas).queryByRole('heading', { name: locale.modelQuotas })).toBeNull()
+    expect(within(quotas).queryByText(locale.quotaRemaining)).toBeNull()
     expect(within(quotas).getByText(locale === en ? 'Exhausted' : '已用尽')).toBeDefined()
     expect(within(quotas).getByText('100%')).toBeDefined()
     expect(within(quotas).getByText('37.5%')).toBeDefined()
