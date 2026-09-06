@@ -2215,18 +2215,23 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           </p>
         </section>
         <section
-          className={`${styles.prototypeSection} ${styles.capacityOverview}`}
+          className={`${styles.prototypeSection} ${styles.capacityOverview} ${styles.accountAuxiliary}`}
           role="region"
           aria-label={t('capacityTitle')}
           aria-busy={quotaIsLoading}
           data-tone={quotaHasError ? 'warning' : undefined}
           data-stale={quotaIsStale ? 'true' : undefined}
         >
-          <h3>{t('capacityTitle')}</h3>
           <dl className={styles.compactSummaryList}>
             <div>
               <dt>{t('accountRemainingCapacity')}</dt>
               <dd className={styles.weeklyAmount}>
+                <button type="button" className={styles.quietRefreshButton}
+                  aria-label={t('refreshQuota')} title={t(localProfilesQuotaLoading ? 'refreshingQuota' : 'refreshQuota')}
+                  aria-busy={localProfilesQuotaLoading} disabled={localProfilesQuotaLoading || loading}
+                  onClick={() => { void refreshLocalProfileQuota() }}>
+                  {localProfilesQuotaLoading ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
+                </button>
                 {profile.remainingPercent === undefined
                   ? quotaIsLoading
                     ? <>
@@ -2235,16 +2240,11 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                       </>
                     : t(quotaHasError ? 'capacityQuotaError' : 'capacityQuotaUnavailable')
                   : `${profile.remainingPercent}%`}
-                <button type="button" className={styles.inlineLimitButton}
-                  aria-label={t('refreshQuota')} title={t(localProfilesQuotaLoading ? 'refreshingQuota' : 'refreshQuota')}
-                  aria-busy={localProfilesQuotaLoading} disabled={localProfilesQuotaLoading || loading}
-                  onClick={() => { void refreshLocalProfileQuota() }}>
-                  {localProfilesQuotaLoading ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
-                </button>
               </dd>
             </div>
           </dl>
-          <SubscriptionEstimate subscription={profile.subscription} labels={subscriptionEstimateLabels(t)} />
+          <SubscriptionEstimate subscription={profile.subscription} labels={subscriptionEstimateLabels(t)}
+            style={{ fontSize: 'inherit', marginBlock: 0, gap: 6 }} />
           {quotaHasError
             ? <p className={styles.quotaWarning} role="status">{t(quotaIsStale ? 'capacityQuotaStaleHint' : 'capacityQuotaErrorHint')}</p>
             : null}
@@ -2286,13 +2286,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             <div>
               <dt>{t('accountRemainingCapacity')}</dt>
               <dd className={styles.weeklyAmount}>
-                {bucket?.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}
                 <button type="button" className={styles.quietRefreshButton}
                   aria-label={t('refreshQuota')} title={t(capacityRefreshing ? 'refreshingQuota' : 'refreshQuota')}
                   aria-busy={capacityRefreshing} disabled={capacityRefreshing || loading}
                   onClick={() => { void refreshCapacityRef.current?.() }}>
                   {capacityRefreshing ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
                 </button>
+                {bucket?.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}
               </dd>
             </div>
           </dl>
