@@ -1,6 +1,6 @@
 /** Plugin-owned OpenAI Codex account page inside the dsh Settings shell. */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { subscriptionFromUsage, subscriptionPlanLabel } from '../shared/subscription.ts'
 import type { CSSProperties } from 'react'
 import {
@@ -106,13 +106,14 @@ export interface OpenAICodexSettingsProps extends Partial<OpenAICodexSettingsInj
 const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minWidth: 0, maxWidth: 960, containerType: 'inline-size' }
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
+const quotaBodyStyle: CSSProperties = { ...bodyStyle, fontSize: 13, lineHeight: '20px' }
 const badgeStyle: CSSProperties = { padding: '2px 8px', borderRadius: 999, background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary, #3964fe) 14%, transparent)', color: 'var(--dsw-alias-state-business-primary, #3964fe)', fontSize: 12, fontWeight: 600 }
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
-const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 22 }
-const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
-const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16 }
+const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 8 }
+const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 13, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
-const quotaRowStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 90px) minmax(24px, 1fr) max-content', alignItems: 'center', columnGap: 12, rowGap: 4, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
+const quotaRowStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 72px) minmax(24px, 1fr) minmax(0, max-content)', alignItems: 'center', columnGap: 10, rowGap: 4, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
 const progressTrackStyle: CSSProperties = { height: 5, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
 const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
 
@@ -176,6 +177,15 @@ function formatPercent(percent: number): string {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(percent)
 }
 
+function connectionLabel(status: OpenAICodexConnectionStatus | undefined, t: OpenAICodexSettingsInjected['t']): string {
+  return status === undefined ? t('accountConnectionUnknown') : status === 'reauth-required'
+    ? t('accountConnectionUnavailable') : t('accountConnected')
+}
+
+function accountLabel(profile: AccountProfile, index: number, t: OpenAICodexSettingsInjected['t']): string {
+  return profile.label.trim() || t('accountAlias', { alias: index + 1 })
+}
+
 function routingReasonKey(reason: LocalRoutingReason): OpenAICodexSettingsKey {
   switch (reason) {
     case 'priority': return 'routingReasonPriority'
@@ -205,14 +215,27 @@ function QuotaBar({
   label,
   percent,
   detail,
+  resetsAt,
   t,
 }: {
   label: string
   percent: number
   detail?: string
+  /** Undefined omits reset information; null means a window has no reset instant. */
+  resetsAt?: number | null
   t: OpenAICodexSettingsInjected['t']
 }) {
   const display = formatPercent(percent)
+  const resetId = useId()
+  const resetDate = resetsAt == null ? undefined : new Date(resetsAt)
+  const validReset = resetDate !== undefined && Number.isFinite(resetDate.getTime())
+  const pendingReset = validReset && resetDate.getTime() <= Date.now()
+  const resetText = !validReset ? t('quotaResetUnknown') : pendingReset ? t('quotaResetPending')
+    : t('quotaResetAt', {
+        month: resetDate.getMonth() + 1,
+        day: resetDate.getDate(),
+        time: `${String(resetDate.getHours()).padStart(2, '0')}:${String(resetDate.getMinutes()).padStart(2, '0')}`,
+      })
   return (
     <div style={quotaRowStyle}>
       <span style={{ overflowWrap: 'anywhere' }}>{label}</span>
@@ -224,13 +247,17 @@ function QuotaBar({
         aria-valuemax={100}
         aria-valuenow={percent}
         aria-valuetext={t('percentRemaining', { percent: display })}
+        aria-describedby={resetsAt === undefined ? undefined : resetId}
       >
         <div style={progressFillStyle(percent)} />
       </div>
-      <span style={{ minWidth: '4.5em', textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: percent <= 0 ? 'var(--dsw-alias-label-primary)' : undefined }}>
-        {percent <= 0 ? t('quotaExhausted') : `${display}%`}
+      <span style={{ minWidth: 0, textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: percent <= 0 ? 'var(--dsw-alias-label-primary)' : undefined }}>
+        {percent <= 0 ? t('quotaExhausted') : t('percentRemaining', { percent: display })}
       </span>
-      {detail === undefined ? null : <p style={{ ...bodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>{detail}</p>}
+      {resetsAt === undefined ? null : <p id={resetId} style={{ ...quotaBodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>
+        {validReset && !pendingReset ? <time dateTime={resetDate.toISOString()}>{resetText}</time> : resetText}
+      </p>}
+      {detail === undefined ? null : <p style={{ ...quotaBodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>{detail}</p>}
     </div>
   )
 }
@@ -254,12 +281,13 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
       <section aria-label={t('modelQuotas')} style={quotaListStyle}>
         {usage.rateLimits.map(limit => (
           <div key={limit.id} style={quotaGroupStyle}>
-            <h4 style={{ ...quotaTitleStyle, fontSize: 14, fontWeight: 500, overflowWrap: 'anywhere' }}>{limit.name ?? limit.id}</h4>
+            <h4 style={{ ...quotaTitleStyle, fontWeight: 500, overflowWrap: 'anywhere' }}>{limit.name ?? limit.id}</h4>
             {limit.windows.map(window => (
               <QuotaBar
                 key={window.windowSeconds}
                 label={windowLabel(window.windowSeconds, t)}
                 percent={window.remainingPercent}
+                resetsAt={window.resetsAt ?? null}
                 t={t}
               />
             ))}
@@ -284,8 +312,8 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
               : usage.credits.balance === undefined ? t('available') : usage.credits.balance}</span>
           </div>
         )}
-        {!loading && !hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
-        {quotaError === undefined ? null : <p style={errorStyle}>{t('quotaUnavailable')}</p>}
+        {!loading && !hasData && quotaError === undefined ? <p style={quotaBodyStyle}>{t('quotaUnavailable')}</p> : null}
+        {quotaError === undefined ? null : <p style={{ ...quotaBodyStyle, color: errorStyle.color }}>{t('quotaUnavailable')}</p>}
       </section>
     </div>
   )
@@ -534,6 +562,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
   const selectedProfile = profiles.find(profile => profile.id === selectedProfileId)
     ?? profiles[0]
   const priorityProfile = profiles[0]
+  const selectedProfileLabel = selectedProfile === undefined ? undefined : accountLabel(selectedProfile, profiles.indexOf(selectedProfile), t)
 
   const signIn = async (): Promise<void> => {
     stopPopupWatch()
@@ -716,15 +745,18 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-add-account { min-height: 32px; padding: 5px 10px; border-radius: 8px; max-width: 100%; min-width: 0; flex: 0 1 auto; }
         .dsh-codex-add-account-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .dsh-codex-profile-items { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; }
-        .dsh-codex-profile-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
+        .dsh-codex-profile-item { display: flex; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-profile-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
         .dsh-codex-profile-item[data-selected='true'] { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); }
-        .dsh-codex-profile-identity { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .dsh-codex-profile-alias { color: var(--dsw-alias-label-primary); font-size: 13px; line-height: 18px; font-weight: 600; }
-        .dsh-codex-profile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 500; }
-        .dsh-codex-profile-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+        .dsh-codex-profile-identity { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 4px; }
+        .dsh-codex-profile-primary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
+        .dsh-codex-profile-alias { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.04)); font-size: 12px; line-height: 18px; font-weight: 500; }
+        .dsh-codex-profile-name { flex: 1 1 100px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
+        .dsh-codex-profile-status { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 4px 7px; font-size: 12px; line-height: 18px; }
+        .dsh-codex-profile-status > :first-child { flex-shrink: 0; }
+        .dsh-codex-profile-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 20px 24px 0; }
-        .dsh-codex-detail-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; min-width: 0; }
+        .dsh-codex-detail-heading { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
         .dsh-codex-detail-title { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 20px; line-height: 28px; font-weight: 600; }
         .dsh-codex-account-status { display: inline-flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 7px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-weight: 500; }
         .dsh-codex-account-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
@@ -833,13 +865,16 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                   setPriorityError(undefined)
                 }}
               >
-                <ConnectionDot status={profile.connectionStatus} />
                 <span className="dsh-codex-profile-identity">
-                  <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
-                  <span className="dsh-codex-profile-name">{profile.label}</span>
-                </span>
-                <span className="dsh-codex-profile-badges">
-                  {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('profileInUse')}</span> : null}
+                  <span className="dsh-codex-profile-primary">
+                    <span className="dsh-codex-profile-name" title={accountLabel(profile, index, t)}>{accountLabel(profile, index, t)}</span>
+                    <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
+                  </span>
+                  <span className="dsh-codex-profile-status" data-state={profile.connectionStatus === 'reauth-required' ? 'error' : undefined}>
+                    <ConnectionDot status={profile.connectionStatus} />
+                    <span>{connectionLabel(profile.connectionStatus, t)}</span>
+                    {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('profileInUse')}</span> : null}
+                  </span>
                 </span>
               </button>
             ))}
@@ -874,9 +909,9 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
             </div>
           </div>
         ) : (
-          <section className="dsh-codex-profile-detail" aria-label={selectedProfile.label}>
+          <section className="dsh-codex-profile-detail" aria-label={selectedProfileLabel}>
             <div className="dsh-codex-detail-heading">
-              <h3 className="dsh-codex-detail-title">{selectedProfile.label}</h3>
+              <h3 className="dsh-codex-detail-title">{selectedProfileLabel}</h3>
               <span
                 className="dsh-codex-account-status"
                 data-state={selectedProfile.connectionStatus === undefined ? 'idle' : selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'}
@@ -886,9 +921,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                   : {}}
               >
                 <ConnectionDot status={selectedProfile.connectionStatus} />
-                {selectedProfile.connectionStatus === undefined ? t('accountConnectionUnknown') : selectedProfile.connectionStatus === 'reauth-required'
-                  ? t('accountConnectionUnavailable')
-                  : t('accountConnected')}
+                {connectionLabel(selectedProfile.connectionStatus, t)}
               </span>
             </div>
             <div className="dsh-codex-default">
@@ -904,7 +937,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
               {priorityError === undefined ? null : <p role="alert">{priorityError}</p>}
             </div>
             <div className="dsh-codex-quota">
-              {selectedProfile.quotaLoading ? <p style={bodyStyle}>{t('loadingQuota')}</p> : null}
+              {selectedProfile.quotaLoading ? <p style={quotaBodyStyle}>{t('loadingQuota')}</p> : null}
               <UsageLimits
                 loading={selectedProfile.quotaLoading ?? false}
                 usage={selectedProfile.usage}
@@ -1119,7 +1152,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
       <Modal
         open={dialog === 'remove' && selectedProfile !== undefined}
         onClose={closeDialog}
-        title={selectedProfile === undefined ? t('removeAccount') : t('removeAccountTitle', { label: selectedProfile.label })}
+        title={selectedProfile === undefined ? t('removeAccount') : t('removeAccountTitle', { label: selectedProfileLabel })}
         closeLabel={t('closeDialog')}
         description={t('removeAccountDescription')}
         footer={(
