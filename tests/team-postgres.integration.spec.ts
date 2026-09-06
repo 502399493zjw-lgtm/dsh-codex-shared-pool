@@ -1209,7 +1209,7 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
-  it('accepts concurrent members with distinct supplied keys using the same invitation', async () => {
+  it('accepts concurrent joins with supplied keys while keeping the invitation active', async () => {
     const connectionString = requiredDatabaseUrl()
     const suffix = randomUUID().replaceAll('-', '')
     const schema = `dsh_team_it_${suffix}`
@@ -1237,15 +1237,17 @@ describePostgres('real PostgreSQL Team concurrency', () => {
 
       const results = await Promise.allSettled(suppliedKeys.map((apiKey, index) =>
         store.acceptInviteWithApiKey(invite.inviteToken, `Friend ${index + 1}`, apiKey)))
-      expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(2)
-      expect(results.filter(result => result.status === 'rejected')).toHaveLength(0)
+      expect(results.map(result => result.status)).toEqual(['fulfilled', 'fulfilled'])
       const memberCount = await pool.query<{ count: string }>('SELECT COUNT(*) AS count FROM team_members WHERE team_id = $1', [owner.teamId])
       expect(Number(memberCount.rows[0]?.count)).toBe(3)
       const inviteRow = await pool.query<{ status: string }>('SELECT status FROM team_invites WHERE id = $1', [invite.invite.id])
       expect(inviteRow.rows).toEqual([{ status: 'pending' }])
-      const authenticated = await Promise.all(suppliedKeys.map(apiKey => store.authenticateApiKey(apiKey)))
-      for (const member of authenticated) expect(member).toMatchObject({ role: 'member', teamId: owner.teamId })
-      expect(new Set(authenticated.map(member => member?.memberId)).size).toBe(2)
+      const members = await Promise.all(suppliedKeys.map(apiKey => store.authenticateApiKey(apiKey)))
+      expect(members).toEqual([
+        expect.objectContaining({ role: 'member', teamId: owner.teamId }),
+        expect.objectContaining({ role: 'member', teamId: owner.teamId }),
+      ])
+      expect(members[0]?.memberId).not.toBe(members[1]?.memberId)
     } finally {
       await pool.end().catch(() => undefined)
       await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`).catch(() => undefined)
