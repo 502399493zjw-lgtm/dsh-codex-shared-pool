@@ -2,7 +2,7 @@
 
 在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 里自由使用 Codex 订阅额度：把多个 ChatGPT/Codex 订阅账号放进同一个本地账号池，并在请求前根据模型额度自动选择可用账号。
 
-当前版本收口“一期”的本地多账号体验。
+支持本地多账号池，以及通过自托管 Team 服务邀请成员、共享账号额度和查看共享用量。
 
 ## 它解决什么问题
 
@@ -69,7 +69,7 @@
 当前正式版发布在 npm 的 `latest` tag。安装到 DSH Web profile：
 
 ```bash
-dsh plugin --profile web add dsh-codex-shared-pool@0.1.0
+dsh plugin --profile web add dsh-codex-shared-pool@0.1.1
 ```
 
 也可以省略版本以安装 `latest`；如需跟随后续预发布版本，请使用 `dsh-codex-shared-pool@next`。
