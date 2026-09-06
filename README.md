@@ -69,7 +69,7 @@
 当前正式版发布在 npm 的 `latest` tag。安装到 DSH Web profile：
 
 ```bash
-dsh plugin --profile web add dsh-codex-shared-pool@0.1.1
+dsh plugin --profile web add dsh-codex-shared-pool@0.1.3
 ```
 
 也可以省略版本以安装 `latest`；如需跟随后续预发布版本，请使用 `dsh-codex-shared-pool@next`。
