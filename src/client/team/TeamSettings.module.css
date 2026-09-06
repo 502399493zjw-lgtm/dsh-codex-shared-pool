@@ -763,20 +763,22 @@
 
 .directoryHeader {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: 4px 12px;
-  padding: 20px 20px 21px;
+  gap: 8px;
+  padding: 20px 12px 21px;
 }
 
 .directoryTitle {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
   white-space: nowrap;
   align-items: center;
   gap: 4px;
-  margin: 0 0 3px;
+  margin: 0;
   color: var(--team-faint);
   font-size: 16px;
   font-weight: 500;
@@ -789,18 +791,11 @@
 }
 
 .page .addAccountButton {
+  margin-left: auto;
   min-height: 32px;
   flex: 0 0 auto;
   padding: 6px 11px;
   white-space: nowrap;
-}
-
-.directoryHint {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--team-faint);
-  font-size: 12px;
-  line-height: 18px;
 }
 
 .directoryGroup {

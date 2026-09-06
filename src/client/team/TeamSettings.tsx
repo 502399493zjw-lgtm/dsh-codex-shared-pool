@@ -2511,7 +2511,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               setAccountLabel('')
               setAddAccountOpen(true)
             }}>{t('addAccount')}</Button>
-            <p className={`${styles.hint} ${styles.directoryHint}`}>{t('accountDirectoryHint')}</p>
           </div>
           {sharedAccountCount === 0 ? null : <section className={styles.directoryGroup} role="region" aria-labelledby="team-shared-accounts-title">
             <div className={styles.directoryGroupHeader}>
