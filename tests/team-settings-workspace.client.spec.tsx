@@ -2008,7 +2008,8 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByRole('button', { name: new RegExp(mine.label, 'u') })).toBeDefined()
     expect(within(details).getByRole('heading', { name: mine.label })).toBeDefined()
     expect(directoryHeader?.classList.contains(styles.directoryHeader)).toBe(true)
-    expect(within(directoryHeader!).getByText(zh.accountDirectoryHint).classList.contains(styles.directoryHint)).toBe(true)
+    expect(within(directoryHeader!).getByRole('button', { name: zh.addAccount })).toBeDefined()
+    expect(within(directory).queryByText(zh.accountDirectoryHint)).toBeNull()
     expect(settings.compareDocumentPosition(directory) & Node.DOCUMENT_POSITION_CONTAINED_BY).not.toBe(0)
   })
 
@@ -2031,7 +2032,7 @@ describe('Team subscription-pool workspace', () => {
 
     expect(within(directory).getByRole('heading', { name: `${zh.accountsLabel}${translate('accountsCount', { count: 0 })}` })).toBeDefined()
     expect(within(directory).getByRole('button', { name: zh.addAccount })).toBeDefined()
-    expect(within(directory).getByText(zh.accountDirectoryHint)).toBeDefined()
+    expect(within(directory).queryByText(zh.accountDirectoryHint)).toBeNull()
     expect(within(directory).queryByText(zh.noLocalAccountsTitle)).toBeNull()
     expect(within(directory).queryByText(zh.noLocalAccountsHint)).toBeNull()
     expect(within(details).getByText(zh.noLocalAccountsTitle)).toBeDefined()

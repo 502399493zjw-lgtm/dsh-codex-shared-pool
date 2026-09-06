@@ -29,10 +29,10 @@ describe('Team Settings responsive container contract', () => {
     expect(css).toMatch(/\.recentRequestsContent > :last-child\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
   })
 
-  it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
-    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
-    expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
-    expect(css).toMatch(/\.directoryHint\s*\{[^}]*flex-basis:\s*100%;/s)
+  it('keeps the add-account action on the right while allowing the heading count to wrap', () => {
+    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*nowrap;/s)
+    expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 1 auto;[^}]*flex-wrap:\s*wrap;[^}]*min-width:\s*0;/s)
+    expect(css).toMatch(/\.page \.addAccountButton\s*\{[^}]*margin-left:\s*auto;[^}]*flex:\s*0 0 auto;/s)
   })
 
   it('caps the plugin page to the visible settings content width', () => {
@@ -187,7 +187,6 @@ describe('Team Settings responsive container contract', () => {
 
   it('keeps the prototype account-list typography hierarchy', () => {
     expect(css).toMatch(/\.directoryTitle\s*\{[^}]*color:\s*var\(--team-faint\);[^}]*font-weight:\s*500;/s)
-    expect(css).toMatch(/\.directoryHint\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
     expect(css).toMatch(/\.directoryGroupHeader\s*\{[^}]*font-size:\s*11px;[^}]*line-height:\s*16px;/s)
     expect(css).toMatch(/\.directoryGroupTitle\s*\{[^}]*font-size:\s*11px;[^}]*font-weight:\s*650;[^}]*line-height:\s*16px;/s)
     expect(css).toMatch(/\.accountNavLabel\s*\{[^}]*font-size:\s*13px;[^}]*font-weight:\s*600;[^}]*line-height:\s*18px;/s)
@@ -224,7 +223,7 @@ describe('Team Settings responsive container contract', () => {
   it('keeps the prototype compact Team bar and detail rhythm', () => {
     expect(css).toMatch(/\.teamIdentity \.hint\s*\{[^}]*font-size:\s*12px;[^}]*line-height:\s*18px;/s)
     expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*font-size:\s*13px;/s)
-    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*padding:\s*20px 20px 21px;/s)
+    expect(css).toMatch(/\.directoryHeader\s*\{[^}]*padding:\s*20px 12px 21px;/s)
     expect(css).toMatch(/\.page \.addAccountButton\s*\{[^}]*min-height:\s*32px;[^}]*padding:\s*6px 11px;/s)
     expect(css).toMatch(/\.compactSummaryList > div\s*\{[^}]*gap:\s*20px;/s)
     expect(css).toMatch(/\.compactRecentUsage\s*\{[^}]*padding-bottom:\s*22px;/s)
