@@ -108,6 +108,25 @@ describe('self-hosted deployment assets', () => {
     }
   })
 
+  it.each(['@deepseek-ai/cordis', '@earendil-works/pi-ai', 'tsdown', 'typescript', 'vitest'])(
+    'preserves executable metadata for %s in fresh frozen installs',
+    async (packageName) => {
+      const manifest = JSON.parse(await readFile(
+        new URL(`../node_modules/${packageName}/package.json`, import.meta.url),
+        'utf8',
+      )) as { version: string; bin?: unknown }
+      const lockfile = await readFile(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
+      const packageKey = `${packageName}@${manifest.version}`
+      const packageBlock = lockfile.split('\n\n').find(block => (
+        block.startsWith(`  ${packageKey}:\n`) || block.startsWith(`  '${packageKey}':\n`)
+      ))
+
+      expect(manifest.bin).toBeDefined()
+      // Frozen installs use this metadata to link .bin; an existing node_modules can hide its loss.
+      expect(packageBlock).toContain('    hasBin: true')
+    },
+  )
+
   it('keeps the central Host image non-root and pinned to the verified DSH release', async () => {
     const dockerfile = await readFile(new URL('../deploy/host/Dockerfile', import.meta.url), 'utf8')
     expect(dockerfile).toMatch(/FROM node:24-bookworm-slim AS runtime/u)
