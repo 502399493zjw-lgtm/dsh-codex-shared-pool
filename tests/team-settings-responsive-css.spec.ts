@@ -19,6 +19,12 @@ const localSettingsSource = readFileSync(
 )
 
 describe('Team Settings responsive container contract', () => {
+  it('bounds recent requests to the viewport and scrolls only the body', () => {
+    expect(css).toMatch(/\.recentRequestsDialog\s*\{[^}]*height:\s*min\(640px,\s*calc\(100dvh - 48px\)\);[^}]*overflow:\s*hidden;/s)
+    expect(css).toMatch(/\.recentRequestsContent\s*\{[^}]*min-height:\s*0;[^}]*display:\s*grid;[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\);/s)
+    expect(css).toMatch(/\.recentRequestsContent > :last-child\s*\{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s)
+  })
+
   it('keeps the account heading intact and wraps the action when the rail is narrow', () => {
     expect(css).toMatch(/\.directoryHeader\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/s)
     expect(css).toMatch(/\.directoryTitle\s*\{[^}]*flex:\s*0 0 auto;[^}]*white-space:\s*nowrap;/s)
@@ -204,6 +210,11 @@ describe('Team Settings responsive container contract', () => {
     expect(css).not.toMatch(/\.usageMetric:not\(:first-child\)\s*\{[^}]*border-top:/s)
     expect(css).toMatch(/\.usageMetric dd\s*\{[^}]*min-width:\s*0;[^}]*white-space:\s*normal;/s)
     expect(css).toMatch(/\.usageMetric:first-child dd\s*\{[^}]*white-space:\s*nowrap;/s)
+  })
+
+  it('gives the Team settings entry a visible button surface at rest and pressed feedback', () => {
+    expect(css).toMatch(/\.teamSettingsTrigger\s*\{[^}]*border-color:\s*var\(--team-line-strong\);[^}]*background:\s*color-mix\(in srgb, var\(--team-ink\) 6%, var\(--team-layer\)\);/s)
+    expect(css).toMatch(/\.teamSettingsTrigger:active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--team-blue\) 12%, var\(--team-layer\)\);/s)
   })
 
   it('keeps the prototype compact Team bar and detail rhythm', () => {

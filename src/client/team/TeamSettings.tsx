@@ -3119,6 +3119,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
       <Modal
         className={styles.recentRequestsDialog!}
+        contentClassName={styles.recentRequestsContent!}
         description={t('recentRequestsHint')}
         open={recentUsageAccount !== undefined}
         onClose={() => { setRecentUsageAccount(undefined) }}

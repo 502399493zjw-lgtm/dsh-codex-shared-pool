@@ -63,8 +63,9 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     variant?: string
   }) => <button type="button" {...props}>{children}</button>,
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
-  Modal: ({ open, title, description, children, footer, className }: {
+  Modal: ({ open, title, description, children, footer, className, contentClassName }: {
     className?: string
+    contentClassName?: string
     open: boolean
     title: string
     description?: string
@@ -72,9 +73,11 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
     footer?: React.ReactNode
   }) => open ? (
     <div role="dialog" aria-label={title} className={className}>
-      <h2>{title}</h2>
-      {description === undefined ? null : <p>{description}</p>}
-      {children}
+      <div className={contentClassName}>
+        <h2>{title}</h2>
+        {description === undefined ? null : <p>{description}</p>}
+        <div>{children}</div>
+      </div>
       {footer}
     </div>
   ) : null,
@@ -1928,6 +1931,7 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
+    expect(recent.firstElementChild?.classList.contains(styles.recentRequestsContent)).toBe(true)
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
     expect(within(recent).getByText('2,500 tokens')).toBeDefined()
     expect(within(recent).getAllByText(`消耗人：${consumerDisplayName ?? '成员信息不可用'}`).length).toBeGreaterThan(0)
