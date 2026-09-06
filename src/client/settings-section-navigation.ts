@@ -2,8 +2,6 @@
 
 /** Stable id registered by this plugin's account-management settings page. */
 export const CODEX_SETTINGS_SECTION_ID = 'openai-codex'
-/** The pinned rc.8 shell exposes nav rows only through their rendered labels. */
-export const CODEX_SETTINGS_SECTION_LABEL = 'Codex subscription pool'
 
 const SETTINGS_SHELL_WAIT_MS = 1_000
 const SETTINGS_TRIGGER_SELECTOR = 'button[aria-haspopup="dialog"][aria-expanded]'
