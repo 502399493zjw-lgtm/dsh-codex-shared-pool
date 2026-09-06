@@ -292,8 +292,8 @@ describe('OpenAI Codex Web routes', () => {
 
     expect(started.status).toBe(200)
     expect(JSON.parse(started.body)).toEqual({ url: 'https://auth.openai.test/authorize' })
-    expect(JSON.parse(directoryDuringLogin.body)).toEqual({ status: 'signing-in' })
-    expect(listProfiles).not.toHaveBeenCalled()
+    expect(JSON.parse(directoryDuringLogin.body)).toEqual({ status: 'signing-in', profiles: [] })
+    expect(listProfiles).toHaveBeenCalledOnce()
 
     const firstCancel = await request(routes.get(OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH), 'POST')
     const secondCancel = await request(routes.get(OPENAI_CODEX_PROFILE_LOGIN_CANCEL_PATH), 'POST')

@@ -170,11 +170,11 @@ export class OpenAICodexWebAuth {
    * @returns Browser-safe profile collection state.
    */
   async profilesStatus(): Promise<OpenAICodexWebProfilesStatus> {
-    if (this.attempt !== undefined) return { status: 'signing-in' }
-    if (this.state.status === 'error') return this.state
+    const signingIn = this.attempt !== undefined
+    if (!signingIn && this.state.status === 'error') return this.state
     const profiles = await this.store.listProfiles()
     return {
-      status: 'ready',
+      status: signingIn ? 'signing-in' : 'ready',
       profiles: await Promise.all(profiles.map(async (profile) => {
         const inUse = this.routingEvents?.currentProfileId() === profile.id
         try {
@@ -202,12 +202,12 @@ export class OpenAICodexWebAuth {
    * @returns Browser-safe profile metadata with the current local selection.
    */
   async profileDirectoryStatus(): Promise<OpenAICodexWebProfileDirectoryStatus> {
-    if (this.attempt !== undefined) return { status: 'signing-in' }
-    if (this.state.status === 'error') return this.state
+    const signingIn = this.attempt !== undefined
+    if (!signingIn && this.state.status === 'error') return this.state
     const profiles = await this.store.listProfiles()
     const currentProfileId = this.routingEvents?.currentProfileId()
     return {
-      status: 'ready',
+      status: signingIn ? 'signing-in' : 'ready',
       profiles: profiles.map(profile => ({
         id: profile.id,
         label: profile.label,
@@ -226,7 +226,7 @@ export class OpenAICodexWebAuth {
    */
   async quotaSnapshot(): Promise<CodexQuotaSnapshot> {
     const status = await this.profilesStatus()
-    if (status.status !== 'ready') {
+    if (status.status === 'error' || status.profiles === undefined) {
       return {
         currentAccountName: null,
         currentRemainingPercent: null,

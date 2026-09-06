@@ -88,7 +88,7 @@ export interface OpenAICodexCancelLoginResult {
 /** Typed JSON-safe profile lifecycle projection returned to the browser. */
 export type OpenAICodexProfilesStatus<Profile> =
   | { readonly status: 'ready'; readonly profiles: Profile[] }
-  | { readonly status: 'signing-in' }
+  | { readonly status: 'signing-in'; readonly profiles?: Profile[] }
   | { readonly status: 'error'; readonly reason: OpenAICodexAuthorizationFailure }
 
 /** Why the local pool selected one profile for a request. */

@@ -52,12 +52,40 @@ describe('OpenAI Codex Web auth lifecycle', () => {
     await expect(webAuth.signInProfile()).resolves.toEqual({
       url: 'https://auth.openai.test/authorize',
     })
-    await expect(webAuth.profilesStatus()).resolves.toEqual({ status: 'signing-in' })
+    await expect(webAuth.profilesStatus()).resolves.toEqual({ status: 'signing-in', profiles: [] })
 
     await expect(webAuth.cancelSignIn()).resolves.toBe(true)
     await expect(webAuth.profilesStatus()).resolves.toEqual({ status: 'ready', profiles: [] })
     await expect(webAuth.cancelSignIn()).resolves.toBe(false)
   }, 5_000)
+
+  it('keeps stored accounts and sidebar counts available while adding another account', async () => {
+    auth.loginOpenAICodexLocalProfile.mockImplementation(async (interaction: AuthInteraction) => {
+      interaction.notify({ type: 'auth_url', url: 'https://auth.openai.test/authorize' })
+      await new Promise<void>((_resolve, reject) => {
+        interaction.signal?.addEventListener('abort', () => reject(interaction.signal?.reason), { once: true })
+      })
+    })
+    const profile = { id: 'existing', label: 'Existing account', createdAt: 1, updatedAt: 1 }
+    const store = {
+      listProfiles: vi.fn().mockResolvedValue([profile]),
+      forProfile: vi.fn(),
+    } as unknown as OpenAICodexCredentialStore
+    const { OpenAICodexWebAuth } = await import('../src/auth-routes.ts')
+    const webAuth = new OpenAICodexWebAuth(store)
+    await webAuth.signInProfile()
+    try {
+      await expect(webAuth.profileDirectoryStatus()).resolves.toEqual({
+        status: 'signing-in', profiles: [{ ...profile, inUse: false }],
+      })
+      await expect(webAuth.quotaSnapshot()).resolves.toMatchObject({ poolAccountCount: 1 })
+    } finally {
+      await webAuth.cancelSignIn()
+    }
+    await expect(webAuth.profileDirectoryStatus()).resolves.toEqual({
+      status: 'ready', profiles: [{ ...profile, inUse: false }],
+    })
+  })
 
   it('invalidates a cancelled attempt before a late callback can add a profile', async () => {
     let finishProvider: (() => void) | undefined
