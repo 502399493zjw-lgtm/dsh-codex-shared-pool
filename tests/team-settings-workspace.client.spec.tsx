@@ -1840,7 +1840,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(restoredAccount).getByText(zh.accountRemainingCapacity).nextElementSibling?.textContent).toBe('74%')
   })
 
-  it('matches the approved weekly-sharing and recent-day account detail', async () => {
+  it.each(['Mia', undefined])('matches account details and recent consumer %s', async (consumerDisplayName) => {
     overviewState = {
       ...overviewState,
       contributions: overviewState.contributions.map((account: any) => account.id === mine.id
@@ -1883,12 +1883,13 @@ describe('Team subscription-pool workspace', () => {
         },
         recentRequests: [{
           id: 'recent-1',
+          ...(consumerDisplayName === undefined ? {} : { consumerDisplayName }),
           model: 'gpt-5-codex',
           status: 'succeeded',
           startedAt: NOW - 60_000,
           totalTokens: '2500',
           estimatedCostUsdMicros: '31500',
-        }],
+        }, { id: 'recent-2', model: 'gpt-6-astra', status: 'in_progress', startedAt: NOW }],
       }],
     })
 
@@ -1928,7 +1929,11 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
     const recent = screen.getByRole('dialog', { name: `近期请求 · ${mine.label}` })
     expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
-    expect(within(recent).getByText('2500 tokens')).toBeDefined()
+    expect(within(recent).getByText('2,500 tokens')).toBeDefined()
+    expect(within(recent).getAllByText(`消耗人：${consumerDisplayName ?? '成员信息不可用'}`).length).toBeGreaterThan(0)
+    expect(within(recent).getByText('Token 用量未上报')).toBeDefined()
+    expect(within(recent).getByText('进行中')).toBeDefined()
+    expect(within(recent).getByText('成功')).toBeDefined()
     expect(recent.textContent).not.toContain('0.03')
   })
 

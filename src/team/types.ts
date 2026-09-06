@@ -433,6 +433,8 @@ export interface TeamUsageWindow {
 
 /** Browser-safe recent request for an account owned by the current member. */
 export interface TeamOwnedAccountRecentRequest {
+  /** Current display name only; absent for older brokers or unavailable members. */
+  readonly consumerDisplayName?: string
   readonly id: string
   readonly model: string
   readonly status: TeamUsageEventStatus

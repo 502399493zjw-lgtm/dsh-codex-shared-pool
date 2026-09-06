@@ -506,6 +506,7 @@ function parseOwnedAccountUsage(value: unknown) {
       const estimatedCostUsdMicros = request.estimatedCostUsdMicros === undefined ? undefined : stringField(request, 'estimatedCostUsdMicros')
       return {
         id: stringField(request, 'id'),
+        ...(request.consumerDisplayName === undefined ? {} : { consumerDisplayName: stringField(request, 'consumerDisplayName') }),
         model: stringField(request, 'model'),
         status: unionField(request, 'status', ['in_progress', 'succeeded', 'failed', 'cancelled'] as const),
         startedAt: numberField(request, 'startedAt'),
