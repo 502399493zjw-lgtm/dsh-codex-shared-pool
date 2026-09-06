@@ -113,7 +113,8 @@ const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column'
 const quotaGroupStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10 }
 const quotaTitleStyle: CSSProperties = { margin: 0, fontSize: 15, lineHeight: '22px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
-const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
+const quotaRowStyle: CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 90px) minmax(24px, 1fr) max-content', alignItems: 'center', columnGap: 12, rowGap: 4, fontSize: 13, lineHeight: '20px', color: 'var(--dsw-alias-label-secondary)' }
+const progressTrackStyle: CSSProperties = { height: 5, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
 const toggleTrackStyle: CSSProperties = { position: 'relative', width: 40, height: 22, flex: '0 0 auto', marginTop: 1, padding: 0, border: 0, borderRadius: 999, cursor: 'pointer', transition: 'background 120ms ease' }
 
 function PreferenceToggle({
@@ -161,7 +162,7 @@ function progressFillStyle(percent: number): CSSProperties {
     width: `${Math.max(0, Math.min(100, percent))}%`,
     height: '100%',
     borderRadius: 'inherit',
-    background: 'var(--dsw-alias-state-business-primary, #3964fe)',
+    background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary, #3964fe) 70%, var(--dsw-alias-label-secondary))',
   }
 }
 
@@ -214,11 +215,8 @@ function QuotaBar({
 }) {
   const display = formatPercent(percent)
   return (
-    <div style={quotaGroupStyle}>
-      <div style={quotaLabelStyle}>
-        <span>{label}</span>
-        <span>{t('percentRemaining', { percent: display })}</span>
-      </div>
+    <div style={quotaRowStyle}>
+      <span style={{ overflowWrap: 'anywhere' }}>{label}</span>
       <div
         style={progressTrackStyle}
         role="progressbar"
@@ -230,7 +228,10 @@ function QuotaBar({
       >
         <div style={progressFillStyle(percent)} />
       </div>
-      {detail === undefined ? null : <p style={bodyStyle}>{detail}</p>}
+      <span style={{ minWidth: '4.5em', textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: percent <= 0 ? 'var(--dsw-alias-label-primary)' : undefined }}>
+        {percent <= 0 ? t('quotaExhausted') : `${display}%`}
+      </span>
+      {detail === undefined ? null : <p style={{ ...bodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>{detail}</p>}
     </div>
   )
 }
@@ -245,43 +246,49 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
   return (
     <div style={quotaListStyle}>
       <div style={quotaGroupStyle}>
-        <h3 style={quotaTitleStyle}>{t('usageLimits')}</h3>
+        <h3 style={quotaTitleStyle}>{t('subscriptionDetails')}</h3>
         <SubscriptionEstimate subscription={subscriptionFromUsage(usage)} labels={subscriptionEstimateLabels(t)} style={{ marginBlock: 0 }} />
       </div>
-      {usage.rateLimits.map(limit => (
-        <div key={limit.id} style={quotaGroupStyle}>
-          <h4 style={quotaTitleStyle}>{limit.name ?? limit.id}</h4>
-          {limit.windows.map(window => (
-            <QuotaBar
-              key={window.windowSeconds}
-              label={windowLabel(window.windowSeconds, t)}
-              percent={window.remainingPercent}
-              t={t}
-            />
-          ))}
+      <section aria-label={t('modelQuotas')} style={quotaListStyle}>
+        <div style={{ ...quotaLabelStyle, alignItems: 'baseline' }}>
+          <h3 style={quotaTitleStyle}>{t('modelQuotas')}</h3>
+          <span style={{ fontSize: 12 }}>{t('quotaRemaining')}</span>
         </div>
-      ))}
-      {usage.individualLimit === undefined ? null : (
-        <QuotaBar
-          label={t('monthlyLimit')}
-          percent={usage.individualLimit.remainingPercent}
-          detail={t('exactRemaining', {
-            remaining: usage.individualLimit.remaining,
-            limit: usage.individualLimit.limit,
-          })}
-          t={t}
-        />
-      )}
-      {usage.credits === undefined ? null : (
-        <div style={quotaLabelStyle}>
-          <span>{t('credits')}</span>
-          <span>{usage.credits.unlimited
-            ? t('unlimited')
-            : usage.credits.balance === undefined ? t('available') : usage.credits.balance}</span>
-        </div>
-      )}
-      {!loading && !hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
-      {quotaError === undefined ? null : <p style={errorStyle}>{t('quotaUnavailable')}</p>}
+        {usage.rateLimits.map(limit => (
+          <div key={limit.id} style={quotaGroupStyle}>
+            <h4 style={{ ...quotaTitleStyle, fontSize: 14, fontWeight: 500, overflowWrap: 'anywhere' }}>{limit.name ?? limit.id}</h4>
+            {limit.windows.map(window => (
+              <QuotaBar
+                key={window.windowSeconds}
+                label={windowLabel(window.windowSeconds, t)}
+                percent={window.remainingPercent}
+                t={t}
+              />
+            ))}
+          </div>
+        ))}
+        {usage.individualLimit === undefined ? null : (
+          <QuotaBar
+            label={t('monthlyLimit')}
+            percent={usage.individualLimit.remainingPercent}
+            detail={t('exactRemaining', {
+              remaining: usage.individualLimit.remaining,
+              limit: usage.individualLimit.limit,
+            })}
+            t={t}
+          />
+        )}
+        {usage.credits === undefined ? null : (
+          <div style={quotaLabelStyle}>
+            <span>{t('credits')}</span>
+            <span>{usage.credits.unlimited
+              ? t('unlimited')
+              : usage.credits.balance === undefined ? t('available') : usage.credits.balance}</span>
+          </div>
+        )}
+        {!loading && !hasData && quotaError === undefined ? <p style={bodyStyle}>{t('quotaUnavailable')}</p> : null}
+        {quotaError === undefined ? null : <p style={errorStyle}>{t('quotaUnavailable')}</p>}
+      </section>
     </div>
   )
 }

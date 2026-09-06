@@ -2486,6 +2486,64 @@
   color: var(--team-muted);
 }
 
+/* Supporting account metadata stays below the weekly sharing amount. */
+.accountAuxiliary {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--team-line);
+  padding-top: 10px;
+  color: var(--team-muted);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.accountAuxiliary .compactSummaryList > div {
+  padding: 0;
+}
+
+.accountAuxiliary .compactSummaryList dt,
+.accountAuxiliary .compactSummaryList dd {
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  font-weight: 400;
+}
+
+.quietRefreshButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  padding: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.quietRefreshButton svg,
+.quietRefreshButton .actionSpinner {
+  width: 14px;
+  height: 14px;
+}
+
+.quietRefreshButton:hover:not(:disabled) {
+  background: var(--team-layer);
+}
+
+.quietRefreshButton:focus-visible {
+  outline: 2px solid var(--team-muted);
+  outline-offset: 2px;
+}
+
+.quietRefreshButton:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
 .inlineLimitButton {
   display: inline-flex;
   align-items: center;
@@ -2526,7 +2584,7 @@
   opacity: .55;
 }
 
-.weeklyLimitValue {
+.compactSummaryList dd .weeklyLimitValue {
   color: var(--team-ink);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2589,6 +2647,7 @@
 }
 
 .compactRecentLine strong {
+  white-space: nowrap;
   color: var(--team-ink);
   font-weight: 650;
 }

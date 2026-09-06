@@ -379,7 +379,7 @@ function formatTime(value: number): string {
 function formatUsdMicros(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return '—'
   const micros = typeof value === 'number' ? value : Number(value)
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return 'US$' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .format(micros / 1_000_000)
 }
 
@@ -2280,20 +2280,25 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 disabled={busy !== undefined} onClick={onEdit}>{t('edit')}</button>}
             </dd>
           </div>
-          <div>
-            <dt>{t('accountRemainingCapacity')}</dt>
-            <dd className={styles.weeklyAmount}>
-              {bucket?.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}
-              <button type="button" className={styles.inlineLimitButton}
-                aria-label={t('refreshQuota')} title={t(capacityRefreshing ? 'refreshingQuota' : 'refreshQuota')}
-                aria-busy={capacityRefreshing} disabled={capacityRefreshing || loading}
-                onClick={() => { void refreshCapacityRef.current?.() }}>
-                {capacityRefreshing ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
-              </button>
-            </dd>
-          </div>
         </dl>
-        <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)} />
+        <div className={styles.accountAuxiliary}>
+          <dl className={styles.compactSummaryList}>
+            <div>
+              <dt>{t('accountRemainingCapacity')}</dt>
+              <dd className={styles.weeklyAmount}>
+                {bucket?.remainingPercent === undefined ? t('capacityQuotaUnavailable') : `${bucket.remainingPercent}%`}
+                <button type="button" className={styles.quietRefreshButton}
+                  aria-label={t('refreshQuota')} title={t(capacityRefreshing ? 'refreshingQuota' : 'refreshQuota')}
+                  aria-busy={capacityRefreshing} disabled={capacityRefreshing || loading}
+                  onClick={() => { void refreshCapacityRef.current?.() }}>
+                  {capacityRefreshing ? <span className={styles.actionSpinner} aria-hidden="true" /> : <IconRefreshOutline16 aria-hidden="true" />}
+                </button>
+              </dd>
+            </div>
+          </dl>
+          <SubscriptionEstimate subscription={subscription} labels={subscriptionEstimateLabels(t)}
+            style={{ fontSize: 'inherit', marginBlock: 0, gap: 6 }} />
+        </div>
       </section>
     }
 
@@ -2409,8 +2414,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
               : <p className={styles.compactRecentLine}>
                   <strong>{t('requestCount', { count: last24HoursAggregate.requestCount })}</strong>
-                  <span aria-hidden="true"> · </span>
-                  <span>{t('tokenApiEquivalent')}</span>{' '}
+                  <span>{t('recentUsageEstimateSeparator')}</span>
                   <strong>{formatUsdMicros(last24HoursAggregate.estimatedCostUsdMicros)}</strong>
                 </p>}
           </section>

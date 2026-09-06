@@ -1665,7 +1665,7 @@ describe('Team subscription-pool workspace', () => {
       if (label === friend.label) fireEvent.click(within(panel).getByRole('button', { name: `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}` }))
       const account = within(panel).getByRole('heading', { name: label }).closest('article')!
       const summary = within(account).getByRole('region', { name: zh.weeklySharingTitle })
-      expect(summary.querySelector(':scope > dl')?.children).toHaveLength(2)
+      expect(summary.querySelectorAll('dl > div')).toHaveLength(2)
       expect(within(summary).getByText(zh.weeklySharedAmount)).toBeDefined()
       expect(within(summary).getByText(zh.accountRemainingCapacity)).toBeDefined()
       expect(within(account).queryByRole('progressbar')).toBeNull()
@@ -1947,7 +1947,7 @@ describe('Team subscription-pool workspace', () => {
     const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
     const actions = within(account).getByRole('group', { name: zh.accountActions })
 
-    expect(weekly.querySelectorAll(':scope > dl > div')).toHaveLength(2)
+    expect(weekly.querySelectorAll('dl > div')).toHaveLength(2)
     expect(within(weekly).getByText(zh.weeklySharedAmount)).toBeDefined()
     const weeklyAmount = within(weekly).getByText((_, element) => element?.tagName === 'DD'
       && /\$0\.16\s*\/\s*\$1\.00\s*编辑/u.test(element.textContent ?? ''))
@@ -1964,7 +1964,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(recentUsage).getByRole('heading', { name: zh.recentUsageTitle })).toBeDefined()
     expect(within(recentUsage).getByRole('button', { name: zh.viewSevenDays })).toBeDefined()
     expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
-      && /2 次请求.*API 价格估算（非实际扣费）.*0\.06/u.test(element.textContent ?? ''))).toBeDefined()
+      && /^2 次请求，约 US\$0\.06$/u.test(element.textContent ?? ''))).toBeDefined()
     expect(within(account).queryByRole('button', { name: zh.recentRequests })).toBeNull()
     expect(within(actions).getByRole('button', { name: '终止共享' })).toBeDefined()
 
