@@ -2861,7 +2861,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             </section>
           ) : null}
 
-          {overview.viewerRole === 'owner' && workspaceView === 'invitations' ? <section className={styles.workspaceSection} aria-labelledby="team-invites-title">
+          {overview.viewerRole === 'owner' && workspaceView === 'invitations' ? <section className={`${styles.workspaceSection} ${styles.invitationSection}`} aria-labelledby="team-invites-title">
               <div className={styles.workspaceSectionHeader}>
                 <div>
                   <h3 id="team-invites-title" className={styles.workspaceSectionTitle}>{t('invitationsTitle')}</h3>
@@ -2885,11 +2885,13 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   {pendingInvites.map(invite => (
                     <div className={styles.inviteRow} key={invite.id}>
                       <div className={styles.inviteIdentity}>
-                        <span className={styles.name}>{invite.label}</span>
-                        <span className={styles.meta}>{t('pendingInviteCreatedBy', {
-                          name: members.get(invite.invitedByMemberId)?.displayName ?? invite.invitedByMemberId,
-                          time: formatTime(invite.createdAt),
-                        })}</span>
+                        <details className={styles.inviteDetails}>
+                          <summary className={styles.name}>{invite.label}</summary>
+                          <span className={styles.meta}>{t('pendingInviteCreatedBy', {
+                            name: members.get(invite.invitedByMemberId)?.displayName ?? invite.invitedByMemberId,
+                            time: formatTime(invite.createdAt),
+                          })}</span>
+                        </details>
                         <span className={styles.meta}>{t('pendingInviteExpires', { time: formatTime(invite.expiresAt) })}</span>
                         {team.status === 'paused' ? <span className={styles.invitePausedState}>{t('invitePausedState')}</span> : null}
                       </div>
@@ -2898,6 +2900,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                           <Button
                             size="sm"
                             variant="ghost"
+                            aria-label={t('revealInvite')}
                             data-team-settings-focus={`invite-reveal:${invite.id}`}
                             disabled={busy !== undefined || inviteRevealRequest !== undefined}
                             onClick={() => {
@@ -2909,12 +2912,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                                 authorizationContext: ownerAuthorizationContext,
                               })
                             }}
-                          >{t('revealInvite')}</Button>
+                          >{t('viewInviteShort')}</Button>
                         ) : <span className={styles.inviteNotRevealable}>{t('inviteNotRevealable')}</span>}
                         <Button
                           size="sm"
                           variant="ghost"
                           icon={<IconTrashOutline16 />}
+                          aria-label={t('revokeInvite')}
+                          title={t('revokeInvite')}
                           data-team-settings-focus={`invite-revoke:${invite.id}`}
                           disabled={busy !== undefined}
                           onClick={() => {
@@ -2923,9 +2928,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                             setRevokeInviteAuthorizationContext(ownerAuthorizationContext)
                             setRevokeInvite(invite)
                           }}
-                        >
-                          {t('revokeInvite')}
-                        </Button>
+                        />
                       </div>
                     </div>
                   ))}
