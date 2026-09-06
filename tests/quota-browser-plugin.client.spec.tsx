@@ -12,6 +12,7 @@ import {
   type CodexQuotaFooterFace,
   type CodexQuotaFooterProps,
 } from '../src/client/quota/CodexQuotaFooter.tsx'
+import { en as settingsEn, zh as settingsZh } from '../src/client/locales.ts'
 import { zh, type CodexQuotaLocaleKey } from '../src/client/quota/locales.ts'
 
 const SNAPSHOT = {
@@ -37,7 +38,7 @@ interface RegisteredEntry {
   inject: () => CodexQuotaFooterFace
 }
 
-function installStockSettingsShell(): {
+function installStockSettingsShell(label = settingsEn.nav): {
   triggerClick: ReturnType<typeof vi.fn>
   sectionClick: ReturnType<typeof vi.fn>
 } {
@@ -57,7 +58,7 @@ function installStockSettingsShell(): {
     general.textContent = 'General'
     const codex = document.createElement('button')
     codex.type = 'button'
-    codex.textContent = 'Codex subscription pool'
+    codex.textContent = label
     codex.addEventListener('click', sectionClick)
     nav.append(general, codex)
     dialog.append(nav)
@@ -68,7 +69,7 @@ function installStockSettingsShell(): {
   return { triggerClick, sectionClick }
 }
 
-function bench(withSettingsNavigation = true): {
+function bench(withSettingsNavigation = true, navLabel = () => settingsEn.nav): {
   ctx: object
   entry: () => RegisteredEntry | undefined
   localeRegister: ReturnType<typeof vi.fn>
@@ -95,7 +96,7 @@ function bench(withSettingsNavigation = true): {
     },
   }
   const ctx = {
-    locale: { register: localeRegister },
+    locale: { register: localeRegister, bind: () => (key: string) => key === 'nav' ? navLabel() : key },
     slots,
     get(name: string) {
       return name === 'settingsNavigation'
@@ -182,6 +183,20 @@ describe('unified Codex quota browser contribution', () => {
     expect(await screen.findByText(expectedText)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '打开' }))
 
+    expect(shell.triggerClick).toHaveBeenCalledOnce()
+    expect(shell.sectionClick).toHaveBeenCalledOnce()
+    await b.dispose()
+  })
+
+  it.each([settingsEn.nav, settingsZh.nav])('opens the rendered settings page labeled %s', async (label) => {
+    let activeLabel = settingsEn.nav
+    const b = bench(false, () => activeLabel)
+    apply(b.ctx as never)
+    const injected = b.entry()?.inject()
+    // Change the language after registration: the click must use the live label.
+    activeLabel = label
+    const shell = installStockSettingsShell(label)
+    injected?.openSettings()
     expect(shell.triggerClick).toHaveBeenCalledOnce()
     expect(shell.sectionClick).toHaveBeenCalledOnce()
     await b.dispose()

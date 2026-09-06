@@ -41,10 +41,10 @@ export const inject = [...CLIENT_INJECT]
 
 /** Register account copy and the OpenAI Codex settings page. */
 export function apply(ctx: ClientContext): void {
-  applyCodexQuota(ctx)
   const namespace = 'settings.openai-codex'
   ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-openai-codex: settings copy')
   const t = ctx.locale.bind(namespace) as OpenAICodexSettingsInjected['t']
+  applyCodexQuota(ctx)
   const teamNamespace = 'settings.codex-team'
   ctx.effect(() => ctx.locale.register(teamNamespace, { zh: teamZh, en: teamEn }), 'dsh-codex-team: settings copy')
   const teamT = ctx.locale.bind(teamNamespace) as TeamSettingsInjected['t']

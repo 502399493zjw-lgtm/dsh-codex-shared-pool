@@ -13,7 +13,6 @@ import { en, zh, type CodexQuotaLocaleKey } from './locales.ts'
 import { QUOTA_CLIENT_INJECT } from '../runtime-contract.ts'
 import {
   CODEX_SETTINGS_SECTION_ID,
-  CODEX_SETTINGS_SECTION_LABEL,
   openSettingsSection,
 } from '../settings-section-navigation.ts'
 
@@ -52,6 +51,7 @@ export function apply(ctx: ClientContext): void {
     return value as Awaited<ReturnType<CodexQuotaReadFace['read']>>
   }
   const settingsNavigation = ctx.get('settingsNavigation')
+  const settingsT = ctx.locale.bind('settings.openai-codex')
 
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
@@ -63,7 +63,7 @@ export function apply(ctx: ClientContext): void {
       openSettings: () => {
         openSettingsSection(
           CODEX_SETTINGS_SECTION_ID,
-          CODEX_SETTINGS_SECTION_LABEL,
+          settingsT('nav'),
           settingsNavigation,
         )
       },
