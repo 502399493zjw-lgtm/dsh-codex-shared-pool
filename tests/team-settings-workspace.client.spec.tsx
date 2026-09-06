@@ -2108,6 +2108,37 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByRole('button', { name: /本机账号 A/u }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('uses the shared-account metadata styling for unshared account capacity', async () => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const sharedMetadata = within(details).getByText(zh.accountRemainingCapacity).closest(`.${styles.accountAuxiliary}`)!
+    const sharedSubscription = within(sharedMetadata as HTMLElement).getByText(zh.subscriptionTier).parentElement!.parentElement!
+
+    fireEvent.click(within(settings).getByRole('button', { name: /本机账号 A/u }))
+    const capacity = within(details).getByRole('region', { name: zh.capacityTitle })
+    expect(capacity.classList.contains(styles.accountAuxiliary)).toBe(true)
+    expect(within(capacity).queryByRole('heading')).toBeNull()
+    const localSubscription = within(capacity).getByText(zh.subscriptionTier).parentElement!.parentElement!
+    expect(localSubscription.style.cssText).toBe(sharedSubscription.style.cssText)
+    expect(within(capacity).getByRole('button', { name: zh.refreshQuota }).classList.contains(styles.quietRefreshButton)).toBe(true)
+  })
+
+  it.each([
+    ['own shared account', `${mine.label} · ${zh.contributedByMe}`, '74%'],
+    ['teammate shared account', `${friend.label} · ${translate('contributedBy', { name: 'Mia' })}`, zh.capacityQuotaUnavailable],
+    ['unshared account', /本机账号 A/u, '68%'],
+  ])('places the refresh button before the remaining capacity for %s', async (_kind, name, value) => {
+    render(<TeamSettings t={translate} embedded />)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(settings).getByRole('button', { name }))
+    const details = within(settings).getByRole('region', { name: zh.accountDetails })
+    const amount = within(details).getByText(zh.accountRemainingCapacity).nextElementSibling!
+    const refresh = within(amount as HTMLElement).getByRole('button', { name: zh.refreshQuota })
+    expect(amount.firstChild).toBe(refresh)
+    expect(refresh.nextSibling?.textContent).toBe(value)
+  })
+
   it('refreshes unshared local quota inline, prevents duplicate requests, and permits retry', async () => {
     render(<TeamSettings t={translate} embedded />)
     const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
