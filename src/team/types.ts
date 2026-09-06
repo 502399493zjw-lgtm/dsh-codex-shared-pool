@@ -172,7 +172,7 @@ export interface TeamInviteSummary {
   readonly acceptedAt?: number
 }
 
-/** Secret-free invitation details returned before a one-time acceptance. */
+/** Secret-free invitation details returned before joining with a reusable invitation. */
 export interface TeamInvitePreview {
   readonly teamName: string
   readonly label: string

@@ -344,7 +344,7 @@ describe('Team control-plane routes', () => {
       body: {
         viewerRole: 'owner',
         team: { name: 'Friends', status: 'active' },
-        invites: [],
+        invites: [expect.objectContaining({ label: 'Product designer', status: 'pending', revealable: true })],
         contributions: [{ label: 'Owner Codex' }, { label: 'Owner setup in progress', status: 'authorizing' }],
         activeSharedAccounts: [
           { id: ownerAccount.id, label: 'Owner Codex', status: 'active' },

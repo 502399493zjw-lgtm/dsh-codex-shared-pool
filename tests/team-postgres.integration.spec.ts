@@ -1010,6 +1010,39 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
+  it('allows concurrent members to reuse one invite across store instances', async () => {
+    const connectionString = requiredDatabaseUrl()
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString, max: 2 })
+    const pool = new Pool({ connectionString, max: 5, options: `-c search_path=${schema},public` })
+    const store = testStore({ pool })
+    const other = testStore({ pool })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      await store.initialize()
+      await other.initialize()
+      const boot = await store.bootstrap('Reusable Invite Team', 'Owner')
+      const owner = await store.authenticateApiKey(boot.apiKey)
+      if (owner === undefined) throw new Error('owner should authenticate')
+      const invite = await store.createInvite(owner, 60_000)
+      const joined = await Promise.all([
+        store.acceptInvite(invite.inviteToken, 'First'),
+        other.acceptInvite(invite.inviteToken, 'Second'),
+      ])
+      expect(new Set(joined.map(result => result.member.id)).size).toBe(2)
+      expect(new Set(joined.map(result => result.apiKey)).size).toBe(2)
+      expect((await other.overview(owner)).members).toHaveLength(3)
+      await expect(other.revealInvite(owner, invite.invite.id)).resolves.toMatchObject({ inviteToken: invite.inviteToken })
+      await other.revokeInvite(owner, invite.invite.id)
+      await expect(store.acceptInvite(invite.inviteToken, 'After revocation')).rejects.toThrow(/invalid or expired/iu)
+    } finally {
+      await other.dispose().catch(() => undefined)
+      await store.dispose().catch(() => undefined)
+      await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`).catch(() => undefined)
+      await admin.end().catch(() => undefined)
+    }
+  }, 20_000)
+
   it('lets only one concurrent invite claim an active NFKC_Casefold display name and does not consume the loser', async () => {
     const connectionString = requiredDatabaseUrl()
     const suffix = randomUUID().replaceAll('-', '')

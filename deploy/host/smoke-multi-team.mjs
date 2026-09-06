@@ -68,7 +68,7 @@ function validateInvite(value, owner) {
     throw new Error('invalid Team invite response: pending Owner invite missing')
   }
   if (typeof result.inviteToken !== 'string' || !/^dsh_invite_[A-Za-z0-9_-]{16,}$/u.test(result.inviteToken)) {
-    throw new Error('invalid Team invite response: one-time invite token missing')
+    throw new Error('invalid Team invite response: reusable invite token missing')
   }
   return { inviteId, inviteToken: result.inviteToken }
 }
@@ -260,16 +260,6 @@ async function joinTeam(fetch, owner, invite) {
   }
 }
 
-async function proveInviteIsOneTime(fetch, owner, invite) {
-  const response = await fetch(`${TEAM_BASE_URL}/join`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ inviteToken: invite.inviteToken, displayName: `${owner.friendName} Again` }),
-    redirect: 'error',
-  })
-  if (response.status !== 404) throw new Error('Team invite reuse was not rejected')
-}
-
 async function readOverview(fetch, bootstrap) {
   const response = await fetch(`${TEAM_BASE_URL}/overview`, {
     method: 'GET',
@@ -306,10 +296,10 @@ export async function runMultiTeamDeploymentSmoke(options = {}) {
   for (const owner of bootstraps) {
     const invite = await inviteFriend(fetch, owner)
     const friend = await joinTeam(fetch, owner, invite)
-    await proveInviteIsOneTime(fetch, owner, invite)
-    memberships.push({ owner, friend, invite })
+    const secondFriend = await joinTeam(fetch, { ...owner, friendName: `${owner.friendName} Again` }, invite)
+    memberships.push({ owner, friend, secondFriend, invite })
   }
-  const memberKeys = memberships.flatMap(item => [item.owner.apiKey, item.friend.apiKey])
+  const memberKeys = memberships.flatMap(item => [item.owner.apiKey, item.friend.apiKey, item.secondFriend.apiKey])
   if (new Set(memberKeys).size !== memberKeys.length) {
     throw new Error('Team isolation failed: member API keys are not distinct')
   }
@@ -320,8 +310,8 @@ export async function runMultiTeamDeploymentSmoke(options = {}) {
     ...memberships.map(item => item.invite.inviteToken),
   ]
   const teams = memberships.map(item => item.owner)
-  for (const { owner, friend } of memberships) {
-    const expectedMemberIds = [owner.memberId, friend.memberId]
+  for (const { owner, friend, secondFriend } of memberships) {
+    const expectedMemberIds = [owner.memberId, friend.memberId, secondFriend.memberId]
     validateOverview(
       await readOverview(fetch, owner),
       { ...owner, expectedMemberIds },
