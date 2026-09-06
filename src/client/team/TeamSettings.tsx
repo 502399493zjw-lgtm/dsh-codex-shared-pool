@@ -2155,13 +2155,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         : t(profile.inUse ? 'localInUse' : 'localAvailable')
       return <article className={`${styles.accountCard} ${styles.prototypeDetail}`} key={`local:${profile.id}`}>
         <header className={styles.detailHeading}>
-          <h2 className={styles.detailTitle}>{profile.label}</h2>
-          <span className={styles.connectionStatus}>
+          <h2 className={styles.detailTitle} title={profile.label}>{profile.label}</h2>
+          <span className={styles.connectionStatus} role="img" aria-label={localConnectionStatus} title={localConnectionStatus}>
             <StateDot state={quotaHasError ? 'error' : 'done'} />
-            {localConnectionStatus}
           </span>
-        </header>
-        <section className={styles.teamActionPanel} aria-label={t('shareToTeam')}>
           <Button
             className={styles.primaryAccountAction}
             size="sm"
@@ -2180,6 +2177,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           >{authorizationBusy
               ? <><span className={styles.actionSpinner} aria-hidden="true" />{t('working')}</>
               : t('shareToTeam')}</Button>
+        </header>
+        <section className={styles.teamActionPanel} aria-label={t('shareToTeam')}>
           <p>
             {t('localAuthorizationCopy')} <strong>{t('localCredentialBoundary')}</strong>
           </p>
@@ -2281,10 +2280,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       return (
         <article className={`${styles.accountCard} ${styles.prototypeDetail}`} data-mine="false" aria-label={account.label} key={account.id}>
           <header className={styles.detailHeading}>
-            <h2 className={styles.detailTitle}>{account.label}</h2>
-            <span className={styles.connectionStatus}>
+            <h2 className={styles.detailTitle} title={account.label}>{account.label}</h2>
+            <span className={styles.connectionStatus} role="img" aria-label={`${contributionLabel} · ${t('teamShared')}`} title={`${contributionLabel} · ${t('teamShared')}`}>
               <StateDot state="done" />
-              <span className={styles.statusText}>{contributionLabel} · {t('teamShared')}</span>
             </span>
           </header>
           {renderAccountSummary(account.capacity, sharing)}
@@ -2334,8 +2332,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       return (
         <article className={`${styles.accountCard} ${styles.prototypeDetail}`} data-mine="true" aria-label={account.label} key={account.id}>
           <header className={styles.detailHeading}>
-            <h2 className={styles.detailTitle}>{account.label}</h2>
-            <span className={styles.connectionStatus}>
+            <h2 className={styles.detailTitle} title={account.label}>{account.label}</h2>
+            <span className={styles.connectionStatus} role="img" aria-label={contributionStatus} title={contributionStatus}>
               <StateDot state={account.status === 'active'
                 ? availabilityDotState(activeCapacityReason ?? 'runtime_unavailable')
                 : account.status === 'authorizing'
@@ -2343,33 +2341,32 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                   : account.status === 'paused'
                     ? 'warning'
                     : 'error'} />
-              <span className={styles.statusText}>{contributionStatus}</span>
             </span>
+            <div className={styles.headingActions} role="group" aria-label={t('accountActions')}>
+              {account.status === 'reauth_required' ? (
+                <Button className={styles.accountActionButton} size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void reauthorizeOAuth(account.id) }}>{t('reauthorize')}</Button>
+              ) : account.status === 'authorizing' ? null : account.status === 'active' ? (
+                <Button className={`${styles.accountActionButton} ${styles.stopSharingButton}`} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`revoke-${account.id}`, async () => {
+                  const expectedContext = teamExpectedContextRef.current
+                  if (expectedContext === undefined) return
+                  await api.revokeContribution(account.id, expectedContext)
+                  await refresh(false)
+                }) }}>{accountActionBusy ? (
+                  <><span className={styles.actionSpinner} aria-hidden="true" />{t('stoppingContribution')}</>
+                ) : t('revokeContribution')}</Button>
+              ) : (
+                <Button className={styles.accountActionButton} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`toggle-${account.id}`, async () => {
+                  const expectedContext = teamExpectedContextRef.current
+                  if (expectedContext === undefined) return
+                  await api.updateContribution(account.id, { status: 'active' }, expectedContext)
+                  await refresh(false)
+                }) }}>{accountActionBusy ? (
+                  <><span className={styles.actionSpinner} aria-hidden="true" />{t('resumingContribution')}</>
+                ) : t('resumeContribution')}</Button>
+              )}
+            </div>
           </header>
-          <section className={`${styles.teamActionPanel} ${styles.accountActionBar}`} role="group" aria-label={t('accountActions')}>
-            {account.status === 'reauth_required' ? (
-              <Button className={styles.accountActionButton} size="sm" variant="primary" disabled={busy !== undefined} onClick={() => { void reauthorizeOAuth(account.id) }}>{t('reauthorize')}</Button>
-            ) : account.status === 'authorizing' ? null : account.status === 'active' ? (
-              <Button className={`${styles.accountActionButton} ${styles.stopSharingButton}`} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`revoke-${account.id}`, async () => {
-                const expectedContext = teamExpectedContextRef.current
-                if (expectedContext === undefined) return
-                await api.revokeContribution(account.id, expectedContext)
-                await refresh(false)
-              }) }}>{accountActionBusy ? (
-                <><span className={styles.actionSpinner} aria-hidden="true" />{t('stoppingContribution')}</>
-              ) : t('revokeContribution')}</Button>
-            ) : (
-              <Button className={styles.accountActionButton} size="sm" variant="outline" disabled={busy !== undefined} aria-busy={accountActionBusy} onClick={() => { void run(`toggle-${account.id}`, async () => {
-                const expectedContext = teamExpectedContextRef.current
-                if (expectedContext === undefined) return
-                await api.updateContribution(account.id, { status: 'active' }, expectedContext)
-                await refresh(false)
-              }) }}>{accountActionBusy ? (
-                <><span className={styles.actionSpinner} aria-hidden="true" />{t('resumingContribution')}</>
-              ) : t('resumeContribution')}</Button>
-            )}
-            {contributionHint === undefined ? null : <p>{contributionHint}</p>}
-          </section>
+          {contributionHint === undefined ? null : <section className={styles.teamActionPanel}><p>{contributionHint}</p></section>}
           {renderAccountSummary(account.capacity, {
             personalReservePercent: account.personalReservePercent,
             maxSharedRequestsPerWindow: account.maxSharedRequestsPerWindow,

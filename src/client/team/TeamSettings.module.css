@@ -1037,11 +1037,16 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px 12px;
 }
 
 .detailTitle {
+  max-width: 12em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
   color: var(--team-ink);
   font-size: 20px;
@@ -1051,12 +1056,18 @@
 }
 
 .connectionStatus {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--team-muted);
   font-size: 12px;
   line-height: 18px;
+}
+
+.headingActions,
+.detailHeading > button {
+  flex-shrink: 0;
 }
 
 .teamActionPanel {

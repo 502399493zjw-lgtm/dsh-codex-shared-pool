@@ -1474,7 +1474,7 @@ describe('Team subscription-pool workspace', () => {
     expect(within(teamBar).getByText(translate('membersCount', { count: 2 }))).toBeDefined()
     expect(within(teamBar).queryByText(translate('connectedAs', { name: 'Edison' }))).toBeNull()
     expect(within(contribution).getByText(zh.contributedByMe)).toBeDefined()
-    expect(within(account).getByText('本机已登录 · 团队可用')).toBeDefined()
+    expect(within(account).getByRole('img', { name: '本机已登录 · 团队可用' })).toBeDefined()
     expect(within(account).getByRole('button', { name: '终止共享' })).toBeDefined()
     expect(within(account).queryByText(zh.contributionActiveHint)).toBeNull()
   })
@@ -1498,7 +1498,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
 
     expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
-    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.capacityProviderUnavailable}`)).toBeDefined()
+    expect(within(account).getByRole('img', { name: `${zh.localSignedIn} · ${zh.capacityProviderUnavailable}` })).toBeDefined()
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
     expect(within(account).queryByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(account).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
@@ -1526,7 +1526,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(panel).getByRole('heading', { name: mine.label }).closest('article')!
 
     expect(contribution.querySelector('[data-state]')?.getAttribute('data-state')).toBe('done')
-    expect(within(account).getByText(`${zh.localSignedIn} · ${zh.teamAvailable}`)).toBeDefined()
+    expect(within(account).getByRole('img', { name: `${zh.localSignedIn} · ${zh.teamAvailable}` })).toBeDefined()
   })
 
   it.each([[undefined, 74], [61, 61]])('uses the tightest valid local quota window and individual limit %s', async (individualRemaining, expected) => {
@@ -1664,7 +1664,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(details).getByRole('heading', { name: friend.label }).closest('article')!
     expect(account).toBeDefined()
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('done')
-    expect(within(details).getByText(`${contributionLabel} · ${zh.teamShared}`)).toBeDefined()
+    expect(within(details).getByRole('img', { name: `${contributionLabel} · ${zh.teamShared}` })).toBeDefined()
     expect(within(details).queryByText(`${contributionLabel} · ${zh.teamAvailable}`)).toBeNull()
     expect(within(details).getByText(zh.sharedAccountReadonlyHint)).toBeDefined()
     expect(within(details).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
@@ -1687,7 +1687,7 @@ describe('Team subscription-pool workspace', () => {
     for (const account of [paused, reauthRequired]) {
       const status = zh[account.status]
       fireEvent.click(within(directory).getByRole('button', { name: `${account.label} · ${status}` }))
-      expect(within(details).getByText(status)).toBeDefined()
+      expect(within(details).getByRole('img', { name: status })).toBeDefined()
     }
 
     expect(within(details).getByText(zh.contributionReauthHint)).toBeDefined()
@@ -2012,6 +2012,23 @@ describe('Team subscription-pool workspace', () => {
     expect(within(directory).getByText('本机账号 B')).toBeDefined()
   })
 
+  it('keeps sharing actions beside a truncated account title with an accessible status dot', async () => {
+    const label = '这是一个超过十二个中文字符的账号完整名称'
+    overviewState = { ...overviewState, contributions: [{ ...mine, label }] }
+    render(<TeamSettings t={translate} embedded />)
+    const heading = await screen.findByRole('heading', { name: label })
+    expect(heading.getAttribute('title')).toBe(label)
+    const header = heading.closest('header')!
+    expect(within(header).getByRole('button', { name: zh.revokeContribution })).toBeDefined()
+    expect(header.querySelector(`.${styles.connectionStatus}`)?.textContent).toBe('')
+    expect(header.querySelector(`.${styles.connectionStatus}`)?.getAttribute('aria-label')).toContain(zh.localSignedIn)
+    const settings = await screen.findByRole('region', { name: zh.teamPanelTitle })
+    fireEvent.click(within(within(settings).getByRole('complementary')).getByRole('button', { name: /本机账号 A/u }))
+    const localHeader = within(settings).getByRole('heading', { name: '本机账号 A' }).closest('header')!
+    expect(within(localHeader).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
+    expect(localHeader.querySelector(`.${styles.connectionStatus}`)?.textContent).toBe('')
+  })
+
   it('renders the prototype local-account detail and credential boundary after selection', async () => {
     render(<TeamSettings t={translate} embedded />)
 
@@ -2022,14 +2039,14 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(directory).getByRole('button', { name: /本机账号 A/u }))
 
     expect(within(details).getByRole('heading', { name: '本机账号 A' })).toBeDefined()
-    expect(within(details).getAllByText('本机正在使用')).toHaveLength(1)
+    expect(within(details).getByRole('img', { name: '本机正在使用' })).toBeDefined()
     expect(details.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(details.textContent).toContain('不会上传本机 auth.json。')
     const shareRegion = within(details).getByRole('region', { name: zh.shareToTeam })
     expect(shareRegion.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
     expect(shareRegion.textContent).toContain(zh.localCredentialBoundary)
     expect(shareRegion.textContent).not.toContain(zh.localCredentialBoundaryHint)
-    expect(within(shareRegion).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
+    expect(within(details.querySelector('header')!).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
     expect(details.querySelector(`.${styles.credentialBoundary}`)).toBeNull()
     expect(within(details).getByRole('region', { name: zh.capacityTitle })).toBeDefined()
     expect(within(details).getByRole('progressbar', { name: zh.capacityCodex }).getAttribute('aria-valuenow')).toBe('68')
@@ -2125,7 +2142,7 @@ describe('Team subscription-pool workspace', () => {
     const account = within(details).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     expect(localAccountNavigation.querySelector('[data-state]')?.getAttribute('data-state')).toBe('error')
     expect(account.querySelector('header [data-state]')?.getAttribute('data-state')).toBe('error')
-    expect(within(account.querySelector('header')!).getByText(zh.capacityQuotaError)).toBeDefined()
+    expect(within(account.querySelector('header')!).getByRole('img', { name: zh.capacityQuotaError })).toBeDefined()
     expect(within(account).queryByText(zh.localInUse)).toBeNull()
     expect(within(capacity).getByText(zh.capacityQuotaError)).toBeDefined()
     expect(within(capacity).getByText(zh.capacityQuotaErrorHint)).toBeDefined()
