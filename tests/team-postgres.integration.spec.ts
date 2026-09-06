@@ -1689,6 +1689,47 @@ describePostgres('real PostgreSQL Team concurrency', () => {
     }
   }, 20_000)
 
+  it.each([10_000n, 20_000n])('admits below the weekly settled-cost limit and rejects after settling %s micros', async (settledCost) => {
+    const connectionString = requiredDatabaseUrl()
+    const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`
+    const admin = new Pool({ connectionString })
+    const pool = new Pool({ connectionString, options: `-c search_path=${schema},public` })
+    try {
+      await admin.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`)
+      const store = testStore({ pool, now: () => Date.UTC(2026, 7, 24, 12) })
+      const boot = await store.bootstrap('Weekly Team', 'Owner')
+      const owner = await store.authenticateApiKey(boot.apiKey)
+      if (owner === undefined) throw new Error('owner key should authenticate')
+      const invite = await store.createInvite(owner, 60_000)
+      const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
+      const friend = await store.authenticateApiKey(joined.apiKey)
+      if (friend === undefined) throw new Error('friend key should authenticate')
+      const created = await store.createContributionAccount(owner, 'Owner Codex')
+      await store.updateContributionAccount(owner, created.id, {
+        weeklySharedEstimatedApiCostLimitMicros: 10_000,
+      })
+      const account = await store.setContributionAccountStatus(owner.teamId, created.id, 'active')
+
+      const usage = { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1 }
+      const cost = (value: bigint) => ({ estimatedCostUsdMicros: value, pricingCatalogVersion: 'test-v1' })
+      await store.beginUsageEvent(friend, 'first', account.id, 'gpt-5-codex')
+      await store.settleUsageEvent(owner.teamId, 'first', 'succeeded', usage, cost(1n))
+      // A positive settled cost below the limit must not require another full reservation.
+      await expect(store.beginUsageEvent(friend, 'below-limit', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+      // In-flight estimates are not settled spend; concurrency is enforced separately.
+      await expect(store.beginUsageEvent(friend, 'pending', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+      await store.settleUsageEvent(owner.teamId, 'pending', 'cancelled')
+      await store.settleUsageEvent(owner.teamId, 'below-limit', 'succeeded', usage, cost(settledCost - 1n))
+      await expect(store.beginUsageEvent(friend, 'exhausted', account.id, 'gpt-5-codex'))
+        .rejects.toThrow(/weekly shared estimated API cost limit/iu)
+      await expect(store.beginUsageEvent(owner, 'owner-own', account.id, 'gpt-5-codex')).resolves.toBeDefined()
+    } finally {
+      await pool.end()
+      await admin.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`)
+      await admin.end()
+    }
+  })
+
   it('settles shared reservations without measured usage after upgrading v24', async () => {
     const connectionString = requiredDatabaseUrl()
     const schema = `dsh_team_it_${randomUUID().replaceAll('-', '')}`

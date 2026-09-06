@@ -1494,9 +1494,10 @@ export class MemoryTeamStore implements TeamStore {
           && event.startedAt >= weekStart
           && event.startedAt < weekStart + 7 * 86_400_000)
         .reduce((total, event) => total + (event.status === 'in_progress'
-          ? event.reservedEstimatedCostUsdMicros
+          ? 0n
           : (event.estimatedCostUsdMicros ?? 0n)), 0n)
-      if (used + estimatedCostReservation > BigInt(weeklyLimit)) throw new TeamWeeklyEstimatedCostLimitError()
+      // This is a settled-spend threshold, not a hard cap on admitted requests.
+      if (used >= BigInt(weeklyLimit)) throw new TeamWeeklyEstimatedCostLimitError()
     }
     const event: UsageEventRecord = {
       id: nonEmpty(eventId, 'eventId', 128),

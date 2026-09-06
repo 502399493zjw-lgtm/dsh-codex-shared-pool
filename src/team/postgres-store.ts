@@ -2329,14 +2329,15 @@ export class PostgresTeamStore implements TeamStore {
         const weekStart = utcIsoWeekStart(now)
         const used = await client.query<{ cost_used: string | number }>(`
           SELECT COALESCE(SUM(
-            CASE WHEN status = 'in_progress' THEN reserved_estimated_cost_usd_micros ELSE COALESCE(estimated_cost_usd_micros, 0) END
+            CASE WHEN status = 'in_progress' THEN 0 ELSE COALESCE(estimated_cost_usd_micros, 0) END
           ), 0) AS cost_used
           FROM team_usage_events
           WHERE team_id = $1 AND upstream_account_id = $2
             AND consumer_member_id <> upstream_owner_member_id
             AND started_at >= $3 AND started_at < $4
         `, [member.team_id, account.id, weekStart, weekStart + 7 * 86_400_000])
-        if (numberValue(used.rows[0]?.cost_used ?? 0) + estimatedCostReservation > weeklyLimit) {
+        // Match the settled-spend threshold; admitted requests may finish over it.
+        if (BigInt(used.rows[0]?.cost_used ?? 0) >= BigInt(weeklyLimit)) {
           throw new TeamWeeklyEstimatedCostLimitError()
         }
       }
