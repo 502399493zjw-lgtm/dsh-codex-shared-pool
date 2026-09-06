@@ -1,15 +1,17 @@
 /** Browser half: OpenAI Codex account management inside dsh Settings. */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
-import type { SessionBinding } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { SessionBinding } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import type {} from './compat-slots.d.ts'
 import type { OpenAICodexSettingsInjected } from './OpenAICodexSettings.tsx'
 import { CodexSubscriptionPoolSettings } from './CodexSubscriptionPoolSettings.tsx'
 import type { CodexSubscriptionPoolSettingsInjected } from './CodexSubscriptionPoolSettings.tsx'
@@ -101,7 +103,7 @@ export function apply(ctx: ClientContext): void {
   }
   ctx.slots.inject('conversation.input.model', () => ctx.slots.register({
     name: 'conversation.input.model',
-    // Stock rc.8 declares one complete model affordance. A lower priority is
+    // Stock DSH declares one complete model affordance. A lower priority is
     // the supported shadowing mechanism for replacing that single occupant.
     priority: -10,
     locale: namespace,

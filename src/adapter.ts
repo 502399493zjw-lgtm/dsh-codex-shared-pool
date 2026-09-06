@@ -2,13 +2,13 @@
 
 import { TEAM_LIMIT_REASONS_HEADER, teamLimitMessage } from './team/gateway-errors.ts'
 import { supplementCodexModels } from './codex-model-catalog.ts'
-import { createAssistantMessageEventStream, createModels } from '@earendil-works/pi-ai'
+import { createAssistantMessageEventStream, createModels, InMemoryCredentialStore } from '@earendil-works/pi-ai'
 import type { MutableModels, Provider } from '@earendil-works/pi-ai'
 import { openaiCodexProvider } from '@earendil-works/pi-ai/providers/openai-codex'
 import { ReasoningEffortId, resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmResolvedModelInfo, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
-import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
+import type { PiAiAdapterOptions, ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { allocateOpenAICodexSessionProfile } from './account-allocation.ts'
 import type { LocalRoutingEventLedger } from './local-routing-events.ts'
@@ -22,10 +22,14 @@ import { resolveTeamClientBaseUrl, teamClientResponsesUrl } from './team/client.
 export const OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 /**
- * Match the stock rc.8 pi-ai route default while leaving enough request-body
+ * Match the stock 0.1.2-rc.1 pi-ai route default while leaving enough request-body
  * headroom for prompts, tools, and JSON around the encoded image payload.
  */
 export const OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
+
+/** Match stock DSH's deterministic request-image projection defaults. */
+const REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
+const REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 const REASONING_DESCRIPTIONS = {
   low: '响应更快，推理程度较轻',
@@ -145,9 +149,22 @@ class OpenAICodexAdapter extends PiAiAdapter {
     model: string,
     signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
-    const resolved = await super.resolveModel(provider, model, signal)
-    if (provider !== OPENAI_CODEX_PROVIDER) return resolved
-    const catalog = CODEX_REASONING_CATALOG[model]
+    return this.codexModelInfo(await super.resolveModel(provider, model, signal))
+  }
+
+  override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    const prepared = await super.prepareCall(provider, model, signal)
+    return {
+      model: this.codexModelInfo(prepared.model),
+      // Retain the base adapter's frozen profile/model generation across the
+      // allocation await; calling super.stream here would capture a new one.
+      stream: options => this.streamWithRouting(options, () => prepared.stream(options)),
+    }
+  }
+
+  private codexModelInfo(resolved: LlmResolvedModelInfo): LlmResolvedModelInfo {
+    if (resolved.provider !== OPENAI_CODEX_PROVIDER) return resolved
+    const catalog = CODEX_REASONING_CATALOG[resolved.id]
     if (catalog === undefined) return resolved
     return {
       ...resolved,
@@ -162,7 +179,14 @@ class OpenAICodexAdapter extends PiAiAdapter {
     }
   }
 
-  override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+  override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    return this.streamWithRouting(options, () => super.stream(options))
+  }
+
+  private async *streamWithRouting(
+    options: GenerateOptions,
+    dispatch: () => AsyncIterable<StreamChunk>,
+  ): AsyncIterable<StreamChunk> {
     let routingEventId: string | undefined
     if (this.allocateLocalSession && options.sessionId !== undefined) {
       const allocation = await allocateOpenAICodexSessionProfile(
@@ -187,8 +211,9 @@ class OpenAICodexAdapter extends PiAiAdapter {
       ? this.responses.enterCompaction(options.sessionId === undefined ? undefined : String(options.sessionId))
       : undefined
     let terminalStatus: 'succeeded' | 'failed' | 'cancelled' | undefined
+    let streamCompleted = false
     try {
-      for await (const chunk of super.stream(options)) {
+      for await (const chunk of dispatch()) {
         if (chunk.type === 'finish') {
           terminalStatus = chunk.reason.kind === 'aborted'
             ? 'cancelled'
@@ -196,6 +221,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
         }
         yield chunk
       }
+      streamCompleted = true
     } catch (error: unknown) {
       terminalStatus = options.signal?.aborted === true ? 'cancelled' : 'failed'
       throw error
@@ -203,7 +229,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
       if (routingEventId !== undefined) {
         this.routingEvents?.settle(
           routingEventId,
-          terminalStatus ?? (options.signal?.aborted === true ? 'cancelled' : 'succeeded'),
+          terminalStatus ?? (options.signal?.aborted === true || !streamCompleted ? 'cancelled' : 'succeeded'),
         )
       }
       release?.()
@@ -220,7 +246,9 @@ class OpenAICodexAdapter extends PiAiAdapter {
  * @param credentials - Refreshable OAuth credential source.
  * @param resolveAttachments - Resolves the active conversation attachment store.
  * @param responsePreferences - Reads the current Codex Responses preferences.
- * @param routingEvents - Optional metadata-only ledger for local routing attempts.
+ * @param teamClientOrRoutingEvents - Team gateway configuration or local routing ledger.
+ * @param routingEventsOverride - Optional metadata-only ledger when Team options occupy the fourth argument.
+ * @param resolveImageAccess - Optional Host-owned bridge into the current tool filesystem.
  * @returns Harness adapter for the OpenAI Codex provider.
  */
 export function createOpenAICodexAdapter(
@@ -229,6 +257,7 @@ export function createOpenAICodexAdapter(
   responsePreferences: () => ResponseApiPreferences,
   teamClientOrRoutingEvents?: OpenAICodexTeamClientAdapterOptions | LocalRoutingEventLedger,
   routingEventsOverride?: LocalRoutingEventLedger,
+  resolveImageAccess?: PiAiAdapterOptions['resolveImageAccess'],
 ): PiAiAdapter {
   const teamClient = teamClientOrRoutingEvents !== undefined && 'resolveApiKey' in teamClientOrRoutingEvents
     ? teamClientOrRoutingEvents
@@ -255,6 +284,8 @@ export function createOpenAICodexAdapter(
     displayName: 'OpenAI Codex',
     streamIdleTimeoutMs: OPENAI_CODEX_STREAM_IDLE_TIMEOUT_MS,
     maxRequestImageBytes: OPENAI_CODEX_MAX_REQUEST_IMAGE_BYTES,
+    requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
+    requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-openai-codex retryPolicy'),
     configuredMaxTokens: new Map(),
     piProvider: responses.wrap(requestProvider(provider)),
@@ -271,5 +302,16 @@ export function createOpenAICodexAdapter(
     profiles: () => profiles,
     resolveApiKey,
     resolveAttachments,
+    ...(resolveImageAccess === undefined ? {} : { resolveImageAccess }),
+    // OAuth refresh and Team credentials are resolved above for each request.
+    // The underlying collection must never discover a different account or an
+    // ambient API key when that explicit resolver has no credential.
+    auth: {
+      credentials: new InMemoryCredentialStore(),
+      authContext: {
+        env: async () => undefined,
+        fileExists: async () => false,
+      },
+    },
   }, responses, credentials, teamClient === undefined, routingEvents)
 }

@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-fs'
+import { resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import {
   CodexQuotaConfigSchema,
   type CodexQuotaConfig,
@@ -432,6 +433,11 @@ export function apply(ctx: Context, config: Config): void {
       () => imageTools.responseApiSnapshot(),
       teamClient,
       routingEvents,
+      (attachments, ref) => resolveImageAttachmentAccess(
+        attachments,
+        hostPath => ctx.get('fs')?.processPathFromHostPath(hostPath),
+        ref,
+      ),
     ),
   )
   ctx.web.registerSearchProvider(new OpenAICodexSearchProvider({

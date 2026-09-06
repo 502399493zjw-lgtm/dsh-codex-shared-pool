@@ -57,7 +57,7 @@ export type { CodexModelSelectProps }
 /**
  * Render the whole documented `conversation.input.model` seat.
  *
- * Stock DSH rc.8 exposes this seat as a single occupant and does not expose
+ * Stock DSH exposes this seat as a single occupant and does not expose
  * children inside its model menu. Shadowing the stock occupant at a lower
  * priority is the documented way for a plugin to extend the affordance.
  */

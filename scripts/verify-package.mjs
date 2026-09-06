@@ -31,7 +31,7 @@ assert.equal(packageJson.bin?.['dsh-openai-codex'], 'lib/bin.js')
 assert.equal(packageJson.bin?.['dsh-codex-team-broker'], 'lib/team-broker-bin.js')
 assert.equal(packageJson.bin?.['dsh-codex-team-migrate'], 'lib/team-migrate-bin.js')
 assert.equal(packageJson.dsh?.client?.platform, 'web')
-assert.equal(packageJson.dependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.0-rc.8')
+assert.equal(packageJson.dependencies?.['@deepseek-ai/dsh-sdk-protocol'], '0.1.2-rc.1')
 assert.match(packageJson.dependencies?.pg ?? '', /^\^8\./u)
 assert.ok(packageJson.files?.includes('THIRD_PARTY_NOTICES.md'))
 assert.deepEqual(

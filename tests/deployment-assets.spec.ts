@@ -112,9 +112,9 @@ describe('self-hosted deployment assets', () => {
     const dockerfile = await readFile(new URL('../deploy/host/Dockerfile', import.meta.url), 'utf8')
     expect(dockerfile).toMatch(/FROM node:24-bookworm-slim AS runtime/u)
     expect(dockerfile).toMatch(
-      /npm install --global[\s\\]+pnpm@11\.7\.0[\s\\]+@deepseek-ai\/dsh@0\.1\.0-rc\.8/u,
+      /npm install --global[\s\\]+pnpm@11\.7\.0[\s\\]+@deepseek-ai\/dsh@0\.1\.2-rc\.1/u,
     )
-    expect(dockerfile).toMatch(/--before=2026-08-20T00:00:00\.000Z/u)
+    expect(dockerfile).toMatch(/--before=2026-09-04T00:00:00\.000Z/u)
     expect(dockerfile).toMatch(/corepack disable/u)
     expect(dockerfile).not.toMatch(/pnpm add --global @deepseek-ai\/dsh/u)
     expect(dockerfile).toMatch(/COPY[^\n]*THIRD_PARTY_NOTICES\.md/u)
@@ -158,7 +158,7 @@ describe('self-hosted deployment assets', () => {
     expect(runner).toMatch(/if \(options\.confirmed !== true\)/u)
   })
 
-  it('keeps the self-hosted plan on rc.8 while preserving rc.7 observations as history', async () => {
+  it('preserves the original rc.8 self-hosted plan and rc.7 observations as history', async () => {
     const plan = await readFile(
       new URL('../docs/superpowers/plans/2026-08-20-self-hosted-credential-broker.md', import.meta.url),
       'utf8',

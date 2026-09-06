@@ -364,7 +364,9 @@ describe('Local Team credential broker', () => {
         type: 'oauth',
         access: 'host-only-access-token',
         refresh: 'host-only-refresh-token',
-        expires: Date.now() + 60_000,
+        // pi-ai refreshes tokens within five minutes; this test exercises
+        // request credential isolation, with no real OAuth network access.
+        expires: Date.now() + 60 * 60_000,
         accountId: 'chatgpt-account-1',
       }
       await store.addProfile('Owner Codex', credential)

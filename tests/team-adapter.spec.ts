@@ -14,6 +14,7 @@ import type { OpenAICodexCredentialStore } from '../src/store.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
 })
 
 describe('Team client Codex adapter', () => {
@@ -122,7 +123,10 @@ describe('Team client Codex adapter', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe(responsesUrl)
   })
 
-  it.each(['gpt-5.4', 'gpt-6-astra'])('streams %s with the Team credential and never allocates a local OAuth profile', async (model) => {
+  it.each([
+    ['gpt-5.4', 'direct'], ['gpt-6-astra', 'direct'],
+    ['gpt-5.4', 'prepared'], ['gpt-6-astra', 'prepared'],
+  ] as const)('streams %s via %s with the Team credential and never allocates a local OAuth profile', async (model, entry) => {
     const baseUrl = `https://pool.example.test${TEAM_PATH_PREFIX}`
     const fetch = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'test stop' } }), {
       status: 401,
@@ -130,7 +134,8 @@ describe('Team client Codex adapter', () => {
     }))
     vi.stubGlobal('fetch', fetch)
     const listProfiles = vi.fn(async () => [])
-    const localCredentials = { listProfiles } as unknown as OpenAICodexCredentialStore
+    const read = vi.fn()
+    const localCredentials = { listProfiles, read } as unknown as OpenAICodexCredentialStore
     const resolveApiKey = vi.fn(async () => createTeamCodexBearer('dsh_team_member-secret-1234567890'))
     const adapter = createOpenAICodexAdapter(
       localCredentials,
@@ -141,18 +146,21 @@ describe('Team client Codex adapter', () => {
 
     const consume = async () => {
       const chunks = []
-      for await (const chunk of adapter.stream({
+      const prepared = entry === 'prepared' ? await adapter.prepareCall('openai-codex', model) : undefined
+      const options = {
         provider: 'openai-codex',
         model,
         messages: [createUserMessage({ content: [{ type: 'text', text: 'hello' }], source: { kind: 'user' } })],
         sessionId: 'session-1' as never,
-      })) chunks.push(chunk)
+      }
+      for await (const chunk of prepared?.stream(options) ?? adapter.stream(options)) chunks.push(chunk)
       return chunks
     }
     const chunks = await consume()
 
     expect(resolveApiKey).toHaveBeenCalledOnce()
     expect(listProfiles).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
     expect(chunks).toEqual(expect.arrayContaining([expect.objectContaining({
       type: 'finish',
       reason: expect.objectContaining({ kind: 'error' }),
@@ -163,5 +171,32 @@ describe('Team client Codex adapter', () => {
     expect(headers.get('content-encoding')).toBe('zstd')
     const body = JSON.parse(zstdDecompressSync(fetch.mock.calls[0]![1]!.body as Uint8Array).toString())
     expect(body.model).toBe(model)
+  })
+
+  it('does not fall back to local OAuth or ambient API keys when a prepared Team call has no credential', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    vi.stubEnv('OPENAI_API_KEY', 'private-ambient-api-key')
+    const read = vi.fn()
+    const listProfiles = vi.fn()
+    const adapter = createOpenAICodexAdapter(
+      { read, listProfiles } as unknown as OpenAICodexCredentialStore,
+      () => undefined,
+      () => ({ useFastMode: false, useNativeCompaction: false, useWebSocketContextReuse: false }),
+      { baseUrl: `https://pool.example.test${TEAM_PATH_PREFIX}`, resolveApiKey: async () => '' },
+    )
+    const prepared = await adapter.prepareCall('openai-codex', 'gpt-5.6-sol')
+    const chunks = []
+    for await (const chunk of prepared.stream({
+      provider: 'openai-codex', model: 'gpt-5.6-sol', messages: [], sessionId: 'session-1' as never,
+    })) chunks.push(chunk)
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+    expect(listProfiles).not.toHaveBeenCalled()
+    expect(chunks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'finish', reason: expect.objectContaining({ kind: 'error' }) }),
+    ]))
+    expect(JSON.stringify(chunks)).not.toContain('private-ambient-api-key')
   })
 })

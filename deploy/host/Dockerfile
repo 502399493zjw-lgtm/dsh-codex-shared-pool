@@ -17,14 +17,14 @@ ENV NODE_ENV=production \
     DSH_HOME=/opt/dsh-home
 
 # Keep the stock DSH dependency graph on the registry snapshot that contains
-# the verified rc.8 release, so future sibling releases cannot drift the image.
+# the verified 0.1.2-rc.1 release, so future sibling releases cannot drift the image.
 RUN corepack disable \
     && npm install --global \
         pnpm@11.7.0 \
-        @deepseek-ai/dsh@0.1.0-rc.8 \
-        --before=2026-08-20T00:00:00.000Z \
+        @deepseek-ai/dsh@0.1.2-rc.1 \
+        --before=2026-09-04T00:00:00.000Z \
     && test "$(pnpm --version)" = "11.7.0" \
-    && test "$(dsh --version)" = "0.1.0-rc.8" \
+    && test "$(dsh --version)" = "0.1.2-rc.1" \
     && node -e "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/node-pty')" \
     && mkdir -p /etc/dsh /opt/dsh-home /opt/dsh/deploy/host /opt/dsh/plugin-package \
     && chmod 0755 /etc/dsh \

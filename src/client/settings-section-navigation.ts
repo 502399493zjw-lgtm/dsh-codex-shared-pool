@@ -8,7 +8,7 @@ const SETTINGS_TRIGGER_SELECTOR = 'button[aria-haspopup="dialog"][aria-expanded]
 const SETTINGS_DIALOG_SELECTOR = '[role="dialog"][aria-modal="true"]'
 const SETTINGS_NAV_BUTTON_SELECTOR = 'nav button[type="button"]'
 
-/** Optional navigation face available in DSH variants newer than the rc.8 shell. */
+/** Optional navigation face; the pinned stock shell uses the DOM fallback. */
 export interface SettingsNavigationFace {
   openSection: (sectionId: string) => void
 }
@@ -32,7 +32,7 @@ function selectRenderedSection(domDocument: Document, sectionLabel: string): boo
 /**
  * Open a Settings section through a public navigation service when present.
  *
- * Published DSH rc.8 keeps its Settings open/active state inside the shell
+ * Published DSH keeps its Settings open/active state inside the shell
  * component and provides no navigation service. Its documented shell still
  * renders an accessible dialog trigger and nav buttons, so the compatibility
  * path drives those semantics without depending on generated CSS class names.
