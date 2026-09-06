@@ -154,6 +154,42 @@ describe('OpenAI Codex settings authorization', () => {
     expect(loginRequests).toBe(2)
   })
 
+  it('keeps existing account rows while authorization is pending and still offers cancellation', async () => {
+    let signingIn = false
+    const profile = { id: 'existing', label: 'Existing account', createdAt: 1, updatedAt: 1, usage: { rateLimits: [] } }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const sessionResponse = popupSessionResponse(input, init)
+      if (sessionResponse !== undefined) return sessionResponse
+      const path = requestPath(input)
+      if (path.endsWith('/profiles/login/cancel')) { signingIn = false; return response({ cancelled: true }) }
+      if (path.endsWith('/profiles/login')) { signingIn = true; return response({ url: 'https://auth.openai.com/oauth/authorize?attempt=existing' }) }
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) {
+        return response({ status: signingIn ? 'signing-in' : 'ready', profiles: [profile] })
+      }
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      if (path.endsWith('/image-tools')) return response({ modifyReadImage: false, shareImagegenWithOtherModels: false })
+      if (path.endsWith('/response-api')) return response({ useFastMode: false, useWebSocketContextReuse: false, useNativeCompaction: false })
+      if (path.endsWith('/network')) return response({ enabled: false, httpProxy: false, httpsProxy: false, noProxy: false })
+      throw new Error(`unexpected request: ${path}`)
+    }))
+    const popup = { closed: false, opener: null, close: vi.fn(), location: { replace: vi.fn() } }
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window)
+    const view = render(<OpenAICodexSettings t={t} />)
+    await screen.findByRole('button', { name: /Existing account/ })
+    fireEvent.click(screen.getByRole('button', { name: en.addAccount }))
+    await screen.findByText(en.signingIn)
+    expect(screen.getByRole('button', { name: /Existing account/ })).toBeDefined()
+    expect(screen.getByRole('heading', { name: /Quota priority.*1/ })).toBeDefined()
+    // A newly mounted settings view must also read existing profiles during OAuth.
+    view.unmount()
+    signingIn = true
+    render(<OpenAICodexSettings t={t} />)
+    await screen.findByRole('button', { name: /Existing account/ })
+    fireEvent.click(await screen.findByRole('button', { name: en.cancelAuthorization }))
+    await waitFor(() => expect(screen.getByRole('button', { name: en.addAccount })).toHaveProperty('disabled', false))
+    expect(screen.getByRole('button', { name: /Existing account/ })).toBeDefined()
+  })
+
   it('cancels the login and restores the empty state when the popup closes', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const sessionResponse = popupSessionResponse(input, init)

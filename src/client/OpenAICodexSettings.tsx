@@ -60,7 +60,7 @@ const USAGE_POLL_INTERVAL_MS = 60_000
 
 type AccountStatus =
   | { status: 'loading' }
-  | { status: 'signing-in' }
+  | { status: 'signing-in'; profiles?: AccountProfile[] }
   | { status: 'ready'; profiles: AccountProfile[] }
   | { status: 'error'; message: string }
 
@@ -386,6 +386,16 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         }
         return next
       }
+      if (next.status === 'signing-in') {
+        setStatus(previous => ({
+          status: 'signing-in',
+          profiles: (next.profiles ?? ('profiles' in previous ? previous.profiles : undefined) ?? []).map(profile => {
+            const old = 'profiles' in previous ? previous.profiles?.find(item => item.id === profile.id) : undefined
+            return { ...old, ...profile, usage: old?.usage ?? { rateLimits: [] } }
+          }),
+        }))
+        return next
+      }
       setStatus(next.status === 'error'
         ? { status: 'error', message: authorizationFailureMessage(next.reason, t) }
         : next)
@@ -515,7 +525,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     )
   }, [status])
 
-  const profiles = status.status === 'ready' ? status.profiles : []
+  const profiles = 'profiles' in status ? status.profiles ?? [] : []
   const selectedProfile = profiles.find(profile => profile.id === selectedProfileId)
     ?? profiles[0]
   const priorityProfile = profiles[0]
@@ -526,7 +536,8 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     const popup = openAuthorizationPopupBridge()
     loginPopupRef.current = popup
     setBusy(true)
-    setStatus({ status: 'signing-in' })
+    refreshControllerRef.current?.abort()
+    setStatus(previous => ({ status: 'signing-in', profiles: 'profiles' in previous ? previous.profiles ?? [] : [] }))
     const operation = {}
     loginOperationRef.current = operation
     try {
@@ -830,7 +841,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
           </div>
         </aside>
 
-        {selectedProfile === undefined ? (
+        {selectedProfile === undefined || status.status === 'signing-in' ? (
           <div className="dsh-codex-empty">
             <div>
               <div className="dsh-codex-empty-status" role="status">
