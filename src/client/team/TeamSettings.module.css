@@ -2088,7 +2088,25 @@
 }
 
 .recentRequestsDialog {
+  box-sizing: border-box;
+  height: min(640px, calc(100dvh - 48px));
+  overflow: hidden;
   color: var(--team-ink);
+}
+
+.recentRequestsDialog .recentRequestsContent {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
+/* The stock Modal body follows its fixed title and description rows. */
+.recentRequestsContent > :last-child {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .recentRequestList {
