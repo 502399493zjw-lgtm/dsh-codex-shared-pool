@@ -217,6 +217,37 @@ class FakeCredentialBroker implements TeamCredentialBroker {
 }
 
 describe('Team control plane', () => {
+  it('reuses an invitation for distinct members until revoked or expired', async () => {
+    let now = 1_000
+    const store = new MemoryTeamStore({ now: () => now })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const invite = await store.createInvite(owner, 60_000)
+    const first = await store.acceptInvite(invite.inviteToken, 'First')
+    const suppliedKey = 'dsh_team_reusable-invite-test-key-1234567890'
+    const second = await store.acceptInviteWithApiKey(invite.inviteToken, 'Second', suppliedKey)
+    expect(second.member.id).not.toBe(first.member.id)
+    expect(second.member.role).toBe('member')
+    expect(first.apiKey).not.toBe(suppliedKey)
+    await expect(store.authenticateApiKey(first.apiKey)).resolves.toMatchObject({ memberId: first.member.id })
+    await expect(store.authenticateApiKey(suppliedKey)).resolves.toMatchObject({ memberId: second.member.id })
+    await expect(store.acceptInvite(invite.inviteToken, 'FIRST')).rejects.toThrow(/already in use/iu)
+    await expect(store.previewInvite(invite.inviteToken)).resolves.toMatchObject({ teamName: 'Friends' })
+    await expect(store.revealInvite(owner, invite.invite.id)).resolves.toMatchObject({ inviteToken: invite.inviteToken })
+    expect((await store.overview(owner)).invites).toEqual([expect.objectContaining({ id: invite.invite.id, status: 'pending', revealable: true })])
+    await store.revokeInvite(owner, invite.invite.id)
+    await expect(store.acceptInvite(invite.inviteToken, 'Third')).rejects.toThrow(/invalid or expired/iu)
+    await expect(store.revealInvite(owner, invite.invite.id)).rejects.toThrow(/no longer available/iu)
+    // Revocation prevents future joins without disconnecting existing members.
+    await expect(store.authenticateApiKey(first.apiKey)).resolves.toMatchObject({ memberId: first.member.id })
+    const expiring = await store.createInvite(owner, 60_000)
+    await store.acceptInvite(expiring.inviteToken, 'Before expiry')
+    now = expiring.invite.expiresAt
+    await expect(store.acceptInvite(expiring.inviteToken, 'At expiry')).rejects.toThrow(/invalid or expired/iu)
+
+  })
+
   it('bootstraps a Team and only returns the API key once', async () => {
     const store = new MemoryTeamStore({ id: (() => { let i = 0; return () => `id-${++i}` })() })
     const result = await store.bootstrap('Friends', 'Owner')
@@ -361,7 +392,7 @@ describe('Team control plane', () => {
       lifecycleRevision: 2,
       dissolvedAt: 2_000,
       terminatedMemberCount: 2,
-      revokedInviteCount: 1,
+      revokedInviteCount: 2,
       revokedKeyCount: 3,
       revokedContributionCount: 2,
     })
@@ -481,7 +512,7 @@ describe('Team control plane', () => {
       .resolves.toBeUndefined()
   })
 
-  it('accepts an invite once and rejects it after use', async () => {
+  it('accepts the same invite for multiple members', async () => {
     const store = new MemoryTeamStore()
     const boot = await store.bootstrap('Friends', 'Owner')
     const owner = await store.authenticateApiKey(boot.apiKey)
@@ -490,7 +521,7 @@ describe('Team control plane', () => {
 
     const joined = await store.acceptInvite(invite.inviteToken, 'Friend')
     expect(joined.member.role).toBe('member')
-    await expect(store.acceptInvite(invite.inviteToken, 'Second')).rejects.toThrow(/invalid or expired/u)
+    await expect(store.acceptInvite(invite.inviteToken, 'Second')).resolves.toMatchObject({ member: { role: 'member' } })
   })
 
   it('normalizes member names, rejects an active NFKC_Casefold collision, and leaves the losing invite unused', async () => {
@@ -637,7 +668,7 @@ describe('Team control plane', () => {
     await expect(store.listInviteRevealAuditEvents(owner, 10)).resolves.toEqual([])
   })
 
-  it('destroys invitation ciphertext when it is accepted or revoked', async () => {
+  it('retains invitation ciphertext after joining and destroys it when revoked', async () => {
     const store = new MemoryTeamStore()
     const boot = await store.bootstrap('Friends', 'Owner')
     const owner = await store.authenticateApiKey(boot.apiKey)
@@ -648,10 +679,10 @@ describe('Team control plane', () => {
     await store.acceptInvite(accepted.inviteToken, 'Member')
     await store.revokeInvite(owner, revoked.invite.id)
 
-    await expect(store.revealInvite(owner, accepted.invite.id)).rejects.toThrow(/not found|no longer available/iu)
+    await expect(store.revealInvite(owner, accepted.invite.id)).resolves.toMatchObject({ inviteToken: accepted.inviteToken })
     await expect(store.revealInvite(owner, revoked.invite.id)).rejects.toThrow(/not found|no longer available/iu)
     expect((store as unknown as { invites: Map<string, { envelope?: unknown }> }).invites.get(accepted.invite.id))
-      .not.toHaveProperty('envelope')
+      .toHaveProperty('envelope')
     expect((store as unknown as { invites: Map<string, { envelope?: unknown }> }).invites.get(revoked.invite.id))
       .not.toHaveProperty('envelope')
   })

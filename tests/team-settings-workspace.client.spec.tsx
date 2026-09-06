@@ -3450,7 +3450,7 @@ describe('Team subscription-pool workspace', () => {
     const details = summary.closest('details')!
     expect(details.open).toBe(false)
     expect(details.textContent).toContain('Edison')
-    expect(within(settings).getByText('每码限一人使用')).toBeDefined()
+    expect(within(settings).getByText('每码可供多人使用')).toBeDefined()
     expect(within(settings).getByRole('button', { name: zh.revealInvite }).textContent).toBe('查看')
     expect(within(settings).getByRole('button', { name: zh.revokeInvite }).textContent).toBe('')
     expect(managementApi.revealInvite).not.toHaveBeenCalled()
@@ -3699,7 +3699,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(eligibleTarget)
 
     transferDialog = screen.getByRole('dialog', { name: '邀请「Mia」接任团队所有者？' })
-    expect(within(transferDialog).getByText('对方接受前，你仍是团队所有者。对方接受后，你会变为成员，全部尚未使用的邀请码会失效。成员显示名称不代表经过验证的身份，请先通过可信渠道确认「Mia」是预期成员。')).toBeDefined()
+    expect(within(transferDialog).getByText('对方接受前，你仍是团队所有者。对方接受后，你会变为成员，全部仍有效的邀请码会失效。成员显示名称不代表经过验证的身份，请先通过可信渠道确认「Mia」是预期成员。')).toBeDefined()
     fireEvent.click(within(transferDialog).getByRole('button', { name: '发送转让请求' }))
 
     await waitFor(() => {

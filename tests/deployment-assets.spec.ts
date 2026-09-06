@@ -269,7 +269,7 @@ describe('self-hosted deployment assets', () => {
     expect(admit({ method: 'POST', url, socket: { remoteAddress: '203.0.113.9' } })).toBeUndefined()
   })
 
-  it('proves two deployed Teams support one-time friend invites, distinct member keys, and isolated overviews', async () => {
+  it('proves two deployed Teams support reusable friend invites, distinct member keys, and isolated overviews', async () => {
     const { runMultiTeamDeploymentSmoke } = await import('../deploy/host/smoke-multi-team.mjs')
     const bootstrapToken = 'bootstrap-secret-for-ci-smoke'
     const brokerApiKey = 'broker-secret-for-ci-smoke-1234567890'
@@ -339,7 +339,7 @@ describe('self-hosted deployment assets', () => {
         const body = JSON.parse(String(init.body)) as { inviteToken: string, displayName: string }
         const alpha = body.inviteToken === alphaInvite
         const valid = alpha || body.inviteToken === betaInvite
-        if (!valid || calls.filter(call => call.url.endsWith('/join') && String(call.init.body).includes(body.inviteToken)).length > 1) {
+        if (!valid) {
           return Response.json({ error: 'invite is invalid or expired' }, { status: 404 })
         }
         return Response.json({
@@ -350,14 +350,14 @@ describe('self-hosted deployment assets', () => {
             createdAt: 1,
           },
           member: {
-            id: alpha ? 'friend-alpha' : 'friend-beta',
+            id: `${alpha ? 'friend-alpha' : 'friend-beta'}${body.displayName.endsWith(' Again') ? '-again' : ''}`,
             teamId: alpha ? 'team-alpha' : 'team-beta',
             displayName: body.displayName,
             role: 'member',
             status: 'active',
             joinedAt: 2,
           },
-          apiKey: alpha ? alphaFriendKey : betaFriendKey,
+          apiKey: `${alpha ? alphaFriendKey : betaFriendKey}${body.displayName.endsWith(' Again') ? '-again' : ''}`,
         }, { status: 201 })
       }
 
@@ -377,10 +377,11 @@ describe('self-hosted deployment assets', () => {
         members: [
           { id: ownerMemberId, teamId, displayName: ownerName, role: 'owner', status: 'active', joinedAt: 1 },
           { id: friendMemberId, teamId, displayName: alpha ? 'Carol' : 'Dave', role: 'member', status: 'active', joinedAt: 2 },
+          { id: `${friendMemberId}-again`, teamId, displayName: alpha ? 'Carol Again' : 'Dave Again', role: 'member', status: 'active', joinedAt: 2 },
         ],
         ...(owner ? { invites: [{
           id: alpha ? 'invite-alpha' : 'invite-beta', teamId, invitedByMemberId: ownerMemberId,
-          status: 'accepted', expiresAt: 60_000, createdAt: 1, acceptedAt: 2,
+          status: 'pending', expiresAt: 60_000, createdAt: 1,
         }] } : {}),
         contributions: [],
         activeSharedAccounts: [],
@@ -695,7 +696,6 @@ describe('self-hosted deployment assets', () => {
       },
     ]
     const brokerApiKey = 'broker-secret-for-ci-smoke-1234567890'
-    const acceptedInvites = new Set<string>()
     let bootstrapIndex = 0
     const fakeFetch: typeof globalThis.fetch = async (input, init = {}) => {
       const url = String(input)
@@ -727,20 +727,16 @@ describe('self-hosted deployment assets', () => {
       if (url.endsWith('/join')) {
         const body = JSON.parse(String(init.body)) as { inviteToken: string, displayName: string }
         const item = fixtures.find(candidate => candidate.inviteToken === body.inviteToken)!
-        if (acceptedInvites.has(body.inviteToken)) {
-          return Response.json({ error: 'invite is invalid or expired' }, { status: 404 })
-        }
-        acceptedInvites.add(body.inviteToken)
         return Response.json({
           team: { id: item.teamId, name: item.teamName, status: 'active' },
           member: {
-            id: item.friendMemberId,
+            id: `${item.friendMemberId}${body.displayName.endsWith(' Again') ? '-again' : ''}`,
             teamId: item.teamId,
             displayName: body.displayName,
             role: 'member',
             status: 'active',
           },
-          apiKey: item.friendApiKey,
+          apiKey: `${item.friendApiKey}${body.displayName.endsWith(' Again') ? '-again' : ''}`,
         }, { status: 201 })
       }
       const item = fixtures.find(candidate => (
