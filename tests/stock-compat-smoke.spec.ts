@@ -6,17 +6,24 @@ const plugin = 'dsh-codex-shared-pool'
 const dependency = '@deepseek-ai/dsh-client-ui-session'
 const bundleUrl = `/plugins/??${plugin}/client.js&rev=abc123`
 const entry = { id: plugin, url: bundleUrl, initialUrl: bundleUrl, inject: [dependency], external: [] }
+const teamStatusPath = `/plugins/${plugin}/team-client/status`
+const cloudStatus = { enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false, serverOrigin: 'https://47.84.77.193' }
 
 function page(entries: unknown[]): string {
   return `<html><head><script>globalThis["__DSH_BOOT__"] = ${JSON.stringify({ rev: 'abc123', entries, batches: [] })}</script><script type="module" src="./assets/shell.js"></script></head><body>DeepSeek Harness</body></html>`
 }
 
 function fixtureFetch(html: string, routeStatus = 200, bundle = `window.__ModuleLoader__.load({id: "${plugin}", factory() { return {} }})`): typeof fetch {
-  return async (input) => {
+  return async (input, options) => {
     const url = new URL(String(input))
     if (url.pathname === '/') return new Response(html)
     if (url.pathname === '/assets/shell.js') return new Response('function platformModules(){return{"@deepseek-ai/dsh-client-ui-primitives":primitives}}loader.create({staticModules:platformModules()})')
     if (url.pathname === '/plugins/') return new Response(bundle, { headers: { 'content-type': 'text/javascript' } })
+    if (url.pathname === teamStatusPath) {
+      expect(new Headers(options?.headers).get('origin')).toBe(url.origin)
+      expect(new Headers(options?.headers).get('sec-fetch-site')).toBe('same-origin')
+      return Response.json(cloudStatus, { status: routeStatus })
+    }
     return Response.json({ enabled: true }, { status: routeStatus })
   }
 }
@@ -48,7 +55,20 @@ describe('stock compatibility smoke assertions (HTTP fixtures, not stock evidenc
 
   it('accepts the new combo bundle URL from the actual boot graph', async () => {
     await expect(probeStockPlugin('http://127.0.0.1:3099/', fixtureFetch(page([entry, { id: dependency }]))))
-      .resolves.toMatchObject({ plugin, routes: 3, bundle: bundleUrl })
+      .resolves.toMatchObject({ plugin, routes: 4, bundle: bundleUrl })
+  })
+
+  it.each([
+    { ...cloudStatus, enabled: false },
+    { ...cloudStatus, keyConfigured: true },
+    { ...cloudStatus, keyWritable: false },
+    { ...cloudStatus, pendingJoinConfigured: true },
+    { ...cloudStatus, serverOrigin: 'http://127.0.0.1:3080' },
+  ])('rejects a fresh install with unexpected Team connection state %j', async status => {
+    const fixture = fixtureFetch(page([entry, { id: dependency }]))
+    await expect(probeStockPlugin('http://127.0.0.1:3099/', async (url, options) =>
+      new URL(String(url)).pathname === teamStatusPath ? Response.json(status) : fixture(url, options)))
+      .rejects.toThrow(/fresh.*Team/iu)
   })
 
   it('resolves primitives from the served shell static-module table instead of dynamic boot entries', async () => {

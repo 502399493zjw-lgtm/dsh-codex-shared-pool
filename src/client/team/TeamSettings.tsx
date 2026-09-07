@@ -146,7 +146,6 @@ interface TeamRefreshSnapshot {
 
 interface TeamConnectionIssue {
   readonly kind: 'invalid' | 'unavailable'
-  readonly detail: string
 }
 
 interface ActiveBrowserAuthorization {
@@ -1165,7 +1164,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         clearUsage()
         setConnectionIssue({
           kind: remoteStatus === 401 || remoteStatus === 404 ? 'invalid' : 'unavailable',
-          detail: errorMessage(cause, t('requestFailed')),
         })
         setError(undefined)
         return
@@ -1858,6 +1856,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     const mode = status.pendingTeamSetup ?? setupMode!
     return <main className={styles.page}>
       {embedded ? null : <PageHeading t={t} />}
+      <TeamServiceConnection serverOrigin={status.serverOrigin} t={t} />
       <TeamSetup api={api} t={t} mode={mode} expectedContext={setupExpectedContext}
         pending={status.pendingTeamSetup !== undefined} disabled={!status.keyWritable}
         onBack={() => { setSetupMode(undefined); setJoiningOtherTeam(false) }}
@@ -1893,8 +1892,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <Notice
           tone={invalid ? 'error' : 'warning'}
           title={t(invalid ? 'teamAccessInvalidTitle' : 'teamAccessUnavailableTitle')}
-          detail={connectionIssue?.detail ?? t(invalid ? 'teamAccessInvalidHint' : 'teamAccessUnavailableHint')}
+          detail={t(invalid ? 'teamAccessInvalidHint' : 'teamAccessUnavailableHint')}
         >
+          <TeamServiceConnection serverOrigin={status.serverOrigin} unavailable={!invalid} t={t} />
           <div className={styles.compactActions}>
             <Button variant="primary" size="sm" disabled={busy !== undefined} onClick={() => { void refresh(true) }}>{t('retry')}</Button>
             {invalid && status.keyWritable ? (
@@ -1927,6 +1927,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <div className={styles.sectionCopy}>
             <h2 className={styles.sectionTitle}>{t(status.keyConfigured ? 'joinOtherTeam' : 'notConnected')}</h2>
             <p className={styles.hint}>{t(status.keyConfigured ? 'joinOtherHint' : 'notConnectedHint')}</p>
+            <TeamServiceConnection serverOrigin={status.serverOrigin} t={t} />
             {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.compactActions}>
               <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable}
                 onCreate={() => openSetup('create')} onChanged={async () => { await refresh(true) }} />
@@ -2019,6 +2020,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       <main className={styles.page}>
         {embedded ? null : <PageHeading t={t} />}
         <Notice tone="warning" title={t('teamAccessUnavailableTitle')} detail={t('teamAccessUnavailableHint')}>
+          <TeamServiceConnection serverOrigin={status.serverOrigin} unavailable t={t} />
           <Button variant="primary" size="sm" disabled={busy !== undefined} onClick={() => { void refresh(true) }}>{t('retry')}</Button>
         </Notice>
       </main>
@@ -3605,6 +3607,26 @@ function PageHeading({ t }: { t: TeamSettingsInjected['t'] }) {
       <p className={styles.intro}>{t('intro')}</p>
     </header>
   )
+}
+
+function TeamServiceConnection({ serverOrigin, unavailable = false, t }: {
+  serverOrigin: string | undefined
+  unavailable?: boolean
+  t: TeamSettingsInjected['t']
+}) {
+  let local = false
+  if (serverOrigin !== undefined) {
+    try {
+      const { hostname } = new URL(serverOrigin)
+      local = hostname === 'localhost' || hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/u.test(hostname)
+    } catch {
+      // Status normally validates this origin; never let a display hint block recovery.
+    }
+  }
+  return <>
+    {serverOrigin === undefined ? null : <p className={styles.body}>{t('teamServiceAddress', { origin: serverOrigin })}</p>}
+    {unavailable ? <p className={styles.body}>{t(local ? 'teamServiceLocalHint' : 'teamServiceRemoteHint')}</p> : null}
+  </>
 }
 
 function Notice({ tone, title, detail, children, live }: {
