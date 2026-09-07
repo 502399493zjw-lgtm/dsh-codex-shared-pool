@@ -240,7 +240,7 @@ describe('Team management browser API', () => {
     }
   })
 
-  it('keeps owner-only invitations out of a member-shaped document', () => {
+  it('preserves invitation metadata for members without exposing token material', () => {
     const parsed = parseTeamManagementOverview({
       ...overview(),
       viewerRole: 'member',
@@ -251,11 +251,23 @@ describe('Team management browser API', () => {
       invites: [{
         id: 'invite-1', teamId: 'team-1', invitedByMemberId: 'member-1', label: 'Private',
         status: 'pending', revealable: true, expiresAt: 10, createdAt: 2,
+        inviteToken: 'must-not-survive', tokenHash: 'must-not-survive',
       }],
     })
 
     expect(parsed.viewerRole).toBe('member')
-    expect(parsed).not.toHaveProperty('invites')
+    expect(parsed.invites).toEqual([{
+      id: 'invite-1', teamId: 'team-1', invitedByMemberId: 'member-1', label: 'Private',
+      status: 'pending', revealable: true, expiresAt: 10, createdAt: 2,
+    }])
+    expect(JSON.stringify(parsed)).not.toContain('must-not-survive')
+  })
+
+  it('accepts a legacy member overview with no invitations during rolling upgrades', () => {
+    const { invites: _invites, ...legacy } = overview()
+    expect(parseTeamManagementOverview({
+      ...legacy, viewerRole: 'member', currentMember: { ...legacy.currentMember, role: 'member' },
+    }).invites).toEqual([])
   })
 
   it('requires and preserves the Host-owned invitation revealability projection for Owners', () => {

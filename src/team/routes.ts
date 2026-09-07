@@ -744,7 +744,7 @@ export function registerTeamRoutes(ctx: Context, service: TeamService, config: T
           if (req.method !== 'POST') { json(res, 405, { error: 'method not allowed' }); return }
           try {
             const auth = await authenticate(req, service)
-            if (auth === undefined || auth.role !== 'owner') {
+            if (auth === undefined) {
               json(res, 403, { error: 'forbidden' })
               return
             }

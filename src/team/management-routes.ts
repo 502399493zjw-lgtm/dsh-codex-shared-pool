@@ -1217,7 +1217,7 @@ function projectOverview(value: unknown): TeamManagementOverview {
   }
   return viewerRole === 'owner'
     ? { viewerRole, ...base, invites: objectArray(item.invites, 'invites', projectInvite) }
-    : { viewerRole, ...base }
+    : { viewerRole, ...base, invites: objectArray(item.invites ?? [], 'invites', projectInvite) }
 }
 
 function projectDisplayNameMigrationNotice(value: unknown): { migrationVersion: number } {
@@ -2201,7 +2201,7 @@ class TeamManagementProxy {
     inviteId: string,
     expectedContext: TeamManagementExpectedContext,
   ): Promise<TeamManagementInviteRevealResult> {
-    const key = await this.expectedMutationKey(expectedContext, 'owner')
+    const key = await this.expectedMutationKey(expectedContext)
     const item = record(await this.remote(TEAM_INVITES_REVEAL_PATH, {
       method: 'POST',
       body: { inviteId },

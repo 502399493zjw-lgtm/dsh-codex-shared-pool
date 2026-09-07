@@ -836,20 +836,16 @@ export class MemoryTeamStore implements TeamStore {
     const currentMember = this.requireMember(auth.memberId, auth.teamId)
     const now = this.now()
     const ownershipTransfer = this.findPendingOwnershipTransfer(team.id, now)
-    if (currentMember.role === 'owner') {
-      for (const invite of this.invites.values()) {
-        if (invite.teamId === team.id) this.expireInvite(invite, now)
-      }
+    for (const invite of this.invites.values()) {
+      if (invite.teamId === team.id) this.expireInvite(invite, now)
     }
     return {
       team: summaryTeam(team),
       currentMember: summaryMember(currentMember),
       members: team.memberIds.map(id => this.requireStoredMember(id, team.id)).map(summaryMember),
-      invites: currentMember.role === 'owner'
-        ? [...this.invites.values()]
-          .filter(invite => invite.teamId === team.id && invite.status === 'pending' && invite.expiresAt > now)
-          .map(invite => summaryInvite(invite, now))
-        : [],
+      invites: [...this.invites.values()]
+        .filter(invite => invite.teamId === team.id && invite.status === 'pending' && invite.expiresAt > now)
+        .map(invite => summaryInvite(invite, now)),
       apiKeys: [...this.keys.values()]
         .filter(key => key.teamId === team.id)
         .map(summaryKey),
@@ -917,7 +913,7 @@ export class MemoryTeamStore implements TeamStore {
   }
 
   async revealInvite(auth: TeamAuthContext, inviteId: string): Promise<TeamInviteRevealResult> {
-    this.requireOwner(auth)
+    this.requireAuthContext(auth)
     const now = this.now()
     this.consumeInviteRevealRateLimit(auth, inviteId, now)
     const invite = this.invites.get(inviteId)
@@ -945,7 +941,7 @@ export class MemoryTeamStore implements TeamStore {
     }
     const current = this.invites.get(inviteId)
     const afterDecryptNow = this.now()
-    const currentOwner = this.requireTeamOwner(auth)
+    const currentMember = this.requireAuthContext(auth)
     if (current !== undefined) this.expireInvite(current, afterDecryptNow)
     if (
       current !== invite
@@ -958,7 +954,7 @@ export class MemoryTeamStore implements TeamStore {
     this.inviteRevealAuditEvents.push({
       id: this.id(),
       teamId: current.teamId,
-      actorMemberId: currentOwner.id,
+      actorMemberId: currentMember.id,
       inviteId: current.id,
       createdAt: afterDecryptNow,
     })

@@ -208,6 +208,7 @@ export type TeamManagementOverview =
     })
   | (TeamManagementOverviewBase & {
       readonly viewerRole: 'member'
+      readonly invites: readonly TeamInviteSummary[]
     })
 
 export type TeamManagementDisplayNameMigrationAcknowledgement = TeamDisplayNameMigrationAcknowledgement
