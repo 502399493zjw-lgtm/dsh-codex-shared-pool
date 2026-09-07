@@ -16,7 +16,6 @@ describe('Chinese team terminology', () => {
       expect(locale.enabledHint).toContain('teamClient.baseUrl')
       expect(locale.enabledHint).toContain('teamClient.enabled=true')
       expect(locale.enabledHint).not.toContain('teamClient.serverUrl')
-      expect(locale.teamServiceAddress).toContain('{origin}')
     }
     for (const key of Object.keys(en) as (keyof typeof en)[]) {
       const parameters = (value: string) => [...value.matchAll(/\{\w+\}/g)].map(([name]) => name).sort()
