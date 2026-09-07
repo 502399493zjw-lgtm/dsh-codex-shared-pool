@@ -12,7 +12,12 @@ describe('Chinese team terminology', () => {
 
   it('preserves English copy, configuration keys, and interpolation parameters', () => {
     expect(en.workspaceTitle).toBe('Team')
-    expect(zh.enabledHint).toContain('teamClient.serverUrl')
+    for (const locale of [en, zh]) {
+      expect(locale.enabledHint).toContain('teamClient.baseUrl')
+      expect(locale.enabledHint).toContain('teamClient.enabled=true')
+      expect(locale.enabledHint).not.toContain('teamClient.serverUrl')
+      expect(locale.teamServiceAddress).toContain('{origin}')
+    }
     for (const key of Object.keys(en) as (keyof typeof en)[]) {
       const parameters = (value: string) => [...value.matchAll(/\{\w+\}/g)].map(([name]) => name).sort()
       expect(parameters(zh[key]), key).toEqual(parameters(en[key]))

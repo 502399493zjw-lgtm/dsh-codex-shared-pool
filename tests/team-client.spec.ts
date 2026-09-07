@@ -5,12 +5,77 @@ import {
   DEFAULT_TEAM_CLIENT_API_KEY_REF,
   resolveTeamClientApiKey,
   resolveTeamClientBaseUrl,
+  resolveTeamClientConfig,
+  resolveOptionalTeamClientApiKey,
+  TeamClientConfigSchema,
   teamClientResponsesUrl,
   unwrapTeamCodexBearer,
 } from '../src/team/client.ts'
 import { TEAM_PATH_PREFIX } from '../src/team/types.ts'
 
 describe('Team client Host runtime', () => {
+  it('offers cloud onboarding for an omitted configuration even after schema parsing', () => {
+    for (const input of [undefined, {}, TeamClientConfigSchema({})]) {
+      const effective = resolveTeamClientConfig(input)
+      expect(effective).toMatchObject({ automatic: true, config: {
+        enabled: true,
+        baseUrl: `https://47.84.77.193${TEAM_PATH_PREFIX}`,
+      } })
+      expect(effective.config.apiKeyRef).toMatch(/^DSH_CODEX_SHARED_POOL_CLOUD_[A-F0-9]+_API_KEY$/u)
+      expect(effective.config.apiKeyRef).not.toBe(String(DEFAULT_TEAM_CLIENT_API_KEY_REF))
+    }
+  })
+
+  it.each([
+    { enabled: false },
+    { enabled: true, baseUrl: `https://selfhost.example${TEAM_PATH_PREFIX}` },
+    { baseUrl: `http://127.0.0.1:3080${TEAM_PATH_PREFIX}` },
+    { apiKeyRef: 'CUSTOM_TEAM_KEY' },
+    { enabled: true },
+  ])('preserves explicit client configuration %j', input => {
+    const parsed = TeamClientConfigSchema(input)
+    expect(resolveTeamClientConfig(parsed)).toEqual({ config: parsed, automatic: false })
+  })
+
+  it('does not make a Team Host into a cloud client unless explicitly configured', () => {
+    expect(resolveTeamClientConfig(undefined, true)).toEqual({ config: { enabled: false }, automatic: false })
+    const explicit = { enabled: true, baseUrl: `https://selfhost.example${TEAM_PATH_PREFIX}` }
+    expect(resolveTeamClientConfig(explicit, true)).toEqual({ config: explicit, automatic: false })
+  })
+
+  it('never resolves a legacy unscoped key for implicit cloud onboarding', async () => {
+    const effective = resolveTeamClientConfig()
+    const resolve = vi.fn(async (ref: CredentialRef) => String(ref) === String(DEFAULT_TEAM_CLIENT_API_KEY_REF)
+      ? { value: 'dsh_team_legacy-key-1234567890', source: 'test' }
+      : undefined)
+    await expect(resolveOptionalTeamClientApiKey(effective.config, { resolve })).resolves.toBeUndefined()
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(effective.config.apiKeyRef)
+  })
+
+  it('automatically uses only the scoped credential and reads it again after connection changes', async () => {
+    const effective = resolveTeamClientConfig()
+    let value: string | undefined
+    const resolve = vi.fn(async () => value === undefined ? undefined : { value, source: 'test' })
+    await expect(resolveOptionalTeamClientApiKey(effective.config, { resolve })).resolves.toBeUndefined()
+    value = 'dsh_team_cloud-key-1234567890'
+    expect(unwrapTeamCodexBearer((await resolveOptionalTeamClientApiKey(effective.config, { resolve }))!)).toBe(value)
+    value = undefined
+    await expect(resolveOptionalTeamClientApiKey(effective.config, { resolve })).resolves.toBeUndefined()
+    expect(resolve).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['', ' ', 'short', 'dsh_team_bad whitespace'])('rejects a present invalid credential instead of selecting local (%j)', async value => {
+    await expect(resolveOptionalTeamClientApiKey(resolveTeamClientConfig().config, {
+      resolve: async () => ({ value, source: 'test' }),
+    })).rejects.toThrow(/invalid/u)
+  })
+
+  it('propagates credential service failures rather than treating them as an absent cloud membership', async () => {
+    await expect(resolveOptionalTeamClientApiKey(resolveTeamClientConfig().config, {
+      resolve: async () => { throw new Error('credential service unavailable') },
+    })).rejects.toThrow('credential service unavailable')
+  })
+
   it('accepts an HTTPS Team base URL and derives the Codex-native data-plane endpoint', () => {
     const baseUrl = resolveTeamClientBaseUrl(`https://pool.example.test${TEAM_PATH_PREFIX}/`)
     expect(baseUrl).toBe(`https://pool.example.test${TEAM_PATH_PREFIX}`)

@@ -75,6 +75,8 @@ import { TeamConfigSchema, type TeamConfig } from './team/config.ts'
 import {
   resolveTeamClientApiKey,
   resolveTeamClientBaseUrl,
+  resolveTeamClientConfig,
+  resolveOptionalTeamClientApiKey,
   TeamClientConfigSchema,
   type TeamClientConfig,
 } from './team/client.ts'
@@ -412,13 +414,28 @@ export function apply(ctx: Context, config: Config): void {
   const credentials = service.credentials
   const imageTools = service.policy
   const routingEvents = new LocalRoutingEventLedger()
-  const teamClient = config.teamClient?.enabled === true
+  const effectiveTeamClient = resolveTeamClientConfig(config.teamClient, config.team?.enabled === true)
+  const teamClientConfig = effectiveTeamClient.config
+  // Local-only Hosts need no DSH credential service. Once it has appeared,
+  // losing it is an error: a previously joined Team must never fall back locally.
+  let teamCredentialServiceSeen = ctx.get('credentials') !== undefined
+  if (effectiveTeamClient.automatic) {
+    ctx.inject(['credentials'], () => { teamCredentialServiceSeen = true })
+  }
+  const teamClient = teamClientConfig.enabled === true
     ? {
-        baseUrl: resolveTeamClientBaseUrl(config.teamClient.baseUrl),
+        baseUrl: resolveTeamClientBaseUrl(teamClientConfig.baseUrl),
+        useLocalWhenUnconfigured: effectiveTeamClient.automatic,
         resolveApiKey: async () => {
           const hostCredentials = ctx.get('credentials')
-          if (hostCredentials === undefined) throw new Error('DSH credential service is required for Team client mode')
-          return resolveTeamClientApiKey(config.teamClient ?? {}, hostCredentials)
+          if (hostCredentials === undefined) {
+            if (effectiveTeamClient.automatic && !teamCredentialServiceSeen) return undefined
+            throw new Error('DSH credential service is required for Team client mode')
+          }
+          teamCredentialServiceSeen = true
+          return effectiveTeamClient.automatic
+            ? resolveOptionalTeamClientApiKey(teamClientConfig, hostCredentials)
+            : resolveTeamClientApiKey(teamClientConfig, hostCredentials)
         },
       }
     : undefined
@@ -454,7 +471,7 @@ export function apply(ctx: Context, config: Config): void {
   })
   ctx.inject(['webServer', 'credentials'], (teamClientCtx) => {
     const teamClientLogger = teamClientCtx.logger('dsh-codex-shared-pool:team-client')
-    registerTeamManagementRoutes(teamClientCtx, config.teamClient ?? {}, teamClientCtx.credentials, {
+    registerTeamManagementRoutes(teamClientCtx, teamClientConfig, teamClientCtx.credentials, {
       localProfiles: credentials,
       onBackgroundError: error => {
         teamClientLogger.warn('%s', safeTeamErrorMessage(error))

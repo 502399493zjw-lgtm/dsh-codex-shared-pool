@@ -1,6 +1,7 @@
 /** Host-only Team client configuration and Codex bearer compatibility. */
 
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import { createHash } from 'node:crypto'
 import type { CredentialProvider, CredentialRef } from '@deepseek-ai/dsh-credentials'
 import z from '@deepseek-ai/schemastery'
 import { TEAM_PATH_PREFIX } from './types.ts'
@@ -26,12 +27,35 @@ export interface TeamClientConfig {
 }
 
 export const TeamClientConfigSchema: z<TeamClientConfig> = z.object({
-  enabled: z.boolean().default(false),
-  baseUrl: z.string().default(''),
-  apiKeyRef: z.string().default('DSH_CODEX_SHARED_POOL_TEAM_API_KEY'),
+  // Preserve absence so a fresh install can offer cloud onboarding without
+  // overriding an administrator's explicit disabled or self-hosted setup.
+  enabled: z.boolean(),
+  baseUrl: z.string(),
+  apiKeyRef: z.string(),
 })
 
 export const DEFAULT_TEAM_CLIENT_API_KEY_REF = credentialRef('DSH_CODEX_SHARED_POOL_TEAM_API_KEY')
+
+export const DEFAULT_CLOUD_TEAM_BASE_URL = `https://47.84.77.193${TEAM_PATH_PREFIX}`
+
+/** Resolve management and inference against one Host-owned endpoint selection. */
+export function resolveTeamClientConfig(
+  config: TeamClientConfig = {},
+  teamHostEnabled = false,
+): { config: TeamClientConfig; automatic: boolean } {
+  if (config.enabled !== undefined || config.baseUrl !== undefined || config.apiKeyRef !== undefined) {
+    return { config, automatic: false }
+  }
+  if (teamHostEnabled) return { config: { enabled: false }, automatic: false }
+  const baseUrl = resolveTeamClientBaseUrl(DEFAULT_CLOUD_TEAM_BASE_URL)
+  // Never send the old unscoped key (or replay its pending journals) to an
+  // endpoint the administrator did not explicitly associate with that key.
+  const endpointId = createHash('sha256').update(baseUrl).digest('hex').slice(0, 32).toUpperCase()
+  return {
+    automatic: true,
+    config: { enabled: true, baseUrl, apiKeyRef: `DSH_CODEX_SHARED_POOL_CLOUD_${endpointId}_API_KEY` },
+  }
+}
 
 /** Validate a Host-adminured Team endpoint before any secret can be sent to it. */
 export function resolveTeamClientBaseUrl(value: string | undefined): string {
@@ -78,6 +102,16 @@ export async function resolveTeamClientApiKey(
     throw new Error(`Team API key credential ${String(ref)} is not configured`)
   }
   return createTeamCodexBearer(value)
+}
+
+/** Only an absent cloud membership permits local routing; corrupt keys fail closed. */
+export async function resolveOptionalTeamClientApiKey(
+  config: Pick<TeamClientConfig, 'apiKeyRef'>,
+  credentials: Pick<CredentialProvider, 'resolve'>,
+): Promise<string | undefined> {
+  const ref = config.apiKeyRef === undefined ? DEFAULT_TEAM_CLIENT_API_KEY_REF : credentialRef(config.apiKeyRef)
+  const resolved = await credentials.resolve(ref)
+  return resolved === undefined ? undefined : createTeamCodexBearer(resolved.value)
 }
 
 /**

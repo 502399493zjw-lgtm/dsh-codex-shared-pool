@@ -1,5 +1,6 @@
 /** OpenAI Codex adapter assembled from public dsh-llm-pi-ai extension points. */
 
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEAM_LIMIT_REASONS_HEADER, teamLimitMessage } from './team/gateway-errors.ts'
 import { supplementCodexModels } from './codex-model-catalog.ts'
 import { createAssistantMessageEventStream, createModels, InMemoryCredentialStore } from '@earendil-works/pi-ai'
@@ -94,7 +95,15 @@ export interface OpenAICodexTeamClientAdapterOptions {
   /** Validated Team base URL ending in the plugin Team path. */
   readonly baseUrl: string
   /** Per-request Host credential resolver returning a Codex-compatible Team bearer. */
-  readonly resolveApiKey: () => Promise<string>
+  readonly resolveApiKey: () => Promise<string | undefined>
+  /** Default cloud onboarding keeps local routing until its own credential exists. */
+  readonly useLocalWhenUnconfigured?: boolean
+}
+
+interface AutomaticTeamRoute {
+  readonly adapter: PiAiAdapter
+  readonly resolveApiKey: OpenAICodexTeamClientAdapterOptions['resolveApiKey']
+  readonly credentialScope: AsyncLocalStorage<string>
 }
 
 /** Rewrite the complete static Codex model catalog to one Team gateway. */
@@ -140,6 +149,7 @@ class OpenAICodexAdapter extends PiAiAdapter {
     private readonly credentials: OpenAICodexCredentialStore,
     private readonly allocateLocalSession: boolean,
     private readonly routingEvents?: LocalRoutingEventLedger,
+    private readonly automaticTeam?: AutomaticTeamRoute,
   ) {
     super(options)
   }
@@ -153,12 +163,21 @@ class OpenAICodexAdapter extends PiAiAdapter {
   }
 
   override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
-    const prepared = await super.prepareCall(provider, model, signal)
+    const [prepared, teamPrepared] = await Promise.all([
+      super.prepareCall(provider, model, signal),
+      this.automaticTeam?.adapter.prepareCall(provider, model, signal),
+    ])
     return {
       model: this.codexModelInfo(prepared.model),
       // Retain the base adapter's frozen profile/model generation across the
-      // allocation await; calling super.stream here would capture a new one.
-      stream: options => this.streamWithRouting(options, () => prepared.stream(options)),
+      // credential and allocation awaits. Both routes are captured before the
+      // first stream; selecting Team must not prepare a fresh model snapshot.
+      stream: options => {
+        const local = () => this.streamWithRouting(options, () => prepared.stream(options))
+        return teamPrepared === undefined
+          ? local()
+          : this.streamWithTeamSelection(local, () => teamPrepared.stream(options))
+      },
     }
   }
 
@@ -180,7 +199,35 @@ class OpenAICodexAdapter extends PiAiAdapter {
   }
 
   override stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
-    return this.streamWithRouting(options, () => super.stream(options))
+    const local = () => this.streamWithRouting(options, () => super.stream(options))
+    return this.automaticTeam === undefined
+      ? local()
+      : this.streamWithTeamSelection(local, () => this.automaticTeam!.adapter.stream(options))
+  }
+
+  private async *streamWithTeamSelection(
+    local: () => AsyncIterable<StreamChunk>,
+    team: () => AsyncIterable<StreamChunk>,
+  ): AsyncIterable<StreamChunk> {
+    const route = this.automaticTeam!
+    const bearer = await route.resolveApiKey()
+    if (bearer === undefined) {
+      yield* local()
+      return
+    }
+    // pi-ai resolves auth inside its lazy iterator. Bind every advance and
+    // cleanup to this request's bearer, including overlapping streams from
+    // one prepared call. No mutable credential or route is shared between them.
+    const iterator = team()[Symbol.asyncIterator]()
+    try {
+      while (true) {
+        const next = await route.credentialScope.run(bearer, () => iterator.next())
+        if (next.done) return
+        yield next.value
+      }
+    } finally {
+      await route.credentialScope.run(bearer, () => iterator.return?.())
+    }
   }
 
   private async *streamWithRouting(
@@ -259,12 +306,29 @@ export function createOpenAICodexAdapter(
   routingEventsOverride?: LocalRoutingEventLedger,
   resolveImageAccess?: PiAiAdapterOptions['resolveImageAccess'],
 ): PiAiAdapter {
-  const teamClient = teamClientOrRoutingEvents !== undefined && 'resolveApiKey' in teamClientOrRoutingEvents
+  const requestedTeamClient = teamClientOrRoutingEvents !== undefined && 'resolveApiKey' in teamClientOrRoutingEvents
     ? teamClientOrRoutingEvents
     : undefined
-  const routingEvents = teamClient === undefined
+  const routingEvents = requestedTeamClient === undefined
     ? teamClientOrRoutingEvents as LocalRoutingEventLedger | undefined
     : routingEventsOverride
+  let automaticTeam: AutomaticTeamRoute | undefined
+  if (requestedTeamClient?.useLocalWhenUnconfigured === true) {
+    const credentialScope = new AsyncLocalStorage<string>()
+    automaticTeam = {
+      credentialScope,
+      resolveApiKey: requestedTeamClient.resolveApiKey,
+      adapter: createOpenAICodexAdapter(credentials, resolveAttachments, responsePreferences, {
+        baseUrl: requestedTeamClient.baseUrl,
+        resolveApiKey: async () => {
+          const bearer = credentialScope.getStore()
+          if (bearer === undefined) throw new Error('Team request credential scope is missing')
+          return bearer
+        },
+      }, routingEvents, resolveImageAccess),
+    }
+  }
+  const teamClient = automaticTeam === undefined ? requestedTeamClient : undefined
   const localProvider = supplementCodexModels(openaiCodexProvider())
   const provider = teamClient === undefined
     ? localProvider
@@ -313,5 +377,5 @@ export function createOpenAICodexAdapter(
         fileExists: async () => false,
       },
     },
-  }, responses, credentials, teamClient === undefined, routingEvents)
+  }, responses, credentials, teamClient === undefined, routingEvents, automaticTeam)
 }

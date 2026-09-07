@@ -50,6 +50,7 @@ import {
   TEAM_MANAGEMENT_USAGE_PATH,
 } from '../src/shared/team-management.ts'
 import type { TeamClientConfig } from '../src/team/client.ts'
+import { resolveTeamClientConfig } from '../src/team/client.ts'
 import {
   TEAM_CONNECTION_TERMINAL_PATH,
   TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH,
@@ -4985,6 +4986,56 @@ describe('local Team management routes', () => {
 })
 
 describe('anonymous Team setup through the local Host', () => {
+  it.each(['create', 'join'] as const)('supports default cloud %s without reusing or altering legacy keys and journals', async action => {
+    const config = resolveTeamClientConfig().config
+    const credentials = new FakeCredentials()
+    const legacyKey = 'dsh_team_old-local-key-1234567890'
+    credentials.value = legacyKey
+    const legacyPendingRef = `${TEAM_KEY_REF}_PENDING_JOIN`
+    const legacyPending = JSON.stringify({ version: 1, apiKey: legacyKey, inviteToken: 'dsh_invite_old-local-1234567890', displayName: 'Old' })
+    credentials.put(legacyPendingRef, legacyPending)
+    const resolve = vi.spyOn(credentials, 'resolve')
+    const describe = vi.spyOn(credentials, 'describe')
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      expect(String(input).startsWith(`${config.baseUrl}/`)).toBe(true)
+      expect(new Headers(init?.headers).get('authorization')).not.toBe(`Bearer ${legacyKey}`)
+      expect(String(init?.body)).not.toContain(legacyKey)
+      if (String(input).endsWith('/invites/preview')) return Response.json({
+        teamName: 'Friends', label: 'Cloud', expiresAt: Date.now() + 3_600_000, teamStatus: 'active',
+      })
+      if (String(input).endsWith('/create') || String(input).endsWith('/join')) {
+        expect(new Headers(init?.headers).has('authorization')).toBe(false)
+        return Response.json({ team: team(), member: member() }, { status: 201 })
+      }
+      return Response.json(overview())
+    })
+    const { routes } = setup(config, credentials, fetch)
+    const status = await response(route(routes, TEAM_MANAGEMENT_STATUS_PATH).handler, request('GET'))
+    expect(status).toMatchObject({ status: 200, body: {
+      enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
+      serverOrigin: 'https://47.84.77.193',
+    } })
+    expect(fetch).not.toHaveBeenCalled()
+    let result
+    if (action === 'create') {
+      result = await response(route(routes, '/plugins/dsh-codex-shared-pool/team-client/create').handler,
+        request('POST', { teamName: 'Friends', ownerName: 'Edison', expectedContext: null }))
+    } else {
+      const preview = await response(route(routes, TEAM_MANAGEMENT_INVITES_PREVIEW_PATH).handler,
+        request('POST', { inviteToken: 'dsh_invite_cloud-1234567890' }))
+      result = await response(route(routes, TEAM_MANAGEMENT_JOIN_PATH).handler,
+        request('POST', { joinHandle: preview.body.joinHandle, displayName: 'Edison' }))
+    }
+    expect(result.status, JSON.stringify(result.body)).toBe(201)
+    expect(JSON.stringify(result.body)).not.toMatch(/dsh_team_|dsh_invite_|API_KEY/u)
+    expect(credentials.get(config.apiKeyRef!)).toMatch(/^dsh_team_[A-Za-z0-9_-]+$/u)
+    expect(credentials.value).toBe(legacyKey)
+    expect(credentials.get(legacyPendingRef)).toBe(legacyPending)
+    expect([...resolve.mock.calls, ...describe.mock.calls].every(([ref]) => String(ref).startsWith(config.apiKeyRef!))).toBe(true)
+    expect(credentials.sets.every(({ ref }) => String(ref).startsWith(config.apiKeyRef!))).toBe(true)
+    expect(credentials.unsets.every(ref => String(ref).startsWith(config.apiKeyRef!))).toBe(true)
+  })
+
   const prefix = '/plugins/dsh-codex-shared-pool/team-client'
   const pendingRef = `${TEAM_KEY_REF}_TEAM_SETUP_PENDING`
   const config = { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }

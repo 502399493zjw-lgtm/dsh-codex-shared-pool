@@ -2876,6 +2876,81 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByText('你的成员名称已更新')).toBeNull()
   })
 
+  it('shows the destination before joining or creating a Team', async () => {
+    managementApi.status.mockResolvedValue({
+      enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
+      serverOrigin: 'https://team.example.test',
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+
+    expect(await screen.findByText('团队服务地址：https://team.example.test')).toBeDefined()
+    expect(screen.getByRole('button', { name: zh.previewInvitation })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: zh.createTeam }))
+    expect(await screen.findByLabelText(zh.newTeamName)).toBeDefined()
+    expect(screen.getByText('团队服务地址：https://team.example.test')).toBeDefined()
+    expect(managementApi.overview).not.toHaveBeenCalled()
+  })
+
+  it.each(['http://127.0.0.1:3080', 'http://localhost:3080', 'http://[::1]:3080'])(
+    'explains that unavailable loopback destination %s needs its local service and preserves the connection on retry',
+    async serverOrigin => {
+      managementApi.status.mockResolvedValue({
+        enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false, serverOrigin,
+      })
+      managementApi.overview.mockRejectedValue(Object.assign(new Error('fetch failed'), { status: 502 }))
+
+      render(<TeamSettings t={translate} embedded />)
+
+      expect(await screen.findByText('团队服务暂时不可用')).toBeDefined()
+      expect(screen.getByText(`团队服务地址：${serverOrigin}`)).toBeDefined()
+      expect(screen.getByText(/这是当前 DSH 所在电脑上的本机服务/u)).toBeDefined()
+      expect(screen.getByText(/teamClient\.baseUrl/u)).toBeDefined()
+      expect(screen.getByText(/创建新团队无法修复连接/u)).toBeDefined()
+      expect(screen.getByText(/本地团队密钥仍然保留/u)).toBeDefined()
+      expect(screen.queryByRole('button', { name: zh.clearLocalConnection })).toBeNull()
+      expect(screen.queryByRole('button', { name: zh.createTeam })).toBeNull()
+
+      managementApi.overview.mockResolvedValue(overviewState)
+      fireEvent.click(screen.getByRole('button', { name: zh.retry }))
+
+      expect(await screen.findByRole('region', { name: zh.teamPanelTitle })).toBeDefined()
+      expect(managementApi.overview).toHaveBeenCalledTimes(2)
+      expect(managementApi.disconnect).not.toHaveBeenCalled()
+      expect(managementApi.join).not.toHaveBeenCalled()
+      expect(managementApi.createTeam).not.toHaveBeenCalled()
+    },
+  )
+
+  it('shows the remote destination and connection checks without suggesting replacement membership', async () => {
+    managementApi.overview.mockRejectedValue(Object.assign(new Error('fetch failed'), { status: 502 }))
+
+    render(<TeamSettings t={translate} embedded />)
+
+    expect(await screen.findByText('团队服务暂时不可用')).toBeDefined()
+    expect(screen.getByText('团队服务地址：https://team.example.test')).toBeDefined()
+    expect(screen.getByText(/检查当前 DSH 的网络、代理和团队服务地址/u)).toBeDefined()
+    expect(screen.getByText(/创建新团队无法修复连接/u)).toBeDefined()
+    expect(screen.getByText(/本地团队密钥仍然保留/u)).toBeDefined()
+    expect(screen.queryByText(/这是当前 DSH 所在电脑上的本机服务/u)).toBeNull()
+    expect(screen.queryByText('fetch failed')).toBeNull()
+    expect(screen.queryByRole('button', { name: zh.clearLocalConnection })).toBeNull()
+    expect(screen.queryByRole('button', { name: zh.previewInvitation })).toBeNull()
+    expect(screen.getByRole('button', { name: zh.retry })).toBeDefined()
+  })
+
+  it('explains the explicit Host settings when Team sharing is disabled', async () => {
+    managementApi.status.mockResolvedValue({
+      enabled: false, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+
+    expect(await screen.findByText(/teamClient\.enabled=true/u)).toBeDefined()
+    expect(screen.getByText(/teamClient\.baseUrl/u)).toBeDefined()
+    expect(screen.queryByText(/teamClient\.serverUrl/u)).toBeNull()
+  })
+
   it('previews invitation identity before joining and never joins on preview', async () => {
     managementApi.status.mockResolvedValue({
       enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
@@ -2931,7 +3006,7 @@ describe('Team subscription-pool workspace', () => {
     await waitFor(() => { expect(managementApi.recoverJoin).toHaveBeenCalledTimes(1) })
   })
 
-  it('keeps a configured but invalid Team key out of onboarding and lets the user clear it locally', async () => {
+  it.each([401, 404])('keeps a configured but invalid Team key (%s) out of onboarding and lets the user clear it locally', async status => {
     managementApi.status.mockResolvedValue({
       enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false,
       serverOrigin: 'https://team.example.test',
@@ -2943,7 +3018,7 @@ describe('Team subscription-pool workspace', () => {
       })
       return { ok: true, remoteRevoked: false }
     })
-    managementApi.overview.mockRejectedValue(Object.assign(new Error('Team API key is revoked'), { status: 401 }))
+    managementApi.overview.mockRejectedValue(Object.assign(new Error('Team API key is revoked'), { status }))
 
     render(<TeamSettings t={translate} embedded />)
 

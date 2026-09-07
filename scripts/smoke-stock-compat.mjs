@@ -20,7 +20,8 @@ const DSH_ENTRY_SHA256 = 'dc23f6c5dd7df8834e3e38bdb9609d77b459834681ae9b7133b417
 const RELEASE_SOURCE = 'https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.2-rc.1.tgz'
 const OWNER = 'dsh-codex-shared-pool-stock-smoke'
 const MARKER = '.stock-smoke-owner.json'
-const ROUTES = ['auth/status', 'profiles', 'quota'].map(path => `/plugins/dsh-openai-codex/${path}`)
+const TEAM_STATUS_PATH = `/plugins/${PLUGIN}/team-client/status`
+const ROUTES = [...['auth/status', 'profiles', 'quota'].map(path => `/plugins/dsh-openai-codex/${path}`), TEAM_STATUS_PATH]
 
 /** Use the stock launch-token exchange; keep both token and session cookie in memory. */
 export async function authenticateStockWeb(baseUrl, launchUrl, fetcher = fetch) {
@@ -51,7 +52,10 @@ export async function authenticateStockWeb(baseUrl, launchUrl, fetcher = fetch) 
 async function readResponse(baseUrl, path, fetcher) {
   const url = new URL(path, baseUrl)
   assert.equal(url.origin, new URL(baseUrl).origin, 'smoke probes must stay same-origin')
-  const response = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(10_000) })
+  const response = await fetcher(url, {
+    redirect: 'error', signal: AbortSignal.timeout(10_000),
+    headers: { origin: url.origin, 'sec-fetch-site': 'same-origin' },
+  })
   assert.equal(response.status, 200, `${url.pathname} returned HTTP ${response.status}`)
   return response.text()
 }
@@ -91,6 +95,14 @@ export async function probeStockPlugin(baseUrl, fetcher = fetch) {
     const body = await readResponse(baseUrl, route, fetcher)
     assert.doesNotMatch(body, /refresh_token|access_token|client_secret|"authorization"/iu, `${route} exposed credential fields`)
     assert.doesNotThrow(() => JSON.parse(body), `${route} did not return JSON`)
+    if (route === TEAM_STATUS_PATH) {
+      const status = JSON.parse(body)
+      assert.equal(status.enabled, true, 'fresh install must offer Team onboarding')
+      assert.equal(status.keyConfigured, false, 'fresh install must not inherit a Team key')
+      assert.equal(status.keyWritable, true, 'fresh install must be able to store a Team membership')
+      assert.equal(status.pendingJoinConfigured, false, 'fresh install must not inherit a pending Team join')
+      assert.equal(status.serverOrigin, 'https://47.84.77.193', 'fresh install must select the public cloud Team endpoint')
+    }
   }
   return { plugin: PLUGIN, routes: ROUTES.length, bundle: entry.url }
 }
