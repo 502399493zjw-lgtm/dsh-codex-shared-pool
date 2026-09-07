@@ -3629,10 +3629,13 @@
   line-height: 20px;
 }
 
-.joinForm .input::placeholder { color: var(--team-muted); opacity: 1; }
-.joinForm .input[aria-invalid='true'] { border-color: var(--team-red); }
+.joinForm .input input { color: inherit; font: inherit; }
+.joinForm .input input::placeholder { color: var(--team-muted); opacity: 1; }
+.joinForm .input:has(input[aria-invalid='true']) { border-color: var(--team-red); }
 
-.joinForm .input:focus-visible,
+.joinForm .input:focus-within,
+.page .joinPrimaryAction:focus-visible,
+.page .joinCreateAction:focus-visible,
 .joinConnectionDetails summary:focus-visible {
   outline: 2px solid var(--team-blue);
   outline-offset: 3px;
@@ -3720,7 +3723,7 @@
 
 .joinConnectionDetails summary:hover { color: var(--team-ink); }
 .joinConnectionDetails[open] summary { margin-bottom: 10px; }
-.joinConnectionDetails .body { margin-top: 6px; overflow-wrap: anywhere; font-size: 12px; }
+.joinConnectionDetails .hint { font-size: 12px; line-height: 20px; }
 
 @container team-settings (max-width: 560px) {
   .joinHeader { flex-direction: column; gap: 14px; }
