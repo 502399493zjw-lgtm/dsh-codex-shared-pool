@@ -4167,6 +4167,207 @@ describe('local Team management routes', () => {
     expect(credentials.unsets).toHaveLength(0)
   })
 
+  describe('saved Team cleanup after a terminal membership', () => {
+    const savedRef = `${TEAM_KEY_REF}_SAVED_CONNECTIONS`
+    const oldKey = 'dsh_team_departed-member-secret-1234567890'
+    const replacementKey = 'dsh_team_replacement-member-secret-1234567890'
+    const otherKey = 'dsh_team_other-member-secret-1234567890'
+    const config = { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }
+    const terminalKinds = [
+      { name: 'dissolution', marker: DISSOLUTION_TERMINAL_REF, digest: DISSOLUTION_KEY_DIGEST_REF,
+        path: TEAM_MANAGEMENT_DISSOLUTION_CLEAR_PATH, terminal: { version: 2, state: 'confirmed' },
+        result: { state: 'confirmed' } },
+      { name: 'departure', marker: CONNECTION_TERMINAL_REF, digest: CONNECTION_TERMINAL_KEY_DIGEST_REF,
+        path: TEAM_MANAGEMENT_CONNECTION_TERMINAL_CLEAR_PATH, terminal: { version: 1, code: 'member_left' },
+        result: { code: 'member_left' } },
+    ]
+    function savedFixture() {
+      const credentials = new FakeCredentials()
+      credentials.value = oldKey
+      const saved = [oldKey, replacementKey, otherKey].map((apiKey, index) => ({
+        id: `saved-${index}`, serverUrl: config.baseUrl, teamId: `team-${index}`,
+        teamName: `Saved Team ${index}`, currentMemberId: `member-${index}`, memberName: `Member ${index}`, apiKey,
+      }))
+      credentials.put(savedRef, JSON.stringify({ version: 1, connections: saved }))
+      return { credentials, saved }
+    }
+    function savedEntries(credentials: FakeCredentials) {
+      return (JSON.parse(credentials.get(savedRef)!) as { connections: unknown[] }).connections
+    }
+
+    it.each(terminalKinds)('removes only the bound saved key after $name even when the active key is absent or replaced', async kind => {
+      for (const activeKey of [undefined, replacementKey]) {
+        const { credentials, saved } = savedFixture()
+        credentials.value = activeKey
+        credentials.put(kind.marker, JSON.stringify({ ...kind.terminal, localCleanup: 'retry_required' }))
+        credentials.put(kind.digest, JSON.stringify({ version: 1, keySha256: createHash('sha256').update(oldKey).digest('hex') }))
+        const { routes, fetch } = setup(config, credentials)
+
+        const result = await response(route(routes, kind.path).handler, request('POST', {}))
+
+        expect(result).toMatchObject({ status: 200, body: { ...kind.result, localCleanup: 'completed' } })
+        expect(savedEntries(credentials)).toEqual(saved.slice(1))
+        expect(credentials.value).toBe(activeKey)
+        expect(fetch).not.toHaveBeenCalled()
+      }
+    })
+
+    it('does not overwrite a newly saved Team while terminal cleanup is writing the saved vault', async () => {
+      const { credentials, saved } = savedFixture()
+      credentials.put(savedRef, JSON.stringify({ version: 1, connections: [saved[0], saved[2]] }))
+      const oldOverview = Promise.withResolvers<Response>()
+      const oldOverviewStarted = Promise.withResolvers<void>()
+      const switchingOverview = Promise.withResolvers<Response>()
+      const switchingOverviewStarted = Promise.withResolvers<void>()
+      const cleanupStarted = Promise.withResolvers<void>()
+      const finishCleanup = Promise.withResolvers<void>()
+      const originalSet = credentials.set.bind(credentials)
+      let heldCleanup = false
+      vi.spyOn(credentials, 'set').mockImplementation(async (ref, value) => {
+        if (String(ref) === savedRef && !value.includes(oldKey) && !value.includes(replacementKey) && !heldCleanup) {
+          heldCleanup = true
+          cleanupStarted.resolve()
+          await finishCleanup.promise
+        }
+        await originalSet(ref, value)
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        const key = new Headers(init?.headers).get('authorization')
+        if (String(input).endsWith(TEAM_CONNECTION_TERMINAL_PATH)) {
+          return Response.json({ code: 'member_left' }, { status: 410 })
+        }
+        if (key === `Bearer ${oldKey}`) {
+          oldOverviewStarted.resolve()
+          return oldOverview.promise
+        }
+        if (key === `Bearer ${replacementKey}`) {
+          switchingOverviewStarted.resolve()
+          return switchingOverview.promise
+        }
+        const otherTeam = { ...team(), id: 'team-2' }
+        const otherMember = { ...member(), id: 'member-2', teamId: 'team-2' }
+        return Response.json(overview({ team: otherTeam, currentMember: otherMember, members: [otherMember], apiKeys: [] }))
+      })
+      const { routes } = setup(config, credentials, fetch)
+      const diagnosing = response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+      await oldOverviewStarted.promise
+      // An older overview can finish after another tab has replaced the active key.
+      credentials.value = replacementKey
+      const switching = response(route(routes, '/plugins/dsh-codex-shared-pool/team-client/connections/switch').handler,
+        request('POST', { connectionId: 'saved-2', expectedContext: EXPECTED_CONTEXT }))
+      await switchingOverviewStarted.promise
+      oldOverview.resolve(Response.json({ error: 'unauthorized' }, { status: 401 }))
+      await cleanupStarted.promise
+      switchingOverview.resolve(Response.json(overview()))
+      // Let the switch reach its saved-vault mutation before releasing cleanup.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      finishCleanup.resolve()
+
+      expect(await diagnosing).toMatchObject({ status: 410 })
+      expect(await switching).toMatchObject({ status: 200 })
+      expect(savedEntries(credentials)).toEqual(expect.arrayContaining([
+        expect.objectContaining({ apiKey: replacementKey }),
+        expect.objectContaining({ apiKey: otherKey }),
+      ]))
+      expect(credentials.get(savedRef)).not.toContain(oldKey)
+      expect(credentials.value).toBe(otherKey)
+    })
+
+    it.each(terminalKinds)('retains a retryable $name marker when saving the pruned connections fails', async kind => {
+      const { credentials, saved } = savedFixture()
+      credentials.put(kind.marker, JSON.stringify({ ...kind.terminal, localCleanup: 'retry_required' }))
+      credentials.put(kind.digest, JSON.stringify({ version: 1, keySha256: createHash('sha256').update(oldKey).digest('hex') }))
+      const originalSet = credentials.set.bind(credentials)
+      let failed = false
+      vi.spyOn(credentials, 'set').mockImplementation(async (ref, value) => {
+        if (String(ref) === savedRef && !failed) {
+          failed = true
+          throw new Error('keychain temporarily unavailable')
+        }
+        await originalSet(ref, value)
+      })
+      const { routes, fetch } = setup(config, credentials)
+
+      expect(await response(route(routes, kind.path).handler, request('POST', {})))
+        .toMatchObject({ status: 200, body: { ...kind.result, localCleanup: 'retry_required' } })
+      expect(savedEntries(credentials)).toEqual(saved)
+      expect(credentials.value).toBe(oldKey)
+      expect(credentials.get(kind.digest)).toBeDefined()
+
+      expect(await response(route(routes, kind.path).handler, request('POST', {})))
+        .toMatchObject({ status: 200, body: { ...kind.result, localCleanup: 'completed' } })
+      expect(savedEntries(credentials)).toEqual(saved.slice(1))
+      expect(credentials.value).toBeUndefined()
+      expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it.each(terminalKinds)('reports a read-only saved vault during $name cleanup and recovers when writable', async kind => {
+      const { credentials, saved } = savedFixture()
+      credentials.put(kind.marker, JSON.stringify({ ...kind.terminal, localCleanup: 'retry_required' }))
+      credentials.put(kind.digest, JSON.stringify({ version: 1, keySha256: createHash('sha256').update(oldKey).digest('hex') }))
+      credentials.readonlyRefs.add(savedRef)
+      const { routes } = setup(config, credentials)
+
+      expect(await response(route(routes, kind.path).handler, request('POST', {})))
+        .toMatchObject({ status: 200, body: { ...kind.result, localCleanup: 'manual_required' } })
+      expect(savedEntries(credentials)).toEqual(saved)
+      expect(credentials.value).toBe(oldKey)
+
+      credentials.readonlyRefs.delete(savedRef)
+      expect(await response(route(routes, kind.path).handler, request('POST', {})))
+        .toMatchObject({ status: 200, body: { ...kind.result, localCleanup: 'completed' } })
+      expect(savedEntries(credentials)).toEqual(saved.slice(1))
+      expect(credentials.value).toBeUndefined()
+    })
+
+    it.each(['member_left', 'member_removed', 'device_revoked', 'team_dissolved'] as const)(
+      'removes the saved connection when the server diagnoses %s', async code => {
+        const { credentials, saved } = savedFixture()
+        const fetch = vi.fn<typeof globalThis.fetch>()
+          .mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
+          .mockResolvedValueOnce(Response.json({ code }, { status: 410 }))
+        const { routes } = setup(config, credentials, fetch)
+
+        expect(await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET')))
+          .toMatchObject({ status: 410 })
+        expect(savedEntries(credentials)).toEqual(saved.slice(1))
+        expect(credentials.value).toBeUndefined()
+      },
+    )
+
+    it('removes the saved connection immediately after a confirmed dissolution', async () => {
+      const { credentials, saved } = savedFixture()
+      const fetch = withOverviewPreflight(vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        if (String(input).endsWith(TEAM_DISSOLVE_PATH)) {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+          return Response.json(dissolutionResult(String(body.operationId)))
+        }
+        return Response.json({ ok: true })
+      }))
+      const { routes } = setup(config, credentials, fetch)
+
+      expect(await response(route(routes, TEAM_MANAGEMENT_DISSOLVE_PATH).handler, request('POST', withExpectedContext({
+        confirmationName: 'Friends', expectedLifecycleRevision: 7,
+      }))))
+        .toMatchObject({ status: 200, body: { state: 'confirmed', localCleanup: 'completed' } })
+      expect(savedEntries(credentials)).toEqual(saved.slice(1))
+      expect(credentials.value).toBeUndefined()
+    })
+
+    it('removes the saved connection immediately after leaving the Team', async () => {
+      const { credentials, saved } = savedFixture()
+      const fetch = withOverviewPreflight(vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({
+        member: { ...member(), role: 'member', status: 'removed' },
+      })))
+      const { routes } = setup(config, credentials, fetch)
+
+      expect(await response(route(routes, TEAM_MANAGEMENT_LEAVE_PATH).handler, request('POST', withExpectedContext({}))))
+        .toMatchObject({ status: 200 })
+      expect(savedEntries(credentials)).toEqual(saved.slice(1))
+      expect(credentials.value).toBeUndefined()
+    })
+  })
+
   it('diagnoses a dissolved Team after an old key receives 401 and persists a secret-free local terminal', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_old-owner-secret-1234567890'
@@ -5193,11 +5394,16 @@ describe('saved Team connections', () => {
   function fixture() {
     const credentials = new FakeCredentials()
     credentials.value = oldKey
+    const terminalResponses = new Map<string, () => Response | Promise<Response>>()
     let rejectOther = false
     let failJoin = false
     let joinedKey: string | undefined
     const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
       const path = String(input)
+      if (path.endsWith(TEAM_CONNECTION_TERMINAL_PATH)) {
+        const key = new Headers(init?.headers).get('authorization')!.slice('Bearer '.length)
+        return terminalResponses.get(key)?.() ?? Response.json({ error: 'unauthorized' }, { status: 401 })
+      }
       if (path.endsWith('/invites/preview')) return Response.json({ teamName: 'Other Team', label: 'test', expiresAt: Date.now() + 60_000, teamStatus: 'active' })
       if (path.endsWith('/join')) {
         joinedKey = JSON.parse(String(init?.body)).apiKey as string
@@ -5216,8 +5422,86 @@ describe('saved Team connections', () => {
       const preview = await call(TEAM_MANAGEMENT_INVITES_PREVIEW_PATH, { inviteToken: 'dsh_invite_test-1234567890' })
       return call(TEAM_MANAGEMENT_JOIN_PATH, { joinHandle: preview.body.joinHandle, displayName: 'Edison', expectedContext: EXPECTED_CONTEXT })
     }
-    return { ...env, call, joinOther, rejectOther: () => { rejectOther = true }, failJoin: () => { failJoin = true }, joinedKey: () => joinedKey }
+    return { ...env, call, joinOther, terminalResponses, rejectOther: () => { rejectOther = true }, failJoin: () => { failJoin = true }, joinedKey: () => joinedKey }
   }
+
+  it.each(['team_dissolved', 'member_left', 'member_removed', 'device_revoked'])(
+    'prunes a saved %s connection on listing without terminating the active Team', async code => {
+      const env = fixture()
+      expect((await env.joinOther()).status).toBe(201)
+      const activeKey = env.credentials.value
+      env.terminalResponses.set(oldKey, () => Response.json({ code }, { status: 410 }))
+
+      const listed = await env.call(connectionsPath)
+
+      expect(listed).toMatchObject({ status: 200, body: { connections: [] } })
+      expect(env.credentials.get(`${TEAM_KEY_REF}_SAVED_CONNECTIONS`)).not.toContain(oldKey)
+      expect(env.credentials.value).toBe(activeKey)
+      expect(env.credentials.get(CONNECTION_TERMINAL_REF)).toBeUndefined()
+      expect(env.credentials.get(DISSOLUTION_TERMINAL_REF)).toBeUndefined()
+      expect(JSON.stringify(listed.body)).not.toMatch(/dsh_team_|apiKey|tokenHash/)
+
+      const restarted = setup(config, env.credentials, env.fetch)
+      expect((await response(route(restarted.routes, connectionsPath).handler, request('GET'))).body.connections)
+        .toEqual([])
+    },
+  )
+
+  it.each(['network', '401', '404', '503', 'malformed-terminal'])(
+    'retains saved Teams when %s does not prove a terminal connection', async failure => {
+      const env = fixture()
+      await env.joinOther()
+      const original = env.credentials.get(`${TEAM_KEY_REF}_SAVED_CONNECTIONS`)
+      env.terminalResponses.set(oldKey, () => {
+        if (failure === 'network') throw new Error('network interrupted')
+        return Response.json({ error: 'unavailable' }, { status: failure === 'malformed-terminal' ? 410 : Number(failure) })
+      })
+      const listed = await env.call(connectionsPath)
+      expect(listed.status).toBe(200)
+      expect(listed.body.connections).toHaveLength(1)
+      expect(env.credentials.get(`${TEAM_KEY_REF}_SAVED_CONNECTIONS`)).toBe(original)
+    },
+  )
+
+  it('does not probe saved credentials belonging to another server', async () => {
+    const env = fixture()
+    await env.joinOther()
+    const otherServer = setup({ ...config, baseUrl: 'https://other.example/plugins/dsh-codex-shared-pool/team' }, env.credentials, env.fetch)
+    env.fetch.mockClear()
+    expect((await response(route(otherServer.routes, connectionsPath).handler, request('GET'))).body.connections).toEqual([])
+    expect(env.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each(['readonly', 'write-failure'])('hides terminal entries when the saved vault has a %s and retries persistence later', async failure => {
+    const env = fixture()
+    await env.joinOther()
+    env.terminalResponses.set(oldKey, () => Response.json({ code: 'member_left' }, { status: 410 }))
+    const savedRef = `${TEAM_KEY_REF}_SAVED_CONNECTIONS`
+    if (failure === 'readonly') env.credentials.readonlyRefs.add(savedRef)
+    const set = vi.spyOn(env.credentials, 'set')
+    if (failure === 'write-failure') set.mockRejectedValueOnce(new Error('storage unavailable'))
+
+    expect((await env.call(connectionsPath)).body.connections).toEqual([])
+    expect(env.credentials.get(savedRef)).toContain(oldKey)
+    env.credentials.readonlyRefs.delete(savedRef)
+    expect((await env.call(connectionsPath)).body.connections).toEqual([])
+    expect(env.credentials.get(savedRef)).not.toContain(oldKey)
+  })
+
+  it('preserves other saved identities and the active key while pruning a departed Team', async () => {
+    const env = fixture()
+    await env.joinOther()
+    const activeKey = env.credentials.value
+    const first = ((await env.call(connectionsPath)).body.connections as Array<{ id: string }>)[0]!
+    expect((await env.call(switchPath, { connectionId: first.id, expectedContext: otherContext })).status).toBe(200)
+    const second = ((await env.call(connectionsPath)).body.connections as Array<{ id: string; teamId: string }>).find(item => item.teamId === 'team-2')!
+    expect((await env.call(switchPath, { connectionId: second.id, expectedContext: EXPECTED_CONTEXT })).status).toBe(200)
+    env.terminalResponses.set(oldKey, () => Response.json({ code: 'team_dissolved' }, { status: 410 }))
+
+    expect((await env.call(connectionsPath)).body.connections).toEqual([expect.objectContaining({ teamId: 'team-2' })])
+    expect(env.credentials.value).toBe(activeKey)
+    expect(env.credentials.get(`${TEAM_KEY_REF}_SAVED_CONNECTIONS`)).toContain(activeKey)
+  })
 
   it('joins another Team, survives restart, and switches back without revoking anything or exposing keys', async () => {
     const env = fixture()

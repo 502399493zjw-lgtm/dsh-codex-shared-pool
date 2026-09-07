@@ -27,25 +27,44 @@ export function TeamConnections({ api, t, expectedContext, disabled, teamName, m
   const [switching, setSwitching] = useState(false)
   const [connections, setConnections] = useState<readonly TeamSavedConnection[]>([])
   const [error, setError] = useState<string>()
+  const requestGeneration = useRef(0)
   const contextKey = JSON.stringify(expectedContext)
-  useEffect(() => { setOpen(false) }, [contextKey])
+  useEffect(() => {
+    setOpen(false); setConnections([]); setLoading(false); setError(undefined)
+    return () => { requestGeneration.current += 1 }
+  }, [contextKey])
   const others = connections.filter(item => item.teamId !== expectedContext?.teamId || item.currentMemberId !== expectedContext?.currentMemberId)
+  const loadConnections = async () => {
+    const generation = ++requestGeneration.current
+    setConnections([]); setLoading(true)
+    try {
+      const saved = await api.connections()
+      if (generation === requestGeneration.current) setConnections(saved)
+    } catch {
+      if (generation === requestGeneration.current) setError(t('requestFailed'))
+    } finally {
+      if (generation === requestGeneration.current) setLoading(false)
+    }
+  }
   const show = async () => {
     if (open) { setOpen(false); return }
     setOpenedContext(expectedContext)
-    setOpen(true); setLoading(true); setError(undefined)
-    try { setConnections(await api.connections()) }
-    catch { setError(t('requestFailed')) }
-    finally { setLoading(false) }
+    setOpen(true); setError(undefined)
+    await loadConnections()
   }
   const select = async (id: string) => {
+    const generation = requestGeneration.current
     setSwitching(true); setError(undefined)
     try {
       await api.switchConnection(id, openedContext)
       setOpen(false)
       await onChanged()
     } catch {
-      setError(t('requestFailed'))
+      if (generation === requestGeneration.current) {
+        setError(t('requestFailed'))
+        // The Host may have removed an ended membership while attempting the switch.
+        await loadConnections()
+      }
     } finally { setSwitching(false) }
   }
   return <span ref={anchorRef} className={styles.teamSelector}>
