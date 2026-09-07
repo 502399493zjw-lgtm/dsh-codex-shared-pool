@@ -112,7 +112,7 @@ describe('local account quota presentation', () => {
     expect(within(quotas).getByText(t('exactRemaining', { remaining: 50, limit: 200 }))).toBeDefined()
   })
 
-  it.each([en, zh])('labels each reset in the UI language and handles missing or elapsed instants without changing quota', async locale => {
+  it.each([en, zh])('shows localized reset times only for Codex while preserving all quota bars', async locale => {
     const now = new Date(2030, 0, 10, 12, 0).getTime()
     vi.spyOn(Date, 'now').mockReturnValue(now)
     const fiveHourReset = new Date(2030, 0, 10, 17, 5).getTime()
@@ -123,6 +123,11 @@ describe('local account quota presentation', () => {
           { windowSeconds: 18000, remainingPercent: 80, resetsAt: fiveHourReset },
           { windowSeconds: 604800, remainingPercent: 37.5, resetsAt: weeklyReset },
         ] },
+        { id: 'codex_spark', name: 'GPT-5.3-Codex-Spark', windows: [
+          { windowSeconds: 18000, remainingPercent: 100, resetsAt: fiveHourReset },
+          { windowSeconds: 604800, remainingPercent: 100, resetsAt: weeklyReset },
+        ] },
+        { id: 'other', name: 'Codex', windows: [{ windowSeconds: 18000, remainingPercent: 75, resetsAt: weeklyReset }] },
         { id: 'missing', windows: [{ windowSeconds: 18000, remainingPercent: 60 }] },
         { id: 'invalid', windows: [{ windowSeconds: 18000, remainingPercent: 50, resetsAt: 9e15 }] },
         { id: 'elapsed', windows: [{ windowSeconds: 18000, remainingPercent: 0, resetsAt: now - 1 }] },
@@ -146,9 +151,38 @@ describe('local account quota presentation', () => {
     const codexBars = within(quotas).getAllByRole('progressbar').slice(0, 2)
     expect(codexBars.map(bar => bar.getAttribute('aria-label'))).toEqual([locale.fiveHourLimit, locale.weeklyLimit])
     expect(codexBars.map(bar => document.getElementById(bar.getAttribute('aria-describedby')!)?.textContent)).toEqual([fiveHour.textContent, weekly.textContent])
-    expect(within(quotas).getAllByText(locale === en ? 'Reset time unavailable' : '重置时间未知')).toHaveLength(2)
-    expect(within(quotas).getAllByText(locale === en ? 'Reset time passed; awaiting update' : '重置时间已过，等待更新')).toHaveLength(2)
-    expect(within(quotas).getAllByRole('progressbar').map(bar => bar.getAttribute('aria-valuenow'))).toEqual(['80', '37.5', '60', '50', '0', '10'])
+    expect(quotas.querySelectorAll('time')).toHaveLength(2)
+    expect(within(quotas).queryByText(locale.quotaResetUnknown)).toBeNull()
+    expect(within(quotas).queryByText(locale.quotaResetPending)).toBeNull()
+    const bars = within(quotas).getAllByRole('progressbar')
+    expect(bars.slice(2).every(bar => !bar.hasAttribute('aria-describedby'))).toBe(true)
+    expect(bars.map(bar => bar.getAttribute('aria-valuenow'))).toEqual(['80', '37.5', '100', '100', '75', '60', '50', '0', '10'])
+  })
+
+  it.each([en, zh].flatMap(locale => [
+    { locale, reset: undefined, expected: locale.quotaResetUnknown },
+    { locale, reset: null, expected: locale.quotaResetUnknown },
+    { locale, reset: 9e15, expected: locale.quotaResetUnknown },
+    { locale, reset: 0, expected: locale.quotaResetPending },
+    { locale, reset: 1, expected: locale.quotaResetPending },
+  ]))('keeps Codex reset fallback text accessible for $reset', async ({ locale, reset, expected }) => {
+    vi.spyOn(Date, 'now').mockReturnValue(1)
+    const profile = { id: 'sample', label: 'Sample account', createdAt: 1, updatedAt: 1, usage: {
+      rateLimits: [{ id: 'codex', windows: [{ windowSeconds: 18000, remainingPercent: 60, resetsAt: reset }] }],
+    } }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = requestPath(input)
+      if (path.endsWith('/profiles') || path.endsWith('/profiles/directory')) return response({ status: 'ready', profiles: [profile] })
+      if (path.endsWith('/routing-events')) return response({ events: [] })
+      return response({})
+    }))
+    render(<OpenAICodexSettings t={key => locale[key]} />)
+    const quotas = await screen.findByRole('region', { name: locale.modelQuotas })
+    expect(within(quotas).getByText(expected)).toBeDefined()
+    const bar = within(quotas).getByRole('progressbar')
+    expect(document.getElementById(bar.getAttribute('aria-describedby')!)?.textContent).toBe(expected)
+    expect(bar.getAttribute('aria-valuenow')).toBe('60')
+    expect(quotas.querySelector('time')).toBeNull()
   })
 
   it.each([en, zh])('leads account choices with recognizable names, followed by priority and readable status', async locale => {
