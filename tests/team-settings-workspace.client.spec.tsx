@@ -1807,6 +1807,84 @@ describe('Team subscription-pool workspace', () => {
     expect(within(details).queryByRole('button', { name: zh.recentRequests })).toBeNull()
   })
 
+  it.each(['member', 'owner'])('shows shared account day usage and seven-day requests to a non-contributor %s', async (role) => {
+    overviewState = {
+      ...overviewState,
+      viewerRole: role,
+      currentMember: { ...overviewState.currentMember, role },
+      contributions: [],
+      activeSharedAccounts: [friend],
+    }
+    managementApi.usage.mockResolvedValue({
+      role,
+      window: completeOwnerUsage.window,
+      currency: 'USD',
+      mine: completeOwnerUsage.mine,
+      ...(role === 'owner' ? { team: completeOwnerUsage.team } : {}),
+      ownedAccounts: [],
+      sharedAccounts: [{
+        accountId: friend.id,
+        window: { startedAt: NOW - 7 * 86_400_000, endedAt: NOW },
+        aggregate: { requestCount: 3, tokenMeasuredRequestCount: 3, pricedRequestCount: 3, totalTokens: '7200', estimatedCostUsdMicros: '95000' },
+        last24Hours: {
+          window: completeOwnerUsage.window,
+          aggregate: { requestCount: 2, tokenMeasuredRequestCount: 2, pricedRequestCount: 2, totalTokens: '4800', estimatedCostUsdMicros: '63000' },
+        },
+        recentRequests: [{
+          id: 'shared-recent', consumerDisplayName: 'Mia', model: 'gpt-5-codex',
+          status: 'succeeded', startedAt: NOW - 2 * 86_400_000, totalTokens: 2500,
+        }],
+      }],
+    })
+
+    render(<TeamSettings t={translate} embedded />)
+    const account = (await screen.findByRole('heading', { name: friend.label })).closest('article')!
+    const recentUsage = await within(account).findByRole('region', { name: zh.recentUsageRegionLabel })
+    expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
+      && /^2 次请求，约 US\$0\.06$/u.test(element.textContent ?? ''))).toBeDefined()
+    expect(within(account).queryByRole('button', { name: zh.editSharingLimit })).toBeNull()
+    expect(within(account).queryByRole('button', { name: zh.revokeContribution })).toBeNull()
+    fireEvent.click(within(recentUsage).getByRole('button', { name: zh.viewSevenDays }))
+    const recent = screen.getByRole('dialog', { name: `近期请求 · ${friend.label}` })
+    expect(within(recent).getByText('gpt-5-codex')).toBeDefined()
+    expect(within(recent).getByText('消耗人：Mia')).toBeDefined()
+    expect(within(recent).getByText('2,500 tokens')).toBeDefined()
+    expect(within(recent).getByText(zh.succeeded)).toBeDefined()
+  })
+
+  it('shows zero shared requests and an available empty seven-day history', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [friend] }
+    const aggregate = { requestCount: 0, tokenMeasuredRequestCount: 0, pricedRequestCount: 0, totalTokens: '0', estimatedCostUsdMicros: '0' }
+    managementApi.usage.mockResolvedValue({
+      ...completeOwnerUsage,
+      sharedAccounts: [{
+        accountId: friend.id,
+        window: { startedAt: NOW - 7 * 86_400_000, endedAt: NOW },
+        aggregate,
+        last24Hours: { window: completeOwnerUsage.window, aggregate },
+        recentRequests: [],
+      }],
+    })
+    render(<TeamSettings t={translate} embedded />)
+    const account = (await screen.findByRole('heading', { name: friend.label })).closest('article')!
+    const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
+    expect(within(recentUsage).getByText((_, element) => element?.tagName === 'P'
+      && /^0 次请求，约 US\$0\.00$/u.test(element.textContent ?? ''))).toBeDefined()
+    const view = within(recentUsage).getByRole('button', { name: zh.viewSevenDays }) as HTMLButtonElement
+    expect(view.disabled).toBe(false)
+    fireEvent.click(view)
+    expect(within(screen.getByRole('dialog', { name: `近期请求 · ${friend.label}` })).getByText(zh.noRecentRequests)).toBeDefined()
+  })
+
+  it('shows unavailable shared-account usage for an older broker instead of an empty history', async () => {
+    overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [friend] }
+    render(<TeamSettings t={translate} embedded />)
+    const account = (await screen.findByRole('heading', { name: friend.label })).closest('article')!
+    const recentUsage = within(account).getByRole('region', { name: zh.recentUsageRegionLabel })
+    expect(within(recentUsage).getByText(zh.recentUsageUnavailable)).toBeDefined()
+    expect((within(recentUsage).getByRole('button', { name: zh.viewSevenDays }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('keeps authorizing accounts out of the stable directory while preserving actionable statuses', async () => {
     const authorizing = { ...mine, id: 'mine-authorizing', label: '授权中账号', status: 'authorizing' as const }
     const reauthRequired = { ...mine, id: 'mine-reauth', label: '待登录账号', status: 'reauth_required' as const }

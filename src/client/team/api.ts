@@ -463,6 +463,9 @@ function parseUsageResult(value: unknown): TeamManagementUsageResult {
     ownedAccounts: item.ownedAccounts === undefined
       ? []
       : arrayField(item, 'ownedAccounts', parseOwnedAccountUsage),
+    sharedAccounts: item.sharedAccounts === undefined
+      ? []
+      : arrayField(item, 'sharedAccounts', parseOwnedAccountUsage),
   }
   if (role === 'member') return { role, ...base }
   return { role, ...base, team: parseUsageAggregate(item.team, 'Team usage aggregate') }

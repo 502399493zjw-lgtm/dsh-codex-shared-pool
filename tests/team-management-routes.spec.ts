@@ -757,10 +757,63 @@ describe('local Team management routes', () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } }))
     const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
     const result = await response(route(routes, TEAM_MANAGEMENT_USAGE_PATH).handler, request('GET'))
-    expect(result).toMatchObject({ status: 200, body: payload })
+    expect(result).toMatchObject({ status: 200, body: { ...payload, sharedAccounts: [] } })
     const { createTeamManagementApi } = await import('../src/client/team/api.ts')
     const api = createTeamManagementApi(vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } })))
-    await expect(api.usage()).resolves.toEqual(payload)
+    await expect(api.usage()).resolves.toEqual({ ...payload, sharedAccounts: [] })
+  })
+
+  it.each(['owner', 'member'] as const)('projects safe shared-account request data for %s without expanding its role', async (role) => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const window = { startedAt: 0, endedAt: 200_000_000 }
+    const aggregate = { requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+      totalTokens: '3000', estimatedCostUsdMicros: '32500' }
+    const recentRequest = { id: 'request-1', consumerDisplayName: 'Mia', model: 'gpt-5-codex',
+      status: 'succeeded', startedAt: 190_000_000, finishedAt: 190_001_000,
+      totalTokens: 3000, estimatedCostUsdMicros: '32500' }
+    const sharedAccount = { accountId: 'shared-account', window, aggregate,
+      last24Hours: { window: { startedAt: 113_600_000, endedAt: window.endedAt }, aggregate },
+      recentRequests: [recentRequest] }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      role, window, currency: 'USD', mine: aggregate, team: aggregate,
+      sharedAccounts: [{ ...sharedAccount, credentialRef: 'must-not-cross',
+        last24Hours: { ...sharedAccount.last24Hours, prompt: 'must-not-cross' },
+        recentRequests: [{ ...recentRequest, consumerMemberId: 'private-member',
+          upstreamAccountId: 'private-account', sessionId: 'private-session',
+          prompt: 'must-not-cross', accessToken: 'must-not-cross' }] }],
+      events: [{ prompt: 'must-not-cross' }],
+    }), { headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_USAGE_PATH).handler, request('GET'))
+
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual({
+      role, window, currency: 'USD', mine: aggregate,
+      ...(role === 'owner' ? { team: aggregate } : {}),
+      ownedAccounts: [], sharedAccounts: [sharedAccount],
+    })
+  })
+
+  it('rejects malformed shared-account aggregates at the Host boundary', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    const window = { startedAt: 0, endedAt: 10 }
+    const aggregate = { requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 0,
+      totalTokens: '3', estimatedCostUsdMicros: null }
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
+      role: 'member', window, currency: 'USD', mine: aggregate,
+      sharedAccounts: [{ accountId: 'shared-account', window, aggregate,
+        last24Hours: { window, aggregate: { ...aggregate, tokenMeasuredRequestCount: 2 } },
+        recentRequests: [] }],
+    }), { headers: { 'content-type': 'application/json' } }))
+    const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
+
+    const result = await response(route(routes, TEAM_MANAGEMENT_USAGE_PATH).handler, request('GET'))
+
+    expect(result.status).toBe(502)
+    expect(result.body).not.toHaveProperty('sharedAccounts')
   })
 
   it('projects aggregate-only Team usage plus safe owner windows and drops private remote details', async () => {

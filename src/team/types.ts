@@ -431,7 +431,7 @@ export interface TeamUsageWindow {
   readonly endedAt: number
 }
 
-/** Browser-safe recent request for an account owned by the current member. */
+/** Browser-safe request metadata for an owned or currently shared account; excludes content and credentials. */
 export interface TeamOwnedAccountRecentRequest {
   /** Current display name only; absent for older brokers or unavailable members. */
   readonly consumerDisplayName?: string
@@ -455,7 +455,7 @@ export interface TeamOwnedAccountCurrentUtcWeekUsageSummary extends TeamOwnedAcc
   readonly resetAt: number
 }
 
-/** Seven-day projection for one contribution account owned by the current member. */
+/** Seven-day projection for one owned or currently shared contribution account. */
 export interface TeamOwnedAccountUsageSummary {
   readonly accountId: string
   /** Legacy rolling seven-day aggregate retained for compatible Hosts and recent-request detail. */
@@ -475,6 +475,8 @@ export type TeamUsageProjection =
       readonly team: TeamUsageAggregateSummary
       readonly mine: TeamUsageAggregateSummary
       readonly ownedAccounts: readonly TeamOwnedAccountUsageSummary[]
+      /** Read-only usage of other active members' currently shared accounts; absent on older brokers. */
+      readonly sharedAccounts?: readonly TeamOwnedAccountUsageSummary[]
     }
   | {
       readonly role: 'member'
@@ -482,6 +484,8 @@ export type TeamUsageProjection =
       readonly currency: 'USD'
       readonly mine: TeamUsageAggregateSummary
       readonly ownedAccounts: readonly TeamOwnedAccountUsageSummary[]
+      /** Read-only usage of other active members' currently shared accounts; absent on older brokers. */
+      readonly sharedAccounts?: readonly TeamOwnedAccountUsageSummary[]
     }
 
 /** Host supplies durable random credentials before an anonymous create request. */

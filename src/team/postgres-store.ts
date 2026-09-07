@@ -2515,30 +2515,45 @@ export class PostgresTeamStore implements TeamStore {
       }
 
       const mine = await readAggregate(member.id)
-      const ownedWindowStartedAt = endedAt - 7 * 86_400_000
+      const accountWindowStartedAt = endedAt - 7 * 86_400_000
       const last24HoursStartedAt = endedAt - 86_400_000
       const currentUtcWeekStartedAt = utcIsoWeekStart(endedAt)
       const currentUtcWeekResetAt = currentUtcWeekStartedAt + 7 * 86_400_000
-      const ownedRows = await client.query<UsageRow & { consumer_display_name: string | null }>(`
-        SELECT usage.*, consumer.display_name AS consumer_display_name
+      const sharedAccountResult = await client.query<Pick<ContributionRow, 'id'>>(`
+        SELECT contribution.id
+        FROM team_contributions AS contribution
+        INNER JOIN team_members AS contributor
+          ON contributor.id = contribution.owner_member_id AND contributor.team_id = contribution.team_id
+        WHERE contribution.team_id = $1
+          AND contribution.owner_member_id <> $2
+          AND contribution.status = 'active'
+          AND contributor.status = 'active'
+        ORDER BY contribution.created_at, contribution.id
+      `, [team.id, member.id])
+      const accountRows = await client.query<UsageRow & { consumer_display_name: string | null, contribution_owner_member_id: string }>(`
+        SELECT usage.*, consumer.display_name AS consumer_display_name,
+          contribution.owner_member_id AS contribution_owner_member_id
         FROM team_usage_events AS usage
         LEFT JOIN team_members AS consumer
           ON consumer.id = usage.consumer_member_id AND consumer.team_id = usage.team_id
         INNER JOIN team_contributions AS contribution
-          ON contribution.id = usage.upstream_account_id
+          ON contribution.id = usage.upstream_account_id AND contribution.team_id = usage.team_id
+        INNER JOIN team_members AS contributor
+          ON contributor.id = contribution.owner_member_id AND contributor.team_id = contribution.team_id
         WHERE usage.team_id = $1
-          AND contribution.owner_member_id = $2
-          AND contribution.status <> 'revoked'
+          AND (
+            (contribution.owner_member_id = $2 AND contribution.status <> 'revoked')
+            OR (contribution.owner_member_id <> $2 AND contribution.status = 'active' AND contributor.status = 'active')
+          )
           AND usage.consumer_member_id <> usage.upstream_owner_member_id
           AND usage.started_at >= $3 AND usage.started_at <= $4
         ORDER BY usage.started_at DESC
-      `, [team.id, member.id, ownedWindowStartedAt, endedAt])
-      const ownedAccountIds = [...new Set(ownedRows.rows.map(row => row.upstream_account_id))]
-      const ownedAccounts = ownedAccountIds.map(accountId => {
-        const rows = ownedRows.rows.filter(row => row.upstream_account_id === accountId)
+      `, [team.id, member.id, accountWindowStartedAt, endedAt])
+      const projectAccountUsage = (accountId: string) => {
+        const rows = accountRows.rows.filter(row => row.upstream_account_id === accountId)
         return {
           accountId,
-          window: { startedAt: ownedWindowStartedAt, endedAt },
+          window: { startedAt: accountWindowStartedAt, endedAt },
           aggregate: aggregateUsageRows(rows),
           currentUtcWeek: {
             window: { startedAt: currentUtcWeekStartedAt, endedAt },
@@ -2563,9 +2578,14 @@ export class PostgresTeamStore implements TeamStore {
             }
           }),
         }
-      })
+      }
+      const ownedAccountIds = [...new Set(accountRows.rows
+        .filter(row => row.contribution_owner_member_id === member.id)
+        .map(row => row.upstream_account_id))]
+      const ownedAccounts = ownedAccountIds.map(projectAccountUsage)
+      const sharedAccounts = sharedAccountResult.rows.map(account => projectAccountUsage(account.id))
       if (member.role !== 'owner') {
-        return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts }
+        return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts, sharedAccounts }
       }
       return {
         role: 'owner',
@@ -2574,6 +2594,7 @@ export class PostgresTeamStore implements TeamStore {
         team: await readAggregate(),
         mine,
         ownedAccounts,
+        sharedAccounts,
       }
     })
   }

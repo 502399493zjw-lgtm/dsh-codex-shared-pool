@@ -811,6 +811,7 @@ describe('Team control-plane routes', () => {
         team: emptyUsage,
         mine: emptyUsage,
         ownedAccounts: [],
+        sharedAccounts: [],
       },
     })
 
@@ -833,6 +834,7 @@ describe('Team control-plane routes', () => {
         currency: 'USD',
         mine: emptyUsage,
         ownedAccounts: [],
+        sharedAccounts: [],
       },
     })
     expect(memberAudit.body).not.toHaveProperty('team')

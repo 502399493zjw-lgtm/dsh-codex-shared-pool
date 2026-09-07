@@ -2818,6 +2818,7 @@ class TeamManagementProxy {
       currency: 'USD' as const,
       mine: projectUsageAggregate(item.mine, 'member usage aggregate'),
       ownedAccounts: item.ownedAccounts === undefined ? [] : projectOwnedAccountUsage(item.ownedAccounts),
+      sharedAccounts: item.sharedAccounts === undefined ? [] : projectOwnedAccountUsage(item.sharedAccounts),
     }
     if (role === 'member') return { role, ...base }
     return { role, ...base, team: projectUsageAggregate(item.team, 'Team usage aggregate') }

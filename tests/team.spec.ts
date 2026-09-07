@@ -1622,6 +1622,109 @@ describe('Team control plane', () => {
     })
   })
 
+  it('shows current shared-account usage to teammates with bounded windows and access', async () => {
+    const day = 86_400_000
+    const endedAt = Date.UTC(2026, 8, 7, 12)
+    let now = endedAt
+    const store = new MemoryTeamStore({ now: () => now })
+    const boot = await store.bootstrap('Shared usage', 'Contributor')
+    const owner = await store.authenticateApiKey(boot.apiKey)
+    if (owner === undefined) throw new Error('owner key should authenticate')
+    const join = async (name: string) => {
+      const invite = await store.createInvite(owner, 60_000)
+      const joined = await store.acceptInvite(invite.inviteToken, name)
+      const auth = await store.authenticateApiKey(joined.apiKey)
+      if (auth === undefined) throw new Error('member key should authenticate')
+      return auth
+    }
+    const viewer = await join('Viewer')
+    const consumer = await join('Other consumer')
+    const shared = await store.createContributionAccount(owner, 'Shared account')
+    const empty = await store.createContributionAccount(owner, 'Unused shared account')
+    const own = await store.createContributionAccount(viewer, 'Viewer account')
+    for (const account of [shared, empty, own]) {
+      await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+    }
+    const hidden = await store.createContributionAccount(owner, 'Not yet shared')
+    const inactive = []
+    for (const status of ['paused', 'reauth_required', 'revoked'] as const) {
+      const account = await store.createContributionAccount(owner, status)
+      await store.setContributionAccountStatus(owner.teamId, account.id, 'active')
+      await store.beginUsageEvent(consumer, status, account.id, 'gpt-5-codex')
+      await store.setContributionAccountStatus(owner.teamId, account.id, status)
+      inactive.push(account.id)
+    }
+    const foreignBoot = await store.bootstrap('Other team', 'Other owner')
+    const foreign = await store.authenticateApiKey(foreignBoot.apiKey)
+    if (foreign === undefined) throw new Error('foreign key should authenticate')
+    const foreignAccount = await store.createContributionAccount(foreign, 'Other team account')
+    await store.setContributionAccountStatus(foreign.teamId, foreignAccount.id, 'active')
+
+    for (const [id, startedAt] of [
+      ['too-old', endedAt - 7 * day - 1],
+      ['week-boundary', endedAt - 7 * day],
+      ['day-boundary', endedAt - day],
+      ['future', endedAt + 1],
+    ] as const) {
+      now = startedAt
+      await store.beginUsageEvent(consumer, id, shared.id, 'gpt-5-codex')
+    }
+    for (let index = 0; index < 12; index += 1) {
+      now = endedAt - 1_000 + index
+      await store.beginUsageEvent(consumer, `recent-${index}`, shared.id, 'gpt-5-codex')
+      await store.settleUsageEvent(owner.teamId, `recent-${index}`, 'succeeded', {
+        inputTokens: 100, cachedInputTokens: 0, outputTokens: 20,
+      }, { estimatedCostUsdMicros: 123n, pricingCatalogVersion: 'fixture-v1' })
+    }
+    now = endedAt
+    await store.beginUsageEvent(owner, 'contributor-self-use', shared.id, 'gpt-5-codex')
+    const projection = await store.readUsageProjection(viewer)
+    expect(projection).not.toHaveProperty('team')
+    expect(projection.mine.requestCount).toBe(0)
+    expect(projection.ownedAccounts.every(account => account.accountId === own.id)).toBe(true)
+    expect(projection.sharedAccounts?.map(account => account.accountId).sort()).toEqual([shared.id, empty.id].sort())
+    const usage = projection.sharedAccounts?.find(account => account.accountId === shared.id)
+    expect(usage).toMatchObject({
+      window: { startedAt: endedAt - 7 * day, endedAt },
+      aggregate: {
+        requestCount: 14, tokenMeasuredRequestCount: 12, pricedRequestCount: 12,
+        totalTokens: '1440', estimatedCostUsdMicros: '1476',
+      },
+      last24Hours: {
+        window: { startedAt: endedAt - day, endedAt },
+        aggregate: { requestCount: 13, totalTokens: '1440', estimatedCostUsdMicros: '1476' },
+      },
+    })
+    expect(usage?.recentRequests.map(request => request.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `recent-${11 - index}`),
+    )
+    expect(usage?.recentRequests[0]).toEqual({
+      id: 'recent-11', consumerDisplayName: 'Other consumer', model: 'gpt-5-codex', status: 'succeeded',
+      startedAt: endedAt - 989, finishedAt: endedAt - 989, totalTokens: 120, estimatedCostUsdMicros: '123',
+    })
+    expect(projection.sharedAccounts?.find(account => account.accountId === empty.id)).toMatchObject({
+      aggregate: { requestCount: 0, totalTokens: '0', estimatedCostUsdMicros: '0' },
+      last24Hours: { aggregate: { requestCount: 0 } },
+      recentRequests: [],
+    })
+    const serialized = JSON.stringify(projection.sharedAccounts)
+    for (const privateValue of [consumer.memberId, owner.memberId, hidden.id, foreignAccount.id, ...inactive]) {
+      expect(serialized).not.toContain(privateValue)
+    }
+    await store.setContributionAccountStatus(owner.teamId, shared.id, 'paused')
+    expect((await store.readUsageProjection(viewer)).sharedAccounts?.map(account => account.accountId)).toEqual([empty.id])
+    const contributor = await join('Departing contributor')
+    const departedAccount = await store.createContributionAccount(contributor, 'Departed account')
+    await store.setContributionAccountStatus(owner.teamId, departedAccount.id, 'active')
+    await store.removeMember(owner, contributor.memberId)
+    expect((await store.readUsageProjection(viewer)).sharedAccounts?.map(account => account.accountId)).not.toContain(departedAccount.id)
+    await store.revokeApiKey(owner, viewer.keyId)
+    await expect(store.readUsageProjection(viewer)).rejects.toThrow(/revoked|invalid/iu)
+    await store.removeMember(owner, consumer.memberId)
+    await expect(store.readUsageProjection(consumer)).rejects.toThrow(/revoked|invalid|active/iu)
+
+  })
+
   it('returns aggregate-only usage shaped by the authenticated owner or member', async () => {
     const now = Date.UTC(2026, 7, 23, 10)
     const store = new MemoryTeamStore({ now: () => now })
@@ -1680,6 +1783,7 @@ describe('Team control plane', () => {
         estimatedCostUsdMicros: null,
       },
       ownedAccounts: expect.any(Array),
+      sharedAccounts: expect.any(Array),
     })
     await expect(store.readUsageProjection(friend)).resolves.toEqual({
       role: 'member',
@@ -1693,6 +1797,7 @@ describe('Team control plane', () => {
         estimatedCostUsdMicros: '1234',
       },
       ownedAccounts: expect.any(Array),
+      sharedAccounts: expect.any(Array),
     })
     const ownerOwnedUsage = (await store.readUsageProjection(owner)).ownedAccounts
     expect(ownerOwnedUsage).toHaveLength(1)

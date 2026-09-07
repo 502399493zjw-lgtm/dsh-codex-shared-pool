@@ -172,7 +172,7 @@ type SelectedAccount =
 
 interface RecentUsageTarget {
   readonly id: string
-  readonly kind: 'contribution' | 'local'
+  readonly kind: 'contribution' | 'shared-directory' | 'local'
   readonly label: string
 }
 
@@ -2322,6 +2322,31 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       </section>
     }
 
+    const renderRecentAccountUsage = (
+      account: { readonly id: string; readonly label: string },
+      kind: 'contribution' | 'shared-directory',
+      accountUsage: TeamManagementUsageResult['ownedAccounts'][number] | undefined,
+    ) => {
+      const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
+      return <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
+        <header className={styles.compactRecentHeader}>
+          <h4 className={styles.compactSummaryTitle}>{t('recentUsageTitle')}</h4>
+          <Button className={styles.viewSevenDaysButton} size="sm" variant="outline"
+            disabled={kind === 'shared-directory' && accountUsage === undefined}
+            onClick={() => { setRecentUsageAccount({ id: account.id, kind, label: account.label }) }}>
+            {t('viewSevenDays')}
+          </Button>
+        </header>
+        {last24HoursAggregate === undefined
+          ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
+          : <p className={styles.compactRecentLine}>
+              <strong>{t('requestCount', { count: last24HoursAggregate.requestCount })}</strong>
+              <span>{t('recentUsageEstimateSeparator')}</span>
+              <strong>{formatUsdMicros(last24HoursAggregate.estimatedCostUsdMicros)}</strong>
+            </p>}
+      </section>
+    }
+
     const renderSharedDirectoryAccount = (account: TeamManagementSharedAccountDirectoryEntry) => {
       const sharing = account.sharing
       const contributor = contributorNameFor(account)
@@ -2338,6 +2363,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           <section className={styles.teamActionPanel} aria-label={t('sharedAccountReadonlyTitle')}>
             <p>{t('sharedAccountReadonlyHint')}</p>
           </section>
+          {renderRecentAccountUsage(account, 'shared-directory', usageProjection?.sharedAccounts?.find(item => item.accountId === account.id))}
         </article>
       )
     }
@@ -2351,7 +2377,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
           ? 0
           : weeklyAggregate?.estimatedCostUsdMicros,
       )
-      const last24HoursAggregate = accountUsage?.last24Hours?.aggregate
       const accountActionBusy = busy === `${account.status === 'active' ? 'revoke' : 'toggle'}-${account.id}`
       const activeCapacityReason = account.status === 'active'
         ? activeContributionCapacityReason(account)
@@ -2424,21 +2449,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             weeklySharedEstimatedApiCostLimitMicros: account.weeklySharedEstimatedApiCostLimitMicros ?? null,
             allowedModels: account.allowedModels,
           }, weeklyUsed, openProtection)}
-          <section className={`${styles.prototypeSection} ${styles.compactRecentUsage}`} role="region" aria-label={t('recentUsageRegionLabel')}>
-            <header className={styles.compactRecentHeader}>
-              <h4 className={styles.compactSummaryTitle}>{t('recentUsageTitle')}</h4>
-              <Button className={styles.viewSevenDaysButton} size="sm" variant="outline" onClick={() => {
-                setRecentUsageAccount({ id: account.id, kind: 'contribution', label: account.label })
-              }}>{t('viewSevenDays')}</Button>
-            </header>
-            {last24HoursAggregate === undefined
-              ? <p className={styles.compactRecentLine}>{t('recentUsageUnavailable')}</p>
-              : <p className={styles.compactRecentLine}>
-                  <strong>{t('requestCount', { count: last24HoursAggregate.requestCount })}</strong>
-                  <span>{t('recentUsageEstimateSeparator')}</span>
-                  <strong>{formatUsdMicros(last24HoursAggregate.estimatedCostUsdMicros)}</strong>
-                </p>}
-          </section>
+          {renderRecentAccountUsage(account, 'contribution', accountUsage)}
         </article>
       )
     }
@@ -3180,7 +3191,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         {recentUsageAccount === undefined ? null : (() => {
           const requests = recentUsageAccount.kind === 'contribution'
             ? usageProjection?.ownedAccounts?.find(item => item.accountId === recentUsageAccount.id)?.recentRequests ?? []
-            : []
+            : recentUsageAccount.kind === 'shared-directory'
+              ? usageProjection?.sharedAccounts?.find(item => item.accountId === recentUsageAccount.id)?.recentRequests ?? []
+              : []
           return requests.length === 0
             ? <p className={styles.empty}>{t('noRecentRequests')}</p>
             : <ol className={styles.recentRequestList}>{requests.map(request => (
