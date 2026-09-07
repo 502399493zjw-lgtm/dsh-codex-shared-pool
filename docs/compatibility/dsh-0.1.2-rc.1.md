@@ -1,6 +1,6 @@
 # DSH 0.1.2-rc.1 compatibility
 
-This migration targets the published DSH `0.1.2-rc.1` and Cordis `4.0.2`. It does not change DSH core. The compatible plugin release is published on npm as `0.1.4`; npm `0.1.3` remains the previous DSH baseline.
+This migration targets the published DSH `0.1.2-rc.1` and Cordis `4.0.2`. It does not change DSH core. Plugin `0.1.5` retains this exact compatibility baseline and adds default cloud Team onboarding; see its [release notes](../releases/0.1.5.md). The original migration was released as `0.1.4`; npm `0.1.3` remains the previous DSH baseline.
 
 ## Failure and changes
 
