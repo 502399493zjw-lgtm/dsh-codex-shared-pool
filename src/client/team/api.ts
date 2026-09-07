@@ -264,7 +264,7 @@ export function parseTeamManagementOverview(value: unknown): TeamManagementOverv
   }
   return viewerRole === 'owner'
     ? { viewerRole, ...base, invites: arrayField(item, 'invites', parseInvite) }
-    : { viewerRole, ...base }
+    : { viewerRole, ...base, invites: item.invites === undefined ? [] : arrayField(item, 'invites', parseInvite) }
 }
 
 function parsePendingBrowserAuthorization(

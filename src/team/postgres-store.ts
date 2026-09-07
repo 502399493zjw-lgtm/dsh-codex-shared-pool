@@ -1515,15 +1515,13 @@ export class PostgresTeamStore implements TeamStore {
       const currentTransfer = pendingTransfer === undefined
         ? undefined
         : await this.expireLockedOwnershipTransfer(client, pendingTransfer, now)
-      if (member.role === 'owner') await this.expirePendingInvites(client, team.id, now)
+      await this.expirePendingInvites(client, team.id, now)
       const members = await client.query<MemberRow>('SELECT * FROM team_members WHERE team_id = $1 ORDER BY joined_at, id', [team.id])
-      const invites = member.role === 'owner'
-        ? await client.query<InviteRow>(`
-          SELECT * FROM team_invites
-          WHERE team_id = $1 AND status = 'pending' AND expires_at > $2
-          ORDER BY created_at, id
-        `, [team.id, now])
-        : { rows: [] as InviteRow[] }
+      const invites = await client.query<InviteRow>(`
+        SELECT * FROM team_invites
+        WHERE team_id = $1 AND status = 'pending' AND expires_at > $2
+        ORDER BY created_at, id
+      `, [team.id, now])
       const keys = await client.query<KeyRow>('SELECT * FROM team_api_keys WHERE team_id = $1 ORDER BY created_at, id', [team.id])
       const contributions = await client.query<ContributionRow>('SELECT * FROM team_contributions WHERE team_id = $1 ORDER BY created_at, id', [team.id])
       const displayNameMigrationNotice = await client.query<Pick<DisplayNameMigrationAuditRow, 'migration_version'>>(`
@@ -1653,7 +1651,7 @@ export class PostgresTeamStore implements TeamStore {
     const initial = await this.transaction(async (client) => {
       const team = await this.lockTeam(client, auth.teamId)
       if (team.status === 'dissolved') throw new TeamDissolvedError()
-      await this.requireOwner(client, auth)
+      await this.requireAuthContext(client, auth)
       const retryAfterSeconds = await this.consumeInviteRevealRateLimit(client, auth, inviteId, initialNow)
       if (retryAfterSeconds !== undefined) return { retryAfterSeconds }
       const result = await client.query<InviteRow>(
@@ -1673,7 +1671,7 @@ export class PostgresTeamStore implements TeamStore {
     ) {
       await this.transaction(async (client) => {
         await this.lockTeam(client, auth.teamId)
-        await this.requireOwner(client, auth)
+        await this.requireAuthContext(client, auth)
         const result = await client.query<InviteRow>(
           'SELECT * FROM team_invites WHERE id = $1 AND team_id = $2 FOR UPDATE',
           [inviteId, auth.teamId],
@@ -1700,7 +1698,7 @@ export class PostgresTeamStore implements TeamStore {
     }
     const revealed = await this.transaction(async (client) => {
       await this.lockTeam(client, auth.teamId)
-      await this.requireOwner(client, auth)
+      await this.requireAuthContext(client, auth)
       const result = await client.query<InviteRow>(
         'SELECT * FROM team_invites WHERE id = $1 AND team_id = $2 FOR UPDATE',
         [inviteId, auth.teamId],

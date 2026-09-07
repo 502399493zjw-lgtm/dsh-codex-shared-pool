@@ -251,7 +251,7 @@ interface TeamOverviewProjectionBase {
   readonly ownershipTransfer?: TeamOwnershipTransferSummary
 }
 
-/** Exact owners receive Team invitation metadata; legacy admins are projected as members. */
+/** Active members receive invitation metadata; legacy admins are projected as members. */
 export type TeamOverviewProjection =
   | (TeamOverviewProjectionBase & {
       readonly viewerRole: 'owner'
@@ -259,6 +259,7 @@ export type TeamOverviewProjection =
     })
   | (TeamOverviewProjectionBase & {
       readonly viewerRole: 'member'
+      readonly invites: readonly TeamInviteSummary[]
     })
 
 /** Secret-free result of a durable non-owner Team departure. */

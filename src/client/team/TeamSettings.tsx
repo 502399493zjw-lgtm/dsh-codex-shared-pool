@@ -666,6 +666,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const teamExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
   const ownerExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
   const memberExpectedContextRef = useRef<TeamManagementExpectedContext | undefined>(undefined)
+  const teamAuthorizationContextRef = useRef<string | undefined>(undefined)
   const ownerAuthorizationContextRef = useRef<string | undefined>(undefined)
   const memberAuthorizationContextRef = useRef<string | undefined>(undefined)
   const teamSettingsReturnFocus = useRef<string | undefined>(undefined)
@@ -815,7 +816,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     ? inviteDraft
     : undefined
   const activeInviteRevealRequest = teamSettingsOpen
-    && inviteRevealRequest?.authorizationContext === ownerAuthorizationContext
+    && inviteRevealRequest?.authorizationContext === teamAuthorizationContext
     ? inviteRevealRequest
     : undefined
   const visibleInviteResult = documentAllowsInviteSecret()
@@ -910,6 +911,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       memberExpectedContextRef.current = memberExpectedContext
     }
   }, [authorizationSnapshotPending, memberExpectedContext])
+
+  useEffect(() => {
+    if (teamAuthorizationContext !== undefined || !authorizationSnapshotPending) {
+      teamAuthorizationContextRef.current = teamAuthorizationContext
+    }
+  }, [authorizationSnapshotPending, teamAuthorizationContext])
 
   useEffect(() => {
     if (ownerAuthorizationContext !== undefined || !authorizationSnapshotPending) {
@@ -1016,6 +1023,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     teamExpectedContextRef.current = undefined
     ownerExpectedContextRef.current = undefined
     memberExpectedContextRef.current = undefined
+    teamAuthorizationContextRef.current = undefined
     ownerAuthorizationContextRef.current = undefined
     memberAuthorizationContextRef.current = undefined
     setAuthorizationSnapshotReady(false)
@@ -1122,6 +1130,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         teamExpectedContextRef.current = nextExpectedContext
         ownerExpectedContextRef.current = projectedOverview.viewerRole === 'owner' ? nextExpectedContext : undefined
         memberExpectedContextRef.current = projectedOverview.viewerRole === 'member' ? nextExpectedContext : undefined
+        teamAuthorizationContextRef.current = createTeamAuthorizationContext(nextStatus, projectedOverview)
         ownerAuthorizationContextRef.current = createOwnerAuthorizationContext(nextStatus, projectedOverview)
         memberAuthorizationContextRef.current = createMemberAuthorizationContext(nextStatus, projectedOverview)
         pendingBrowserAuthorizationActive.current = projectedOverview.pendingBrowserAuthorization !== undefined
@@ -1155,6 +1164,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         teamExpectedContextRef.current = undefined
         ownerExpectedContextRef.current = undefined
         memberExpectedContextRef.current = undefined
+        teamAuthorizationContextRef.current = undefined
         ownerAuthorizationContextRef.current = undefined
         memberAuthorizationContextRef.current = undefined
         pendingBrowserAuthorizationActive.current = false
@@ -1186,6 +1196,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       teamExpectedContextRef.current = undefined
       ownerExpectedContextRef.current = undefined
       memberExpectedContextRef.current = undefined
+      teamAuthorizationContextRef.current = undefined
       ownerAuthorizationContextRef.current = undefined
       memberAuthorizationContextRef.current = undefined
       setAuthorizationSnapshotReady(false)
@@ -1341,9 +1352,9 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [overview, status, refresh, refreshUsage])
 
   useEffect(() => {
-    if (overview?.viewerRole !== 'owner') return
+    if (overview === undefined) return
     const now = Date.now()
-    const nextExpiry = overview.invites
+    const nextExpiry = (overview.invites ?? [])
       .filter(invite => invite.status === 'pending' && invite.expiresAt > now)
       .reduce<number | undefined>((nearest, invite) => nearest === undefined || invite.expiresAt < nearest ? invite.expiresAt : nearest, undefined)
     if (nextExpiry === undefined) return
@@ -1618,8 +1629,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   }, [overview])
   const canManageTeam = overview?.viewerRole === 'owner'
   const canLeaveTeam = overview?.viewerRole === 'member' && currentMember !== undefined && canMemberLeaveTeam(currentMember.role)
-  const getOwnerAuthorizationContext = useCallback(() => ownerAuthorizationContextRef.current, [])
-  const getOwnerExpectedContext = useCallback(() => ownerExpectedContextRef.current, [])
+  const getTeamAuthorizationContext = useCallback(() => teamAuthorizationContextRef.current, [])
+  const getTeamExpectedContext = useCallback(() => teamExpectedContextRef.current, [])
   const normalizedInviteToken = inviteToken.trim()
   const inviteTokenInvalid = normalizedInviteToken !== '' && !TEAM_INVITE_TOKEN_PATTERN.test(normalizedInviteToken)
 
@@ -1638,10 +1649,10 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
 
   useEffect(() => {
     setInviteRevealRequest(current => current === undefined
-      || current.authorizationContext === ownerAuthorizationContext
+      || current.authorizationContext === teamAuthorizationContext
       ? current
       : undefined)
-  }, [ownerAuthorizationContext])
+  }, [teamAuthorizationContext])
 
   useEffect(() => {
     if (inviteResult === undefined || inviteResult.authorizationContext === ownerAuthorizationContext) return
@@ -1665,12 +1676,6 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     restoreTeamSettingsTriggerFocus.current = false
     teamSettingsTriggerRef.current?.focus()
   }, [teamSettingsOpen])
-
-  useEffect(() => {
-    if (overview?.viewerRole !== 'owner' && workspaceView === 'invitations') {
-      setWorkspaceView('members')
-    }
-  }, [overview?.viewerRole, workspaceView])
 
   const previewInvitation = () => {
     if (!TEAM_INVITE_TOKEN_PATTERN.test(normalizedInviteToken)) {
@@ -2057,9 +2062,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
     ? activeMembers.filter(member => canTransferTeamOwnership(currentMember, member))
     : []
   const selectedOwnershipTarget = eligibleOwnershipTargets.find(member => member.id === ownershipTransferTargetId)
-  const pendingInvites = overview.viewerRole === 'owner'
-    ? overview.invites.filter(invite => invite.status === 'pending' && invite.expiresAt > Date.now())
-    : []
+  const pendingInvites = (overview.invites ?? []).filter(invite => invite.status === 'pending' && invite.expiresAt > Date.now())
   const pendingInviteCount = pendingInvites.length
   const openInviteDraft = () => {
     if (team.status !== 'active' || ownerAuthorizationContext === undefined || overview.viewerRole !== 'owner') return
@@ -2660,14 +2663,12 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                 setMemberMenuId(undefined)
                 setInviteRevealRequest(undefined)
               }}>{t('membersTitle')}</button>
-              {overview.viewerRole === 'owner' ? (
-                <button type="button" aria-current={workspaceView === 'invitations' ? 'page' : undefined} onClick={() => {
-                  setWorkspaceView('invitations')
-                  setTeamMenuOpen(false)
-                  setMemberMenuId(undefined)
-                  setInviteRevealRequest(undefined)
-                }}>{t('invitationsTitle')}</button>
-              ) : null}
+              <button type="button" aria-current={workspaceView === 'invitations' ? 'page' : undefined} onClick={() => {
+                setWorkspaceView('invitations')
+                setTeamMenuOpen(false)
+                setMemberMenuId(undefined)
+                setInviteRevealRequest(undefined)
+              }}>{t('invitationsTitle')}</button>
             </nav>
             <button
               type="button"
@@ -2898,17 +2899,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             </section>
           ) : null}
 
-          {overview.viewerRole === 'owner' && workspaceView === 'invitations' ? <section className={`${styles.workspaceSection} ${styles.invitationSection}`} aria-labelledby="team-invites-title">
+          {workspaceView === 'invitations' ? <section className={`${styles.workspaceSection} ${styles.invitationSection}`} aria-labelledby="team-invites-title">
               <div className={styles.workspaceSectionHeader}>
                 <div>
                   <h3 id="team-invites-title" className={styles.workspaceSectionTitle}>{t('invitationsTitle')}</h3>
                   <p className={styles.hint}>{t('invitationsIntro')}</p>
                 </div>
-                <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} data-team-settings-focus="invite" disabled={busy !== undefined || team.status !== 'active'} onClick={openInviteDraft}>
+                {canManageTeam ? <Button size="sm" variant="primary" icon={<IconPlusOutline16 />} data-team-settings-focus="invite" disabled={busy !== undefined || team.status !== 'active'} onClick={openInviteDraft}>
                   {t('inviteFriend')}
-                </Button>
+                </Button> : null}
               </div>
-              {team.status === 'paused' ? <p className={styles.invitePauseNotice}>{t('invitesPausedHint')}</p> : null}
+              {team.status === 'paused' ? <p className={styles.invitePauseNotice}>{t(canManageTeam ? 'invitesPausedHint' : 'memberInvitesPausedHint')}</p> : null}
               {pendingInvites.length === 0 ? <p className={styles.settingsEmpty}>{t('noPendingInvites')}</p> : (
                 <div className={styles.pendingInviteList}>
                   {pendingInvites.map(invite => (
@@ -2933,17 +2934,17 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                             data-team-settings-focus={`invite-reveal:${invite.id}`}
                             disabled={busy !== undefined || inviteRevealRequest !== undefined}
                             onClick={() => {
-                              if (ownerAuthorizationContext === undefined) return
+                              if (teamAuthorizationContext === undefined) return
                               setError(undefined)
                               teamSettingsReturnFocus.current = `invite-reveal:${invite.id}`
                               setInviteRevealRequest({
                                 inviteId: invite.id,
-                                authorizationContext: ownerAuthorizationContext,
+                                authorizationContext: teamAuthorizationContext,
                               })
                             }}
                           >{t('viewInviteShort')}</Button>
-                        ) : <span className={styles.inviteNotRevealable}>{t('inviteNotRevealable')}</span>}
-                        <Button
+                        ) : <span className={styles.inviteNotRevealable}>{t(canManageTeam ? 'inviteNotRevealable' : 'memberInviteNotRevealable')}</span>}
+                        {canManageTeam ? <Button
                           size="sm"
                           variant="ghost"
                           icon={<IconTrashOutline16 />}
@@ -2957,7 +2958,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                             setRevokeInviteAuthorizationContext(ownerAuthorizationContext)
                             setRevokeInvite(invite)
                           }}
-                        />
+                        /> : null}
                       </div>
                     </div>
                   ))}
@@ -3395,8 +3396,8 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
         <InviteRevealModal
           inviteId={activeInviteRevealRequest.inviteId}
           authorizationContext={activeInviteRevealRequest.authorizationContext}
-          getAuthorizationContext={getOwnerAuthorizationContext}
-          getExpectedContext={getOwnerExpectedContext}
+          getAuthorizationContext={getTeamAuthorizationContext}
+          getExpectedContext={getTeamExpectedContext}
           t={t}
           onClose={closeInviteReveal}
           onFailure={handleInviteRevealFailure}

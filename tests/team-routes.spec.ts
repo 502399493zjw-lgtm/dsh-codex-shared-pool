@@ -371,7 +371,8 @@ describe('Team control-plane routes', () => {
         ],
       },
     })
-    expect(memberView.body).not.toHaveProperty('invites')
+    expect(memberView.body.invites).toEqual(ownerView.body.invites)
+    expect(JSON.stringify(memberView.body)).not.toContain(String(invited.body.inviteToken))
     expect(memberView.body).not.toHaveProperty('apiKeys')
     expect(memberView.body.contributions).toHaveLength(1)
     for (const item of ownerView.body.activeSharedAccounts as Array<Record<string, unknown>>) {
@@ -509,7 +510,7 @@ describe('Team control-plane routes', () => {
     }, { 'content-type': 'application/json' }))).resolves.toMatchObject({ status: 404 })
   })
 
-  it('reveals exactly one valid invitation only to its current owner', async () => {
+  it('reveals exactly one valid invitation to an authenticated team viewer', async () => {
     const routes = setup()
     const bootstrap = routes.find(route => route.path === TEAM_BOOTSTRAP_PATH)
     const invites = routes.find(route => route.path === TEAM_INVITES_PATH)
@@ -552,7 +553,7 @@ describe('Team control-plane routes', () => {
     })
   })
 
-  it('checks Owner authorization before invite lookup and returns a secret-free 429 with Retry-After', async () => {
+  it('checks authentication before invite lookup and rate-limits each member with a secret-free 429', async () => {
     let now = 240_000
     const store = new MemoryTeamStore({ now: () => now })
     const revealSpy = vi.spyOn(store, 'revealInvite')
@@ -584,10 +585,20 @@ describe('Team control-plane routes', () => {
     await expect(response(reveal.handler, request('POST', { inviteId: targetInvite.id }, {
       'content-type': 'application/json',
     }))).resolves.toEqual({ status: 403, body: { error: 'forbidden' } })
+    expect(revealSpy).not.toHaveBeenCalled()
     await expect(response(reveal.handler, request('POST', { inviteId: 'unknown-invite' }, {
       'content-type': 'application/json', authorization: `Bearer ${memberKey}`,
-    }))).resolves.toEqual({ status: 403, body: { error: 'forbidden' } })
-    expect(revealSpy).not.toHaveBeenCalled()
+    }))).resolves.toEqual({ status: 404, body: { error: 'invite is no longer available' } })
+    await expect(response(invites.handler, request('POST', {}, {
+      'content-type': 'application/json', authorization: `Bearer ${memberKey}`,
+    }))).resolves.toMatchObject({ status: 403 })
+    const revoke = routes.find(route => route.path === TEAM_INVITES_REVOKE_PATH)!
+    await expect(response(revoke.handler, request('POST', { inviteId: targetInvite.id }, {
+      'content-type': 'application/json', authorization: `Bearer ${memberKey}`,
+    }))).resolves.toMatchObject({ status: 403 })
+    await expect(response(reveal.handler, request('POST', { inviteId: targetInvite.id }, {
+      'content-type': 'application/json', authorization: `Bearer ${memberKey}`,
+    }))).resolves.toMatchObject({ status: 200, body: { inviteToken: target.body.inviteToken } })
 
     for (let attempt = 0; attempt < TEAM_INVITE_REVEAL_RATE_LIMIT_MAX_ATTEMPTS; attempt += 1) {
       await expect(response(reveal.handler, request('POST', { inviteId: targetInvite.id }, {

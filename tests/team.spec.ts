@@ -567,7 +567,7 @@ describe('Team control plane', () => {
     })
   })
 
-  it('lets only the current owner explicitly reveal a pending invitation without exposing it in overview', async () => {
+  it('lets active members reveal invitations without exposing tokens in overview or granting management', async () => {
     const store = new MemoryTeamStore({ now: () => 1_000 })
     const boot = await store.bootstrap('Friends', 'Owner')
     const owner = await store.authenticateApiKey(boot.apiKey)
@@ -595,9 +595,22 @@ describe('Team control plane', () => {
     const joined = await store.acceptInvite(memberInvite.inviteToken, 'Member')
     const member = await store.authenticateApiKey(joined.apiKey)
     if (member === undefined) throw new Error('member key should authenticate')
-    await expect(store.revealInvite(member, created.invite.id)).rejects.toThrow(/only the owner/iu)
+    const memberOverview = await store.overview(member)
+    expect(memberOverview.invites).toContainEqual(created.invite)
+    expect(JSON.stringify(memberOverview)).not.toContain(created.inviteToken)
+    await expect(store.revealInvite(member, created.invite.id)).resolves.toMatchObject({ inviteToken: created.inviteToken })
+    await expect(store.createInvite(member, 60_000)).rejects.toThrow(/only the owner/iu)
+    await expect(store.revokeInvite(member, created.invite.id)).rejects.toThrow(/only the owner/iu)
     await expect(store.listInviteRevealAuditEvents(member, 10)).rejects.toThrow(/only the owner/iu)
-    await expect(store.listInviteRevealAuditEvents(owner, 10)).resolves.toHaveLength(1)
+    const audits = await store.listInviteRevealAuditEvents(owner, 10)
+    expect(audits).toHaveLength(2)
+    expect(audits).toContainEqual(expect.objectContaining({ actorMemberId: member.memberId, inviteId: created.invite.id }))
+
+    const otherTeam = await store.bootstrap('Other Team', 'Other Owner')
+    const outsider = await store.authenticateApiKey(otherTeam.apiKey)
+    if (outsider === undefined) throw new Error('outsider key should authenticate')
+    await expect(store.overview(outsider)).resolves.toMatchObject({ invites: [] })
+    await expect(store.revealInvite(outsider, created.invite.id)).rejects.toThrow(/no longer available/iu)
   })
 
   it('rate-limits invitation reveal per Owner and invite for one fixed window', async () => {
@@ -649,6 +662,27 @@ describe('Team control plane', () => {
     })
     await expect(store.createInvite(owner, 60_000, 'Another')).rejects.toThrow(/paused/iu)
     await expect(store.acceptInvite(invite.inviteToken, 'Reviewer')).rejects.toThrow(/paused/u)
+  })
+
+  it.each(['remove', 'leave'] as const)('rejects a member reveal if %s happens during decryption', async departure => {
+    const controlled = blockingRevealCipher()
+    const store = new MemoryTeamStore({ inviteCipher: controlled.cipher })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = (await store.authenticateApiKey(boot.apiKey))!
+    const invite = await store.createInvite(owner, 60_000, 'Shared invitation')
+    const joined = await store.acceptInvite(invite.inviteToken, 'Member')
+    const member = (await store.authenticateApiKey(joined.apiKey))!
+
+    const reveal = store.revealInvite(member, invite.invite.id)
+    await controlled.decryptStarted
+    if (departure === 'remove') await store.removeMember(owner, member.memberId)
+    else await store.leaveTeam(member)
+    controlled.releaseDecrypt()
+
+    await expect(reveal).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.overview(member)).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.revealInvite(member, invite.invite.id)).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.listInviteRevealAuditEvents(owner, 10)).resolves.toEqual([])
   })
 
   it('does not audit an in-memory reveal that loses to a concurrent terminal mutation', async () => {

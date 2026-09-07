@@ -1005,7 +1005,7 @@ describe('local Team management routes', () => {
     expect(JSON.stringify(result.body)).not.toContain('must-not-cross')
   })
 
-  it('strips owner-only and sibling data from a legacy broad member overview', async () => {
+  it('projects invitation metadata but strips sibling private data from a legacy broad member overview', async () => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
     const currentMember = { ...member(), id: 'member-2', role: 'member' }
@@ -1026,8 +1026,8 @@ describe('local Team management routes', () => {
       status: 200,
       body: { viewerRole: 'member', contributions: [{ id: 'account-2', ownerMemberId: 'member-2' }] },
     })
-    expect(result.body).not.toHaveProperty('invites')
-    expect(JSON.stringify(result.body)).not.toMatch(/invite-private|account-1/u)
+    expect(result.body.invites).toEqual([expect.objectContaining({ id: 'invite-private', label: 'Private' })])
+    expect(JSON.stringify(result.body)).not.toMatch(/account-1|dsh_invite_/u)
   })
 
   it('final-filters standalone contributions to the authenticated member at the Host boundary', async () => {
@@ -3697,7 +3697,7 @@ describe('local Team management routes', () => {
     expect(JSON.stringify(result.body)).not.toContain(String(credentials.value))
   })
 
-  it('reveals an existing invite through the Host-only proxy and projects only the intended secret fields', async () => {
+  it.each(['owner', 'member'] as const)('reveals an existing invite for a %s through the Host-only proxy', async role => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_owner-secret-1234567890'
     const mutationFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(JSON.stringify({
@@ -3706,7 +3706,7 @@ describe('local Team management routes', () => {
       expiresAt: 86_400_003,
       internal: 'drop-me',
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
-    const fetch = withOverviewPreflight(mutationFetch)
+    const fetch = withOverviewPreflight(mutationFetch, overview({ currentMember: { ...member(), role } }))
     const { routes } = setup({ enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' }, credentials, fetch)
 
     const result = await response(

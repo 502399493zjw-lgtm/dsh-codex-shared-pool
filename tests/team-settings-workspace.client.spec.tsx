@@ -4073,7 +4073,7 @@ describe('Team subscription-pool workspace', () => {
     })
     settings = await screen.findByRole('region', { name: zh.teamSettingsTitle })
     expect(within(settings).queryByText('「Edison」邀请你接任团队所有者。')).toBeNull()
-    expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
+    expect(within(settings).getByRole('button', { name: zh.invitationsTitle })).toBeDefined()
   })
 
   it('does not expose someone else’s pending transfer to an observing member', async () => {
@@ -4100,6 +4100,38 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByRole('button', { name: '接受并成为团队所有者' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '拒绝' })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '撤销转让请求' })).toBeNull()
+  })
+
+  it.each(['active', 'paused'] as const)('lets members view and copy invitations in an %s Team without management controls', async status => {
+    overviewState = {
+      ...overviewState,
+      viewerRole: 'member',
+      team: { ...overviewState.team, status },
+      currentMember: { ...overviewState.currentMember, role: 'member' },
+      invites: [pendingInvite('invite-1', '成员可见邀请', true), pendingInvite('invite-legacy', '旧邀请', false)],
+    }
+    render(<TeamSettings t={translate} embedded />)
+    const members = await openTeamSettings('members')
+    expect(within(members).queryByRole('button', { name: zh.inviteFriend })).toBeNull()
+    const settings = await openTeamSettings('invitations')
+    expect(within(settings).getByText('成员可见邀请')).toBeDefined()
+    expect(within(settings).getByText('旧邀请码无法查看，请联系团队所有者重新生成')).toBeDefined()
+    expect(within(settings).queryByText(zh.inviteNotRevealable)).toBeNull()
+    if (status === 'paused') expect(within(settings).getByText(zh.memberInvitesPausedHint)).toBeDefined()
+    expect(within(settings).queryByRole('button', { name: zh.inviteFriend })).toBeNull()
+    expect(within(settings).queryByRole('button', { name: zh.revokeInvite })).toBeNull()
+    expect(screen.queryByText(REVEALED_INVITE_TOKEN)).toBeNull()
+    fireEvent.click(within(settings).getByRole('button', { name: zh.revealInvite }))
+    const dialog = await screen.findByRole('dialog', { name: zh.inviteRevealed })
+    expect(managementApi.revealInvite).toHaveBeenCalledWith('invite-1', expectedContext())
+    expect(within(dialog).getByText(REVEALED_INVITE_TOKEN)).toBeDefined()
+    const copy = within(dialog).getByRole('button', { name: zh.copyInvite })
+    fireEvent.click(copy)
+    await waitFor(() => { expect(copy.textContent).toBe(zh.copied) })
+    fireEvent.click(within(dialog).getByRole('button', { name: zh.close }))
+    expect(screen.queryByText(REVEALED_INVITE_TOKEN)).toBeNull()
+    expect(managementApi.createInvite).not.toHaveBeenCalled()
+    expect(managementApi.revokeInvite).not.toHaveBeenCalled()
   })
 
   it('reveals only decryptable invitations in a separate modal and clears the token on close or unmount', async () => {
@@ -4520,7 +4552,7 @@ describe('Team subscription-pool workspace', () => {
     })
   })
 
-  it('does not expose Owner invitations or management controls to Members', async () => {
+  it('shows invitations navigation but does not expose Owner management controls to Members', async () => {
     overviewState = {
       viewerRole: 'member',
       team: overviewState.team,
@@ -4533,7 +4565,7 @@ describe('Team subscription-pool workspace', () => {
     const settings = await openTeamSettings('members')
 
     expect(within(settings).queryByRole('heading', { name: zh.pendingInvitesTitle })).toBeNull()
-    expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
+    expect(within(settings).getByRole('button', { name: zh.invitationsTitle })).toBeDefined()
     expect(within(settings).queryByRole('button', { name: zh.revokeInvite })).toBeNull()
     expect(within(settings).queryByRole('button', { name: zh.pauseTeam })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '永久解散团队' })).toBeNull()
@@ -4583,7 +4615,7 @@ describe('Team subscription-pool workspace', () => {
 
     const settings = await openTeamSettings('members')
     expect(within(settings).getAllByText('成员').length).toBeGreaterThan(0)
-    expect(within(settings).queryByRole('button', { name: zh.invitationsTitle })).toBeNull()
+    expect(within(settings).getByRole('button', { name: zh.invitationsTitle })).toBeDefined()
     expect(within(settings).queryByRole('button', { name: zh.pauseTeam })).toBeNull()
     expect(within(settings).queryByRole('button', { name: '永久解散团队' })).toBeNull()
   })

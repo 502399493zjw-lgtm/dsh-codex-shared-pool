@@ -838,7 +838,7 @@ describe('PostgreSQL Team store', () => {
     await pool.end()
   })
 
-  it('encrypts new invitation tokens, reveals them only to the current Owner, and leaves legacy rows unrevealable', async () => {
+  it('encrypts invitation tokens, lets active members reveal them, and leaves legacy rows unrevealable', async () => {
     const pool = testPool()
     let now = 1_000_000
     const store = testStore({ pool, now: () => now, inviteCipher: testInviteCipher() })
@@ -866,9 +866,22 @@ describe('PostgreSQL Team store', () => {
     const joined = await store.acceptInvite(await store.createInvite(owner, 60_000).then(value => value.inviteToken), 'Member')
     const member = await store.authenticateApiKey(joined.apiKey)
     if (member === undefined) throw new Error('member key should authenticate')
-    await expect(store.revealInvite(member, created.invite.id)).rejects.toThrow(/only the owner/iu)
+    const memberOverview = await store.overview(member)
+    expect(memberOverview.invites).toContainEqual(created.invite)
+    expect(JSON.stringify(memberOverview)).not.toContain(created.inviteToken)
+    await expect(store.revealInvite(member, created.invite.id)).resolves.toMatchObject({ inviteToken: created.inviteToken })
+    await expect(store.createInvite(member, 60_000)).rejects.toThrow(/only the owner/iu)
+    await expect(store.revokeInvite(member, created.invite.id)).rejects.toThrow(/only the owner/iu)
     await expect(store.listInviteRevealAuditEvents(member, 10)).rejects.toThrow(/only the owner/iu)
-    await expect(store.listInviteRevealAuditEvents(owner, 10)).resolves.toHaveLength(1)
+    const audits = await store.listInviteRevealAuditEvents(owner, 10)
+    expect(audits).toHaveLength(2)
+    expect(audits).toContainEqual(expect.objectContaining({ actorMemberId: member.memberId, inviteId: created.invite.id }))
+
+    const otherTeam = await store.bootstrap('Other Team', 'Other Owner')
+    const outsider = await store.authenticateApiKey(otherTeam.apiKey)
+    if (outsider === undefined) throw new Error('outsider key should authenticate')
+    await expect(store.overview(outsider)).resolves.toMatchObject({ invites: [] })
+    await expect(store.revealInvite(outsider, created.invite.id)).rejects.toThrow(/no longer available/iu)
 
     await pool.query(`
       INSERT INTO team_invites
@@ -1007,6 +1020,29 @@ describe('PostgreSQL Team store', () => {
         attempt_count: TEAM_DISSOLUTION_RECOVERY_RATE_LIMIT_MAX_ATTEMPTS + 1,
       }],
     })
+    await pool.end()
+  })
+
+  it.each(['remove', 'leave'] as const)('rejects a member reveal if %s happens during decryption', async departure => {
+    const controlled = blockingRevealCipher()
+    const pool = testPool()
+    const store = testStore({ pool, inviteCipher: controlled.cipher })
+    const boot = await store.bootstrap('Friends', 'Owner')
+    const owner = (await store.authenticateApiKey(boot.apiKey))!
+    const invite = await store.createInvite(owner, 60_000, 'Shared invitation')
+    const joined = await store.acceptInvite(invite.inviteToken, 'Member')
+    const member = (await store.authenticateApiKey(joined.apiKey))!
+
+    const reveal = store.revealInvite(member, invite.invite.id)
+    await controlled.decryptStarted
+    if (departure === 'remove') await store.removeMember(owner, member.memberId)
+    else await store.leaveTeam(member)
+    controlled.releaseDecrypt()
+
+    await expect(reveal).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.overview(member)).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.revealInvite(member, invite.invite.id)).rejects.toThrow(/revoked|invalid|not active/iu)
+    await expect(store.listInviteRevealAuditEvents(owner, 10)).resolves.toEqual([])
     await pool.end()
   })
 

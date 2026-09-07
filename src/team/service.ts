@@ -235,7 +235,7 @@ export class TeamService {
     }
     return isOwner
       ? { viewerRole: 'owner', ...base, invites: overview.invites }
-      : { viewerRole: 'member', ...base }
+      : { viewerRole: 'member', ...base, invites: overview.invites }
   }
 
   async startContributionOAuth(

@@ -157,11 +157,9 @@ function validateOverview(value, expected, bootstraps, deploymentSecrets) {
   ) {
     throw new Error('Team isolation failed: authenticated member mismatch')
   }
-  for (const key of ['members', 'contributions']) {
+  for (const key of ['members', 'invites', 'contributions']) {
     requireTeamScopedList(overview, key, expected.teamId)
   }
-  if (expected.role === 'owner') requireTeamScopedList(overview, 'invites', expected.teamId)
-  else if ('invites' in overview) throw new Error('Team overview exposed Owner-only invitations to a member')
   if ('apiKeys' in overview) throw new Error('Team overview exposed API-key metadata')
   if (!Array.isArray(overview.activeSharedAccounts)) {
     throw new Error('invalid Team overview: activeSharedAccounts is missing')

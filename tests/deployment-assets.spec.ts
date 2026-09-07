@@ -398,10 +398,10 @@ describe('self-hosted deployment assets', () => {
           { id: friendMemberId, teamId, displayName: alpha ? 'Carol' : 'Dave', role: 'member', status: 'active', joinedAt: 2 },
           { id: `${friendMemberId}-again`, teamId, displayName: alpha ? 'Carol Again' : 'Dave Again', role: 'member', status: 'active', joinedAt: 2 },
         ],
-        ...(owner ? { invites: [{
+        invites: [{
           id: alpha ? 'invite-alpha' : 'invite-beta', teamId, invitedByMemberId: ownerMemberId,
           status: 'pending', expiresAt: 60_000, createdAt: 1,
-        }] } : {}),
+        }],
         contributions: [],
         activeSharedAccounts: [],
       })
