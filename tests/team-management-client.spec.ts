@@ -583,6 +583,7 @@ describe('Team management browser API', () => {
         requestCount: 2, tokenMeasuredRequestCount: 1, pricedRequestCount: 0,
         totalTokens: '8750', estimatedCostUsdMicros: null,
       },
+      sharedAccounts: [],
       ownedAccounts: [{
         accountId: 'account-1',
         window: { startedAt: 0, endedAt: 200_000_000 },
@@ -611,6 +612,46 @@ describe('Team management browser API', () => {
     expect(JSON.stringify(result)).not.toContain('must-not-survive')
     expect(result).not.toHaveProperty('team')
     expect(result).not.toHaveProperty('events')
+  })
+
+  it('preserves only safe shared-account request data for a recipient', async () => {
+    const window = { startedAt: 0, endedAt: 200_000_000 }
+    const aggregate = { requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 1,
+      totalTokens: '3000', estimatedCostUsdMicros: '32500' }
+    const recentRequest = { id: 'request-1', consumerDisplayName: 'Mia', model: 'gpt-5-codex',
+      status: 'succeeded', startedAt: 190_000_000, finishedAt: 190_001_000,
+      totalTokens: 3000, estimatedCostUsdMicros: '32500' }
+    const sharedAccount = { accountId: 'shared-account', window, aggregate,
+      last24Hours: { window: { startedAt: 113_600_000, endedAt: window.endedAt }, aggregate },
+      recentRequests: [recentRequest] }
+    const api = createTeamManagementApi(async () => new Response(JSON.stringify({
+      role: 'member', window, currency: 'USD', mine: aggregate,
+      sharedAccounts: [{ ...sharedAccount, credentialRef: 'must-not-survive',
+        last24Hours: { ...sharedAccount.last24Hours, prompt: 'must-not-survive' },
+        recentRequests: [{ ...recentRequest, consumerMemberId: 'private-member',
+          upstreamAccountId: 'private-account', sessionId: 'private-session',
+          prompt: 'must-not-survive', accessToken: 'must-not-survive' }] }],
+      team: aggregate, events: [{ prompt: 'must-not-survive' }],
+    }), { headers: { 'content-type': 'application/json' } }))
+
+    await expect(api.usage()).resolves.toEqual({
+      role: 'member', window, currency: 'USD', mine: aggregate,
+      ownedAccounts: [], sharedAccounts: [sharedAccount],
+    })
+  })
+
+  it('rejects invalid shared-account aggregates instead of placing them in browser state', async () => {
+    const window = { startedAt: 0, endedAt: 10 }
+    const aggregate = { requestCount: 1, tokenMeasuredRequestCount: 1, pricedRequestCount: 0,
+      totalTokens: '3', estimatedCostUsdMicros: null }
+    const api = createTeamManagementApi(async () => new Response(JSON.stringify({
+      role: 'member', window, currency: 'USD', mine: aggregate,
+      sharedAccounts: [{ accountId: 'shared-account', window, aggregate,
+        last24Hours: { window, aggregate: { ...aggregate, tokenMeasuredRequestCount: 2 } },
+        recentRequests: [] }],
+    }), { headers: { 'content-type': 'application/json' } }))
+
+    await expect(api.usage()).rejects.toThrow(/tokenMeasuredRequestCount/u)
   })
 
   it('rejects usage aggregates whose measured count exceeds request count', async () => {

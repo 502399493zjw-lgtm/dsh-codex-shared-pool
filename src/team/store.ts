@@ -635,11 +635,10 @@ function aggregateUsage(events: readonly UsageEventRecord[]): TeamUsageAggregate
   }
 }
 
-function ownedAccountUsage(
+function accountUsage(
   events: readonly UsageEventRecord[],
   members: ReadonlyMap<string, MemberRecord>,
   accounts: readonly ContributionRecord[],
-  memberId: string,
   endedAt: number,
 ): TeamUsageProjection['ownedAccounts'] {
   const startedAt = endedAt - 7 * 86_400_000
@@ -647,7 +646,6 @@ function ownedAccountUsage(
   const currentUtcWeekStartedAt = utcIsoWeekStart(endedAt)
   const currentUtcWeekResetAt = currentUtcWeekStartedAt + 7 * 86_400_000
   return accounts
-    .filter(account => account.ownerMemberId === memberId && account.status !== 'revoked')
     .map(account => {
       const matching = events
         .filter(event => event.upstreamAccountId === account.id
@@ -1624,15 +1622,24 @@ export class MemoryTeamStore implements TeamStore {
       && event.startedAt >= startedAt
       && event.startedAt <= endedAt)
     const mine = aggregateUsage(sharedInWindow.filter(event => event.consumerMemberId === member.id))
-    const ownedAccounts = ownedAccountUsage(
-      [...this.usageEvents.values()].filter(event => event.teamId === member.teamId),
+    const teamEvents = [...this.usageEvents.values()].filter(event => event.teamId === member.teamId)
+    const teamAccounts = [...this.contributions.values()].filter(account => account.teamId === member.teamId)
+    const ownedAccounts = accountUsage(
+      teamEvents,
       this.members,
-      [...this.contributions.values()].filter(account => account.teamId === member.teamId),
-      member.id,
+      teamAccounts.filter(account => account.ownerMemberId === member.id && account.status !== 'revoked'),
+      endedAt,
+    )
+    const sharedAccounts = accountUsage(
+      teamEvents,
+      this.members,
+      teamAccounts.filter(account => account.ownerMemberId !== member.id
+        && account.status === 'active'
+        && this.members.get(account.ownerMemberId)?.status === 'active'),
       endedAt,
     )
     if (member.role !== 'owner') {
-      return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts }
+      return { role: 'member', window: { startedAt, endedAt }, currency: 'USD', mine, ownedAccounts, sharedAccounts }
     }
     return {
       role: 'owner',
@@ -1641,6 +1648,7 @@ export class MemoryTeamStore implements TeamStore {
       team: aggregateUsage(sharedInWindow),
       mine,
       ownedAccounts,
+      sharedAccounts,
     }
   }
 
