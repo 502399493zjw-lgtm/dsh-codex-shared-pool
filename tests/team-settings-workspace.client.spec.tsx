@@ -2954,19 +2954,27 @@ describe('Team subscription-pool workspace', () => {
     expect(within(settings).queryByText('你的成员名称已更新')).toBeNull()
   })
 
-  it('shows the destination before joining or creating a Team', async () => {
+  it.each([
+    'https://team.example.test',
+    'http://192.0.2.42:3080',
+    'http://[2001:db8::42]:3080',
+  ])('keeps the server address %s out of joining, creation, and recovery pages', async serverOrigin => {
     managementApi.status.mockResolvedValue({
       enabled: true, keyConfigured: false, keyWritable: true, pendingJoinConfigured: false,
-      serverOrigin: 'https://team.example.test',
+      serverOrigin,
     })
 
     render(<TeamSettings t={translate} embedded />)
 
-    expect(await screen.findByText('团队服务地址：https://team.example.test')).toBeDefined()
-    expect(screen.getByRole('button', { name: zh.previewInvitation })).toBeDefined()
+    expect(await screen.findByRole('button', { name: zh.previewInvitation })).toBeDefined()
+    expect(document.body.innerHTML).not.toContain(new URL(serverOrigin).hostname)
     fireEvent.click(screen.getByRole('button', { name: zh.createTeam }))
     expect(await screen.findByLabelText(zh.newTeamName)).toBeDefined()
-    expect(screen.getByText('团队服务地址：https://team.example.test')).toBeDefined()
+    expect(document.body.innerHTML).not.toContain(new URL(serverOrigin).hostname)
+    fireEvent.click(screen.getByRole('button', { name: zh.back }))
+    fireEvent.click(await screen.findByRole('button', { name: zh.recoverOwnerEntry }))
+    expect(await screen.findByLabelText(zh.recoveryCode)).toBeDefined()
+    expect(document.body.innerHTML).not.toContain(new URL(serverOrigin).hostname)
     expect(managementApi.overview).not.toHaveBeenCalled()
   })
 
@@ -2981,7 +2989,7 @@ describe('Team subscription-pool workspace', () => {
       render(<TeamSettings t={translate} embedded />)
 
       expect(await screen.findByText('团队服务暂时不可用')).toBeDefined()
-      expect(screen.getByText(`团队服务地址：${serverOrigin}`)).toBeDefined()
+      expect(document.body.innerHTML).not.toContain(new URL(serverOrigin).hostname)
       expect(screen.getByText(/这是当前 DSH 所在电脑上的本机服务/u)).toBeDefined()
       expect(screen.getByText(/teamClient\.baseUrl/u)).toBeDefined()
       expect(screen.getByText(/创建新团队无法修复连接/u)).toBeDefined()
@@ -3000,13 +3008,20 @@ describe('Team subscription-pool workspace', () => {
     },
   )
 
-  it('shows the remote destination and connection checks without suggesting replacement membership', async () => {
+  it.each([
+    'https://team.example.test',
+    'http://192.0.2.42:3080',
+    'http://[2001:db8::42]:3080',
+  ])('shows connection checks without exposing the remote server %s or suggesting replacement membership', async serverOrigin => {
+    managementApi.status.mockResolvedValue({
+      enabled: true, keyConfigured: true, keyWritable: true, pendingJoinConfigured: false, serverOrigin,
+    })
     managementApi.overview.mockRejectedValue(Object.assign(new Error('fetch failed'), { status: 502 }))
 
     render(<TeamSettings t={translate} embedded />)
 
     expect(await screen.findByText('团队服务暂时不可用')).toBeDefined()
-    expect(screen.getByText('团队服务地址：https://team.example.test')).toBeDefined()
+    expect(document.body.innerHTML).not.toContain(new URL(serverOrigin).hostname)
     expect(screen.getByText(/检查当前 DSH 的网络、代理和团队服务地址/u)).toBeDefined()
     expect(screen.getByText(/创建新团队无法修复连接/u)).toBeDefined()
     expect(screen.getByText(/本地团队密钥仍然保留/u)).toBeDefined()
@@ -3079,6 +3094,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
 
     expect(await screen.findByText(zh.pendingJoinTitle)).toBeDefined()
+    expect(document.body.innerHTML).not.toContain('team.example.test')
     expect(screen.queryByRole('button', { name: zh.previewInvitation })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: zh.recoverJoin }))
     await waitFor(() => { expect(managementApi.recoverJoin).toHaveBeenCalledTimes(1) })
@@ -3101,6 +3117,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
 
     expect(await screen.findByText('此设备的团队访问已失效')).toBeDefined()
+    expect(document.body.innerHTML).not.toContain('team.example.test')
     expect(screen.queryByRole('button', { name: zh.previewInvitation })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '清除本地连接' }))
 
