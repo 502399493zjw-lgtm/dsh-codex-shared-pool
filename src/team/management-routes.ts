@@ -1406,6 +1406,7 @@ class TeamManagementProxy {
   private localContributionBindingTransition: Promise<void> = Promise.resolve()
   private browserOAuthLifecycleTransition: Promise<void> = Promise.resolve()
   private credentialTransition: Promise<void> = Promise.resolve()
+  private savedConnectionTransition: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly config: TeamClientConfig,
@@ -1762,22 +1763,45 @@ class TeamManagementProxy {
   }
 
   private async saveConnection(apiKey: string, overview: TeamManagementOverview): Promise<void> {
-    const serverUrl = this.requireEnabled()
-    const connections = await this.savedConnections()
-    const existing = connections.find(item => item.serverUrl === serverUrl && item.teamId === overview.team.id && item.currentMemberId === overview.currentMember.id)
-    await this.writeConnections([
-      ...connections.filter(item => item !== existing),
-      { id: existing?.id ?? randomUUID(), serverUrl, apiKey, teamId: overview.team.id,
-        teamName: overview.team.name, currentMemberId: overview.currentMember.id, memberName: overview.currentMember.displayName },
-    ])
+    return this.withSavedConnectionTransition(async () => {
+      const serverUrl = this.requireEnabled()
+      const connections = await this.savedConnections()
+      const existing = connections.find(item => item.serverUrl === serverUrl && item.teamId === overview.team.id && item.currentMemberId === overview.currentMember.id)
+      await this.writeConnections([
+        ...connections.filter(item => item !== existing),
+        { id: existing?.id ?? randomUUID(), serverUrl, apiKey, teamId: overview.team.id,
+          teamName: overview.team.name, currentMemberId: overview.currentMember.id, memberName: overview.currentMember.displayName },
+      ])
+    })
   }
 
   async connections(): Promise<readonly TeamSavedConnection[]> {
-    const serverUrl = this.requireEnabled()
-    return (await this.savedConnections()).filter(item => item.serverUrl === serverUrl).map(item => ({
-      id: item.id, teamId: item.teamId, teamName: item.teamName,
-      currentMemberId: item.currentMemberId, memberName: item.memberName,
-    }))
+    return this.withCredentialTransition(async () => {
+      const serverUrl = this.requireEnabled()
+      const candidates = (await this.savedConnections()).filter(item => item.serverUrl === serverUrl)
+      // This diagnostic is read-only and deliberately does not publish a terminal
+      // for the active Team: a saved identity can belong to a different Team.
+      // Unknown keys, old servers and transport failures do not prove departure.
+      const diagnosed = await Promise.all(candidates.map(async item => ({
+        item, terminal: await this.diagnoseConnectionTerminal(item.apiKey),
+      })))
+      const terminalKeys = new Set(diagnosed.filter(item => item.terminal !== undefined).map(({ item }) => item.apiKey))
+      return this.withSavedConnectionTransition(async () => {
+        const saved = await this.savedConnections()
+        const remaining = saved.filter(item => item.serverUrl !== serverUrl || !terminalKeys.has(item.apiKey))
+        if (remaining.length !== saved.length) {
+          try {
+            if ((await this.credentials.describe(this.savedConnectionsRef())).writable) await this.writeConnections(remaining)
+          } catch {
+            // Hide proven terminal entries now; a later listing retries persistence.
+          }
+        }
+        return remaining.filter(item => item.serverUrl === serverUrl).map(item => ({
+          id: item.id, teamId: item.teamId, teamName: item.teamName,
+          currentMemberId: item.currentMemberId, memberName: item.memberName,
+        }))
+      })
+    })
   }
 
   private async requireConnectionTransitionReady(): Promise<void> {
@@ -3452,14 +3476,34 @@ class TeamManagementProxy {
     return next
   }
 
-  private async cleanupLocalTeamKey(expectedKeySha256?: string): Promise<TerminalDissolutionRecord['localCleanup']> {
+  private async cleanupSavedTeamConnections(expectedKeySha256: string): Promise<TerminalDissolutionRecord['localCleanup']> {
+    return this.withSavedConnectionTransition(async () => {
+      try {
+        const saved = await this.savedConnections()
+        const retained = saved.filter(item => createHash('sha256').update(item.apiKey).digest('hex') !== expectedKeySha256)
+        if (retained.length === saved.length) return 'completed'
+        if (!(await this.credentials.describe(this.savedConnectionsRef())).writable) return 'manual_required'
+        await this.writeConnections(retained)
+        return 'completed'
+      } catch {
+        try {
+          return (await this.credentials.describe(this.savedConnectionsRef())).writable ? 'retry_required' : 'manual_required'
+        } catch {
+          return 'retry_required'
+        }
+      }
+    })
+  }
+
+  private async cleanupLocalTeamKey(expectedKeySha256: string): Promise<TerminalDissolutionRecord['localCleanup']> {
+    // The saved credential can outlive the active key after a crash or another
+    // connection replacing it. Remove only the digest-bound saved entries first.
+    const savedCleanup = await this.cleanupSavedTeamConnections(expectedKeySha256)
+    if (savedCleanup !== 'completed') return savedCleanup
     try {
       const resolved = await this.credentials.resolve(this.keyRef())
       if (resolved === undefined) return 'completed'
-      if (
-        expectedKeySha256 !== undefined
-        && createHash('sha256').update(resolved.value).digest('hex') !== expectedKeySha256
-      ) return 'completed'
+      if (createHash('sha256').update(resolved.value).digest('hex') !== expectedKeySha256) return 'completed'
       const info = await this.credentials.describe(this.keyRef())
       if (!info.writable) return 'manual_required'
       await this.credentials.unset(this.keyRef())
@@ -3590,6 +3634,19 @@ class TeamManagementProxy {
     }
   }
 
+  /** Serialize saved-vault read/modify/write operations without holding a lock over remote calls. */
+  private async withSavedConnectionTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.savedConnectionTransition
+    let release!: () => void
+    this.savedConnectionTransition = new Promise(resolve => { release = resolve })
+    await previous
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
   private async withCredentialTransition<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.credentialTransition
     let release!: () => void
@@ -3644,9 +3701,11 @@ class TeamManagementProxy {
 
   /** Do not delete a credential another process or tab has already replaced. */
   private async unsetKeyIfCurrent(expectedKey: string): Promise<void> {
+    await this.withSavedConnectionTransition(async () => {
+      const saved = await this.savedConnections()
+      if (saved.some(item => item.apiKey === expectedKey)) await this.writeConnections(saved.filter(item => item.apiKey !== expectedKey))
+    })
     const current = await this.credentials.resolve(this.keyRef())
-    const saved = await this.savedConnections()
-    if (saved.some(item => item.apiKey === expectedKey)) await this.writeConnections(saved.filter(item => item.apiKey !== expectedKey))
     if (current?.value === expectedKey) await this.credentials.unset(this.keyRef())
   }
 
