@@ -40,7 +40,9 @@ Validation was performed on 2026-09-06; CI evidence is attached to [PR #99](http
 | Real Team request | Existing Team configuration completed a browser request with GPT-5.4 mini and returned the requested acceptance text; no tools were called. |
 | Real local pool | Published `LlmRuntime.prepareCall` completed a GPT-5.4 mini request through local credentials. An exhausted account triggered `quota_fallback` and a successful receipt; a follow-up returned `LOCAL_POOL_OK`. |
 
-New provider OAuth authorization was not repeated. Existing authorized credentials were reused. The Windows stock job verifies installation and startup; interactive Windows browser and provider login are separate acceptance levels.
+At the time of this migration acceptance, new provider OAuth authorization was not repeated. Existing authorized credentials were reused. The Windows stock job verifies installation and startup; interactive Windows browser and provider login are separate acceptance levels.
+
+A later 2026-09-07 run used the published npm 0.1.4 package and completed fresh browser sharing OAuth, an isolated member request, weekly sharing-budget rejection and recovery. See the [published-package test record](../acceptance/0.1.4-published-package.md) for results and the same-machine boundary.
 
 The local upgrade retained a rollback backup. Old DSHMarket, Model Retry and Chat Fold bundles were temporarily disabled while their installed packages and configuration were preserved; their upgrades are outside this plugin migration.
 
