@@ -42,7 +42,7 @@ DSH 本身一次只绑定一个 Codex 账号。这个插件解决两种使用问
 3. 贡献者在同一处选择要共享的本机账号，通过浏览器完成单独的共享授权，设置每周共享上限。
 4. 成员粘贴邀请码加入团队。成员的请求由远端 Credential Broker 使用已授权的共享账号发出，成员本机不保存贡献者的 `auth.json`。
 
-成员 DSH 需要把插件的 Team client 指向管理员提供的 HTTPS 地址，并把成员自己的 Team API key 存入 DSH 凭据存储：
+成员通过邀请码加入后，页面会为本机保存成员自己的 Team API key。若使用管理员提供的固定配置，也可以在 DSH 的插件配置中把 Team client 指向 HTTPS 地址，并让 `apiKeyRef` 指向这份凭据：
 
 ```yaml
 teamClient:
