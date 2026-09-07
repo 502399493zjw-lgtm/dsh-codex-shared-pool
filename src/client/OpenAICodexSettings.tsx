@@ -734,6 +734,7 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
     >
       <style>{`
         .dsh-codex-settings, .dsh-codex-settings * { box-sizing: border-box; }
+        .dsh-codex-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
         .dsh-codex-settings button, .dsh-codex-settings input, .dsh-codex-settings select { font: inherit; }
         .dsh-codex-settings button:focus-visible,
         .dsh-codex-settings input:focus-visible,
@@ -749,22 +750,22 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         .dsh-codex-profile-item { display: flex; width: 100%; min-height: 52px; padding: 10px 12px; border: 1px solid transparent; border-radius: 10px; color: var(--dsw-alias-label-secondary); text-align: left; background: transparent; cursor: pointer; }
         .dsh-codex-profile-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
         .dsh-codex-profile-item[data-selected='true'] { border-color: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary); background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent); }
-        .dsh-codex-profile-identity { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 4px; }
-        .dsh-codex-profile-primary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: 4px 8px; }
-        .dsh-codex-profile-alias { flex: 0 0 auto; padding: 1px 6px; border-radius: 4px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.04)); font-size: 12px; line-height: 18px; font-weight: 500; }
-        .dsh-codex-profile-name { flex: 1 1 100px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
-        .dsh-codex-profile-status { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 4px 7px; font-size: 12px; line-height: 18px; }
+        .dsh-codex-profile-identity { display: flex; flex-direction: column; width: 100%; min-width: 0; gap: 8px; }
+        .dsh-codex-profile-rank { flex: 0 0 auto; color: var(--dsw-alias-label-tertiary); font-size: 11px; line-height: 18px; font-weight: 400; font-variant-numeric: tabular-nums; }
+        .dsh-codex-profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 20px; font-weight: 600; }
+        .dsh-codex-profile-status { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 6px 10px; font-size: 12px; line-height: 18px; }
+        .dsh-codex-connection-dot { display: inline-flex; align-items: center; flex: 0 0 auto; }
         .dsh-codex-profile-status > :first-child { flex-shrink: 0; }
         .dsh-codex-profile-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
         .dsh-codex-profile-detail { display: flex; flex-direction: column; min-width: 0; padding: 20px 24px 0; }
-        .dsh-codex-detail-heading { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+        .dsh-codex-detail-heading { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; min-width: 0; }
+        .dsh-codex-detail-identity { display: flex; align-items: center; flex-wrap: wrap; flex: 1 1 120px; gap: 6px 10px; min-width: 0; }
         .dsh-codex-detail-title { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--dsw-alias-label-primary); font-size: 20px; line-height: 28px; font-weight: 600; }
         .dsh-codex-account-status { display: inline-flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: 7px; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 18px; font-weight: 500; }
         .dsh-codex-account-status[data-state='error'] { color: var(--dsw-alias-state-error-primary); }
-        .dsh-codex-default { margin-top: 18px; }
-        .dsh-codex-default-action { min-height: 34px; padding: 6px 14px; border-radius: 8px; min-width: 112px; justify-content: center; }
-        .dsh-codex-default p { margin: 8px 0 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
-        .dsh-codex-default p[role='alert'] { color: var(--dsw-alias-state-error-primary); }
+        .dsh-codex-account-status:not([data-state='done']) { flex-basis: 100%; }
+        .dsh-codex-default-action { flex: 0 0 auto; margin-inline-start: auto; min-height: 34px; padding: 6px 14px; border-radius: 8px; min-width: 112px; max-width: 100%; justify-content: center; }
+        .dsh-codex-priority-error { margin: 12px 0 0; overflow-wrap: anywhere; color: var(--dsw-alias-state-error-primary); font-size: 13px; line-height: 20px; }
         .dsh-codex-quota { margin-top: 20px; padding: 20px 0 24px; border-top: 1px solid var(--dsw-alias-border-l2); }
         .dsh-codex-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 16px 0; margin-top: auto; border-top: 1px solid var(--dsw-alias-border-l2); }
         .dsh-codex-detail-actions button { display: inline-flex; align-items: center; justify-content: center; min-width: 0; gap: 6px; min-height: 36px; padding: 7px 14px; overflow-wrap: anywhere; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; font-size: 13px; font-weight: 500; line-height: 20px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.04)); cursor: pointer; }
@@ -867,13 +868,16 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
                 }}
               >
                 <span className="dsh-codex-profile-identity">
-                  <span className="dsh-codex-profile-primary">
-                    <span className="dsh-codex-profile-name" title={accountLabel(profile, index, t)}>{accountLabel(profile, index, t)}</span>
-                    <span className="dsh-codex-profile-alias">{t('priorityPosition', { rank: index + 1 })}</span>
-                  </span>
+                  <span className="dsh-codex-profile-name" title={accountLabel(profile, index, t)}>{accountLabel(profile, index, t)}</span>
                   <span className="dsh-codex-profile-status" data-state={profile.connectionStatus === 'reauth-required' ? 'error' : undefined}>
-                    <ConnectionDot status={profile.connectionStatus} />
-                    <span>{connectionLabel(profile.connectionStatus, t)}</span>
+                    <span className="dsh-codex-profile-rank" title={t('priorityPosition', { rank: index + 1 })}>
+                      <span aria-hidden="true">#{index + 1}</span>
+                      <span className="dsh-codex-sr-only">{t('priorityPosition', { rank: index + 1 })}</span>
+                    </span>
+                    <span className="dsh-codex-connection-dot" role="img" aria-label={connectionLabel(profile.connectionStatus, t)} title={connectionLabel(profile.connectionStatus, t)}>
+                      <ConnectionDot status={profile.connectionStatus} />
+                    </span>
+                    {profile.connectionStatus === 'connected' ? null : <span>{connectionLabel(profile.connectionStatus, t)}</span>}
                     {profile.id === priorityProfile?.id ? <span style={badgeStyle}>{t('profileInUse')}</span> : null}
                   </span>
                 </span>
@@ -912,20 +916,21 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
         ) : (
           <section className="dsh-codex-profile-detail" aria-label={selectedProfileLabel}>
             <div className="dsh-codex-detail-heading">
-              <h3 className="dsh-codex-detail-title">{selectedProfileLabel}</h3>
-              <span
-                className="dsh-codex-account-status"
-                data-state={selectedProfile.connectionStatus === undefined ? 'idle' : selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'}
-                role="status"
-                {...selectedProfile.connectionStatus === 'reauth-required' && selectedProfile.quotaError !== undefined
-                  ? { title: selectedProfile.quotaError }
-                  : {}}
-              >
-                <ConnectionDot status={selectedProfile.connectionStatus} />
-                {connectionLabel(selectedProfile.connectionStatus, t)}
-              </span>
-            </div>
-            <div className="dsh-codex-default">
+              <div className="dsh-codex-detail-identity">
+                <h3 className="dsh-codex-detail-title">{selectedProfileLabel}</h3>
+                <span
+                  className="dsh-codex-account-status"
+                  data-state={selectedProfile.connectionStatus === undefined ? 'idle' : selectedProfile.connectionStatus === 'reauth-required' ? 'error' : 'done'}
+                  role="status"
+                  aria-label={connectionLabel(selectedProfile.connectionStatus, t)}
+                  {...selectedProfile.connectionStatus === 'reauth-required' && selectedProfile.quotaError !== undefined
+                    ? { title: selectedProfile.quotaError }
+                    : { title: connectionLabel(selectedProfile.connectionStatus, t) }}
+                >
+                  <ConnectionDot status={selectedProfile.connectionStatus} />
+                  {selectedProfile.connectionStatus === 'connected' ? null : connectionLabel(selectedProfile.connectionStatus, t)}
+                </span>
+              </div>
               <Button
                 className="dsh-codex-default-action"
                 variant="outline"
@@ -935,8 +940,8 @@ export function OpenAICodexSettings({ t, embedded = false }: OpenAICodexSettings
               >
                 {t('setPriorityProfile')}
               </Button>
-              {priorityError === undefined ? null : <p role="alert">{priorityError}</p>}
             </div>
+            {priorityError === undefined ? null : <p className="dsh-codex-priority-error" role="alert">{priorityError}</p>}
             <div className="dsh-codex-quota">
               {selectedProfile.quotaLoading ? <p style={quotaBodyStyle}>{t('loadingQuota')}</p> : null}
               <UsageLimits
