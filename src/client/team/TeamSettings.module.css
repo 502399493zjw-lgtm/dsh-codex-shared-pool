@@ -3538,10 +3538,195 @@
 
 .compactSummaryList dd > .inlineLimitButton { margin-inline-start: 8px; }
 
-/* Ownership recovery is a secondary path below the join form. */
-.recoveryEntry {
+/* Onboarding uses the host palette and 9px controls; connected workspaces keep their own layout. */
+.joinSection {
+  display: flex;
+  width: min(100%, 720px);
+  min-width: 0;
+  flex-direction: column;
+  gap: 24px;
+  padding-top: 8px;
+}
+
+.joinHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.joinHeader .sectionTitle {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.joinIntro {
+  margin: 8px 0 0;
+  color: var(--team-muted);
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.joinSavedTeams {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.joinSavedTeams .teamSelectorTrigger {
+  min-height: 36px;
+  margin: 0;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 9px;
+  padding: 7px 11px;
+  color: var(--team-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.joinPanel {
+  min-width: 0;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 12px;
+  padding: 24px;
+  background: var(--team-context-layer);
+}
+
+.joinForm {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.joinTokenRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.joinTokenRow .field {
+  min-width: 0;
+  flex: 1;
+  gap: 8px;
+}
+
+.joinForm .label {
+  color: var(--team-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.joinForm .input {
+  min-width: 0;
+  min-height: 42px;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: var(--team-layer-soft);
+  color: var(--team-ink);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.joinForm .input::placeholder { color: var(--team-muted); opacity: 1; }
+.joinForm .input[aria-invalid='true'] { border-color: var(--team-red); }
+
+.joinForm .input:focus-visible,
+.joinConnectionDetails summary:focus-visible {
+  outline: 2px solid var(--team-blue);
+  outline-offset: 3px;
+}
+
+.page .joinPrimaryAction {
+  min-height: 42px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 10px 16px;
+  background: var(--team-ink);
+  color: var(--team-layer);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.page .joinPrimaryAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--team-ink) 88%, var(--team-layer));
+}
+
+.page .joinPrimaryAction:active:not(:disabled) { transform: translateY(1px); }
+
+.page .joinPrimaryAction:disabled {
+  border-color: var(--team-line);
+  background: var(--team-panel-line);
+  color: var(--team-muted);
+  opacity: 1;
+}
+
+.joinFieldHint {
+  margin: -6px 0 0;
+  color: var(--team-muted);
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.joinFieldHint[data-invalid='true'] { color: var(--team-red); }
+
+.joinAlternatives,
+.joinCreateEntry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--team-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.joinAlternatives {
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-top: -8px;
+}
+
+.page .joinCreateAction {
+  min-height: 36px;
+  border: 1px solid var(--team-line-strong);
+  border-radius: 9px;
+  padding: 7px 11px;
+  color: var(--team-ink);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.joinConnectionDetails {
   border-top: 1px solid var(--team-line);
-  padding-top: 18px;
+  padding-top: 16px;
+  color: var(--team-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.joinConnectionDetails summary {
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.joinConnectionDetails summary:hover { color: var(--team-ink); }
+.joinConnectionDetails[open] summary { margin-bottom: 10px; }
+.joinConnectionDetails .body { margin-top: 6px; overflow-wrap: anywhere; font-size: 12px; }
+
+@container team-settings (max-width: 560px) {
+  .joinHeader { flex-direction: column; gap: 14px; }
+  .joinPanel { padding: 20px; }
+  .joinTokenRow { flex-direction: column; align-items: stretch; gap: 12px; }
+  .joinAlternatives { align-items: flex-start; flex-direction: column; gap: 8px; }
 }
 
 .recoveryEntryLink {

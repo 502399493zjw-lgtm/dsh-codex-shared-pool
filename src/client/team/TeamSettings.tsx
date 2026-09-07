@@ -1,7 +1,7 @@
 /** Invite-only Team capacity management inside the dsh Settings shell. */
 
 import { ArrowLeft, MoreHorizontal } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { TeamConnections } from './TeamConnections.tsx'
 import { TeamFloatingMenu } from './TeamFloatingMenu.tsx'
 import { TeamSetup, TeamRecoveryCode, type TeamSetupMode } from './TeamSetup.tsx'
@@ -616,6 +616,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
   const [busy, setBusy] = useState<string>()
   const [displayName, setDisplayName] = useState('')
   const [inviteToken, setInviteToken] = useState('')
+  const inviteHintId = useId()
   const [invitePreview, setInvitePreview] = useState<TeamManagementInvitePreview>()
   const previewRequestId = useRef(0)
   const [inviteResult, setInviteResult] = useState<CreatedInviteSecret>()
@@ -1915,7 +1916,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
       <main className={styles.page}>
         {embedded ? null : <PageHeading t={t} />}
         {error === undefined ? null : <Notice tone="error" title={t('requestFailed')} detail={error} />}
-        <section className={styles.section}>
+        <section className={styles.joinSection}>
           {status.keyConfigured && !status.pendingJoinConfigured ? (
             <button type="button" className={styles.joinBackButton} disabled={busy !== undefined} onClick={() => {
               setJoiningOtherTeam(false); setInviteToken(''); setInvitePreview(undefined); previewRequestId.current += 1
@@ -1924,14 +1925,14 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
               <span>{t('returnToTeam')}</span>
             </button>
           ) : null}
-          <div className={styles.sectionCopy}>
-            <h2 className={styles.sectionTitle}>{t(status.keyConfigured ? 'joinOtherTeam' : 'notConnected')}</h2>
-            <p className={styles.hint}>{t(status.keyConfigured ? 'joinOtherHint' : 'notConnectedHint')}</p>
-            <TeamServiceConnection serverOrigin={status.serverOrigin} t={t} />
-            {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.compactActions}>
+          <div className={styles.joinHeader}>
+            <div className={styles.sectionCopy}>
+              <h2 className={styles.sectionTitle}>{t(status.keyConfigured ? 'joinOtherTeam' : 'notConnected')}</h2>
+              <p className={styles.joinIntro}>{t(status.keyConfigured ? 'joinOtherHint' : 'joinTeamIntro')}</p>
+            </div>
+            {!status.keyConfigured && !status.pendingJoinConfigured ? <div className={styles.joinSavedTeams}>
               <TeamConnections api={api} t={t} expectedContext={null} disabled={busy !== undefined || !status.keyWritable}
                 onCreate={() => openSetup('create')} onChanged={async () => { await refresh(true) }} />
-              <Button variant="ghost" disabled={busy !== undefined || !status.keyWritable} onClick={() => openSetup('create')}>{t('createTeam')}</Button>
             </div> : null}
           </div>
           {status.pendingJoinConfigured ? (
@@ -1954,23 +1955,25 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             </Notice>
           ) : null}
           {status.pendingJoinConfigured ? null : status.keyWritable ? (
-            <div className={styles.connectionGrid}>
-              <div className={styles.panel}>
+            <div className={styles.joinPanel}>
+              <div className={styles.joinForm}>
                 <h3 className={styles.panelTitle}>{t('joinInvite')}</h3>
-                <Field label={t('inviteToken')} {...inviteTokenInvalid ? { hint: t('inviteTokenInvalid') } : {}}>
-                  <Input className={styles.input!} value={inviteToken} maxLength={512} autoComplete="off" spellCheck={false} placeholder={t('inviteTokenPlaceholder')} aria-invalid={inviteTokenInvalid || undefined} onChange={event => {
-                    setInviteToken(event.target.value)
-                    setInvitePreview(undefined)
-                    previewRequestId.current += 1
-                  }} />
-                </Field>
-                {invitePreview === undefined ? (
-                  <div className={styles.actionRow}>
-                    <Button variant="primary" disabled={busy !== undefined || !TEAM_INVITE_TOKEN_PATTERN.test(normalizedInviteToken)} onClick={() => { void previewInvitation() }}>
+                <div className={styles.joinTokenRow}>
+                  <Field label={t('inviteToken')}>
+                    <Input className={styles.input!} value={inviteToken} maxLength={512} autoComplete="off" spellCheck={false} placeholder={t('inviteTokenPlaceholder')} aria-describedby={inviteHintId} aria-invalid={inviteTokenInvalid || undefined} onChange={event => {
+                      setInviteToken(event.target.value)
+                      setInvitePreview(undefined)
+                      previewRequestId.current += 1
+                    }} />
+                  </Field>
+                  {invitePreview === undefined ? (
+                    <Button className={styles.joinPrimaryAction!} variant="primary" disabled={busy !== undefined || !TEAM_INVITE_TOKEN_PATTERN.test(normalizedInviteToken)} onClick={() => { void previewInvitation() }}>
                       {busy === 'invite-preview' ? t('working') : t('previewInvitation')}
                     </Button>
-                  </div>
-                ) : (
+                  ) : null}
+                </div>
+                <p id={inviteHintId} className={styles.joinFieldHint} data-invalid={inviteTokenInvalid}>{t(inviteTokenInvalid ? 'inviteTokenInvalid' : 'joinInviteHint')}</p>
+                {invitePreview === undefined ? null : (
                   <>
                     <div className={styles.invitePreview} data-status={invitePreview.teamStatus} role="status" aria-live="polite">
                       <div>
@@ -1992,7 +1995,7 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
                       <Input className={styles.input!} value={displayName} autoComplete="name" placeholder={t('displayNamePlaceholder')} onChange={event => { setDisplayName(event.target.value) }} />
                     </Field>
                     <div className={styles.actionRow}>
-                      <Button variant="primary" disabled={busy !== undefined || displayName.length === 0 || invitePreview.teamStatus !== 'active'} onClick={() => { void joinTeam() }}>
+                      <Button className={styles.joinPrimaryAction!} variant="primary" disabled={busy !== undefined || displayName.length === 0 || invitePreview.teamStatus !== 'active'} onClick={() => { void joinTeam() }}>
                         {busy === 'join' ? t('working') : t('confirmJoin')}
                       </Button>
                     </div>
@@ -2002,12 +2005,21 @@ export function TeamSettings({ t = fallbackTranslate, embedded = false }: TeamSe
             </div>
           ) : <Notice tone="warning" title={t('readOnlyKey')} detail={status.keySource} />}
           {!status.keyConfigured && !status.pendingJoinConfigured && status.keyWritable ? (
-            <div className={styles.recoveryEntry}>
+            <div className={styles.joinAlternatives}>
+              <div className={styles.joinCreateEntry}>
+                <span>{t('noTeamYet')}</span>
+                <Button className={styles.joinCreateAction!} variant="ghost" disabled={busy !== undefined} onClick={() => openSetup('create')}>{t('createTeam')}</Button>
+              </div>
               <button type="button" className={styles.recoveryEntryLink} disabled={busy !== undefined} onClick={() => openSetup('recover')}>
                 {t('recoverOwnerEntry')}
               </button>
             </div>
           ) : null}
+          <details className={styles.joinConnectionDetails}>
+            <summary>{t('connectionAndSecurity')}</summary>
+            <p className={styles.hint}>{t('notConnectedHint')}</p>
+            <TeamServiceConnection serverOrigin={status.serverOrigin} t={t} />
+          </details>
         </section>
       </main>
     )
