@@ -2595,6 +2595,7 @@ class TeamManagementProxy {
       interaction,
       cancellation.signal,
       frozenExpectedContext,
+      discardInitialOnFailure,
       validationIntent,
     )
       .catch(async (error: unknown) => {
@@ -2685,6 +2686,7 @@ class TeamManagementProxy {
     interaction: AuthInteraction,
     signal: AbortSignal,
     expectedContext: TeamManagementExpectedContext,
+    isInitialAuthorization: boolean,
     validationIntent?: LocalAccountValidationIntent,
   ): Promise<void> {
     const directory = await mkdtemp(join(this.temporaryRootDir, 'dsh-team-oauth-'))
@@ -2700,12 +2702,18 @@ class TeamManagementProxy {
       if (typeof providerAccountId !== 'string' || providerAccountId.trim() === '') {
         throw new Error('OpenAI Codex sign-in completed without an account credential')
       }
-      if (validationIntent !== undefined && providerAccountId !== validationIntent.expectedProviderAccountId) {
+      const matchesSelectedAccount = validationIntent !== undefined
+        && providerAccountId === validationIntent.expectedProviderAccountId
+      // A new contribution uses whichever account the user authorizes in the browser.
+      // Reauthorizing an existing bound contribution must preserve its account identity.
+      if (!isInitialAuthorization && validationIntent !== undefined && !matchesSelectedAccount) {
         throw new Error('independently authorized OpenAI account does not match the selected local account')
       }
       const currentKey = await this.expectedOAuthMutationKey(expectedContext, signal)
       if (signal.aborted) throw abortReason(signal)
-      if (validationIntent !== undefined) {
+      // Leave a different account unbound; overview reconciliation links it only when
+      // its actual provider identity uniquely matches a local profile.
+      if (validationIntent !== undefined && matchesSelectedAccount) {
         await this.persistLocalContributionBinding({
           expectedContext,
           accountId: account.id,

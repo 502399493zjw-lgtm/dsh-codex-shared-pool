@@ -2958,9 +2958,108 @@ describe('local Team management routes', () => {
     }
   })
 
-  it('rejects a browser OAuth account mismatch and discards the initial remote contribution', async () => {
+  it.each([0, 1, 2])('shares the actual browser-authorized account with %i matching local profiles', async (matches) => {
     const credentials = new FakeCredentials()
     credentials.value = 'dsh_team_member-secret-1234567890'
+    const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-authorized-account-test-'))
+    cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
+    const handoffs = new TeamCredentialHandoffRegistry()
+    const offer = handoffs.create({ teamId: 'team-1', accountId: 'account-1' })
+    let transferred: ReturnType<typeof handoffs.complete> | undefined
+    let currentAccount: ReturnType<typeof contribution> | undefined
+    let releaseLogin = () => {}
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    cleanups.push(async () => { releaseLogin() })
+    const backgroundErrors: unknown[] = []
+    const profiles = [
+      { id: 'local-selected', label: 'Selected account', createdAt: 1, updatedAt: 1 },
+      ...Array.from({ length: matches }, (_, index) => ({
+        id: `local-authorized-${index}`, label: 'Authorized account', createdAt: 1, updatedAt: 1,
+      })),
+    ]
+    const originalProfiles = structuredClone(profiles)
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/overview')) return Response.json(overview({
+        currentMember: { ...member(), role: 'member' },
+        contributions: currentAccount === undefined ? [] : [currentAccount],
+      }))
+      if (url.endsWith('/contributions/oauth/start')) {
+        currentAccount = { ...contribution(), status: 'authorizing' }
+        return Response.json({ account: currentAccount, method: 'browser_handoff', handoff: offer }, { status: 201 })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)) {
+        const body = JSON.parse(String(init?.body)) as { envelope: Parameters<typeof handoffs.complete>[1] }
+        transferred = handoffs.complete({ teamId: 'team-1', accountId: 'account-1' }, body.envelope)
+        currentAccount = { ...contribution(), label: transferred.label, status: 'active' }
+        return Response.json({ account: currentAccount })
+      }
+      if (url.endsWith(TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH)) {
+        const body = JSON.parse(String(init?.body)) as { providerAccountId: string }
+        return Response.json({ accountIds: currentAccount?.status === 'active' && body.providerAccountId === 'provider-authorized'
+          ? ['account-1'] : [] })
+      }
+      if (url.endsWith('/contributions/oauth/cancel')) {
+        currentAccount = { ...contribution(), status: 'revoked' }
+        return Response.json({ account: currentAccount })
+      }
+      throw new Error('unexpected remote request')
+    })
+    const { routes } = setup(
+      { enabled: true, baseUrl: 'https://pool.example/plugins/dsh-codex-shared-pool/team' },
+      credentials,
+      fetch,
+      {
+        temporaryRootDir,
+        onBackgroundError: error => { backgroundErrors.push(error) },
+        localProfiles: {
+          listProfiles: async () => profiles,
+          readProfileProviderAccountId: async id => id === 'local-selected' ? 'provider-selected' : 'provider-authorized',
+        },
+        loginProfile: async (interaction, store) => {
+          interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/oauth/authorize?state=actual-account' })
+          await loginGate
+          return store.addProfile('Authorized account', {
+            type: 'oauth', access: 'authorized-access-secret', refresh: 'authorized-refresh-secret',
+            expires: Date.now() + 3_600_000, accountId: 'provider-authorized',
+          })
+        },
+      },
+    )
+    const started = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
+      label: 'Selected account', method: 'browser', sourceLocalProfileId: 'local-selected',
+    })))
+    expect(started.status).toBe(201)
+    releaseLogin()
+    await vi.waitFor(() => { expect(currentAccount?.status).toBe('active') })
+    await vi.waitFor(() => { expect(credentials.get(BROWSER_OAUTH_PENDING_REF)).toBeUndefined() })
+    expect(transferred).toMatchObject({ label: 'Authorized account', credential: {
+      accountId: 'provider-authorized', access: 'authorized-access-secret', refresh: 'authorized-refresh-secret',
+    } })
+    expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF) ?? '').not.toContain('local-selected')
+    const settled = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
+    expect(settled.status).toBe(200)
+    expect(settled.body.contributions[0]).toMatchObject({ label: 'Authorized account', status: 'active' })
+    if (matches === 1) {
+      expect(settled.body.contributions[0].sourceLocalProfileId).toBe('local-authorized-0')
+      expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).toContain('local-authorized-0')
+    } else {
+      expect(settled.body.contributions[0]).not.toHaveProperty('sourceLocalProfileId')
+      expect(credentials.get(LOCAL_CONTRIBUTION_BINDINGS_REF)).toBeUndefined()
+    }
+    expect(profiles).toEqual(originalProfiles)
+    expect(backgroundErrors).toEqual([])
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/contributions/oauth/cancel'))).toBe(false)
+    expect(JSON.stringify([started.body, settled.body])).not.toMatch(/authorized-access|authorized-refresh|provider-authorized|provider-selected|serverPublicKey|sessionId/u)
+    await vi.waitFor(async () => { expect(await readdir(temporaryRootDir)).toEqual([]) })
+  })
+
+  it('still rejects a different account when reauthorizing an existing bound contribution', async () => {
+    const credentials = new FakeCredentials()
+    credentials.value = 'dsh_team_member-secret-1234567890'
+    credentials.put(LOCAL_CONTRIBUTION_BINDINGS_REF, JSON.stringify({
+      version: 1, bindings: [{ accountId: 'account-1', sourceLocalProfileId: 'local-profile-1', expectedContext: EXPECTED_CONTEXT }],
+    }))
     const temporaryRootDir = await mkdtemp(join(tmpdir(), 'dsh-team-management-browser-mismatch-test-'))
     cleanups.push(async () => { await rm(temporaryRootDir, { recursive: true, force: true }) })
     const offer = new TeamCredentialHandoffRegistry().create({ teamId: 'team-1', accountId: 'account-1' })
@@ -2970,16 +3069,19 @@ describe('local Team management routes', () => {
     const backgroundErrors: unknown[] = []
     const mutationFetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/contributions/oauth/start')) {
+      if (url.endsWith('/contributions/oauth/reauthorize')) {
         return new Response(JSON.stringify({
           account: { ...contribution(), status: 'authorizing', lastError: undefined },
           method: 'browser_handoff',
           handoff: offer,
         }), { status: 201, headers: { 'content-type': 'application/json' } })
       }
+      if (url.endsWith(TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH)) {
+        return Response.json({ accountIds: ['account-1'] })
+      }
       if (url.endsWith('/contributions/oauth/cancel')) {
         return new Response(JSON.stringify({
-          account: { ...contribution(), status: 'revoked', lastError: undefined },
+          account: { ...contribution(), status: 'reauth_required', lastError: undefined },
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       }
       throw new Error(`unexpected remote request: ${url}; ${String(init?.body)}`)
@@ -2996,12 +3098,12 @@ describe('local Team management routes', () => {
       })
     }
     const fetch = withOverviewSequence(mutationFetch, [
-      overview(),
+      overview({ contributions: [contribution()] }),
       overview({
         contributions: [{ ...contribution(), status: 'authorizing', lastError: undefined }],
       }),
       overview({
-        contributions: [{ ...contribution(), status: 'revoked', lastError: undefined }],
+        contributions: [{ ...contribution(), status: 'reauth_required', lastError: undefined }],
       }),
     ])
     const { routes } = setup(
@@ -3019,28 +3121,32 @@ describe('local Team management routes', () => {
       },
     )
 
-    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_START_PATH).handler, request('POST', withExpectedContext({
-      label: 'Personal Pro', method: 'browser', sourceLocalProfileId: 'local-profile-1',
+    const result = await response(route(routes, TEAM_MANAGEMENT_OAUTH_REAUTHORIZE_PATH).handler, request('POST', withExpectedContext({
+      accountId: 'account-1', method: 'browser',
     })))
 
     expect(result).toMatchObject({
-      status: 201,
+      status: 200,
       body: { method: 'browser', authorizationUrl: 'https://auth.openai.com/oauth/authorize?state=mismatch' },
     })
     const pending = await response(route(routes, TEAM_MANAGEMENT_OVERVIEW_PATH).handler, request('GET'))
     expect(pending.body.pendingBrowserAuthorization).toMatchObject({
-      accountId: 'account-1', method: 'browser', discardInitial: true,
+      accountId: 'account-1', method: 'browser', discardInitial: false,
     })
     releaseLogin()
     await vi.waitFor(() => { expect(backgroundErrors).toHaveLength(1) })
     expect(backgroundErrors[0]).toMatchObject({ message: TEAM_AUTHORIZATION_FAILED_CODE })
-    expect(mutationFetch).toHaveBeenCalledTimes(2)
-    expect(mutationFetch.mock.calls[1]?.[0]).toBe(
+    const oauthCalls = mutationFetch.mock.calls.filter(([input]) => !String(input).endsWith(TEAM_CONTRIBUTION_PROVIDER_ACCOUNT_MATCHES_PATH))
+    expect(oauthCalls.map(([input]) => String(input))).toEqual([
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/reauthorize',
+      'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
+    ])
+    expect(oauthCalls[1]?.[0]).toBe(
       'https://pool.example/plugins/dsh-codex-shared-pool/team/contributions/oauth/cancel',
     )
-    expect(mutationFetch.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({
+    expect(oauthCalls[1]?.[1]?.body).toBe(JSON.stringify({
       accountId: 'account-1',
-      discardInitial: true,
+      discardInitial: false,
       failureCode: TEAM_AUTHORIZATION_FAILED_CODE,
     }))
     expect(mutationFetch.mock.calls.some(([input]) => String(input).endsWith(TEAM_CONTRIBUTION_OAUTH_HANDOFF_COMPLETE_PATH)))

@@ -677,7 +677,7 @@ describe('Team subscription-pool workspace', () => {
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
   })
 
-  it('confirms before separately authorizing a signed-in local Codex account for the Team', async () => {
+  it('explains that the Team uses the browser-authorized account even when it differs from the selected local account', async () => {
     overviewState = { ...overviewState, contributions: [], activeSharedAccounts: [] }
     managementApi.startOAuth.mockImplementationOnce(async () => {
       const account = { ...mine, id: 'oauth-new', label: '本机账号 A', status: 'authorizing' as const }
@@ -695,22 +695,23 @@ describe('Team subscription-pool workspace', () => {
     expect(await within(panel).findByRole('heading', { name: '本机账号 A' })).toBeDefined()
     expect(within(panel).getByRole('button', { name: /本机账号 B/u })).toBeDefined()
     expect(within(panel).getByRole('button', { name: /本机账号 C/u })).toBeDefined()
-    expect(within(panel).getByText((content) => content.includes('需要再次授权后，团队才能使用这个账号。'))).toBeDefined()
+    expect(within(panel).getByText((content) => content.includes('在浏览器中单独授权 OpenAI 账号后，即可用于团队。'))).toBeDefined()
 
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
 
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
-    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
-    expect(within(confirmation).getByText('请再次登录这个 OpenAI 账号。')).toBeDefined()
+    const confirmation = screen.getByRole('dialog', { name: '授权账号用于团队' })
+    expect(within(confirmation).getByText('可使用当前浏览器登录的 OpenAI 账号，也可切换账号。')).toBeDefined()
+    expect(within(confirmation).getByText((content) => content.includes('「周末造物局」将使用你在浏览器中实际授权的账号，可以与当前选中的本机账号不同。'))).toBeDefined()
     expect(within(confirmation).getByText((content) => content.includes('你的本机登录保持不变。'))).toBeDefined()
     expect(within(confirmation).getByText((content) => content.includes('不会上传本机 auth.json。'))).toBeDefined()
     fireEvent.click(within(confirmation).getByRole('button', { name: zh.cancel }))
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '授权账号用于团队' })).toBeNull()
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
 
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })).getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '授权账号用于团队' })).getByRole('button', { name: '继续，前往授权' }))
 
     await waitFor(() => {
       expect(managementApi.startOAuth).toHaveBeenCalledWith(
@@ -731,7 +732,7 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    expect(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeDefined()
+    expect(screen.getByRole('dialog', { name: '授权账号用于团队' })).toBeDefined()
 
     switchToSecondOwnerTeam()
     fireEvent.click(within(panel).getByRole('button', { name: zh.teamSettings }))
@@ -739,7 +740,7 @@ describe('Team subscription-pool workspace', () => {
     fireEvent.click(within(settings).getByRole('button', { name: zh.refresh }))
 
     await waitFor(() => {
-      expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
+      expect(screen.queryByRole('dialog', { name: '授权账号用于团队' })).toBeNull()
     })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
   })
@@ -758,14 +759,14 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
-      .getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '授权账号用于团队' }))
+      .getByRole('button', { name: '继续，前往授权' }))
 
     const recoveryTitle = await screen.findByText('团队已更新，请重新确认后继续。')
     expect(recoveryTitle.parentElement?.getAttribute('aria-live')).toBe('polite')
     expect(managementApi.startOAuth).toHaveBeenCalledTimes(1)
     expect(document.body.textContent).not.toContain('Team connection changed; refresh before trying again')
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '授权账号用于团队' })).toBeNull()
   })
 
   it('discards a newly-added placeholder and restores the prior account after cancellation', async () => {
@@ -1288,8 +1289,8 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
-      .getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '授权账号用于团队' }))
+      .getByRole('button', { name: '继续，前往授权' }))
 
     expect(await screen.findByText('暂时无法连接 OpenAI 授权服务，请检查团队 Host 的网络或代理配置后重试。')).toBeDefined()
     expect(document.body.textContent).not.toMatch(/team_authorization_network_unavailable|Country, region|provider-detail/iu)
@@ -1305,8 +1306,8 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
-      .getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '授权账号用于团队' }))
+      .getByRole('button', { name: '继续，前往授权' }))
 
     expect(await screen.findByText('OpenAI 授权未能完成，未添加账号。请重试。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_authorization_failed')
@@ -1329,12 +1330,12 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    fireEvent.click(within(screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' }))
-      .getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '授权账号用于团队' }))
+      .getByRole('button', { name: '继续，前往授权' }))
 
     expect(await screen.findByText('这个 OpenAI 账号已在团队中共享，已自动关联到现有账号，无需再次授权。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_local_account_already_shared')
-    expect(screen.queryByRole('dialog', { name: '将 本机账号 A 用于团队' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '授权账号用于团队' })).toBeNull()
     const directory = within(panel).getByRole('complementary')
     expect(within(directory).getByRole('button', { name: /本机账号 A · 我贡献/u })).toBeDefined()
     expect(within(directory).queryByRole('button', { name: /本机账号 A · 本机已登录/u })).toBeNull()
@@ -1351,9 +1352,9 @@ describe('Team subscription-pool workspace', () => {
     const panel = await screen.findByRole('region', { name: zh.teamPanelTitle })
     const localAccount = within(panel).getByRole('heading', { name: '本机账号 A' }).closest('article')!
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
-    const dialogName = '将 本机账号 A 用于团队'
+    const dialogName = '授权账号用于团队'
     fireEvent.click(within(screen.getByRole('dialog', { name: dialogName }))
-      .getByRole('button', { name: '继续，再次授权' }))
+      .getByRole('button', { name: '继续，前往授权' }))
 
     expect(await screen.findByText('已有另一个 OpenAI 浏览器授权正在进行，请先完成或取消后再发起新的授权。')).toBeDefined()
     expect(document.body.textContent).not.toContain('team_browser_authorization_already_pending')
@@ -1444,7 +1445,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
     fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
-    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const dialog = screen.getByRole('dialog', { name: '授权账号用于团队' })
     const input = within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit)
     fireEvent.change(input, { target: { value: '-1' } })
 
@@ -1495,7 +1496,7 @@ describe('Team subscription-pool workspace', () => {
 
     fireEvent.click(within(localAccount).getByRole('button', { name: zh.shareToTeam }))
 
-    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const dialog = screen.getByRole('dialog', { name: '授权账号用于团队' })
     const quota = within(dialog).getByRole('region', { name: zh.sharingQuotaConfirmation })
     expect(within(quota).getByText(zh.sharingQuotaUnavailable)).toBeDefined()
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
@@ -1540,7 +1541,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
     fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
-    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const dialog = screen.getByRole('dialog', { name: '授权账号用于团队' })
     expect(dialog.className).toContain(styles.localAuthorizationDialog)
     fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
     await waitFor(() => expect(managementApi.updateContribution).toHaveBeenCalledWith('oauth-new', {
@@ -1559,7 +1560,7 @@ describe('Team subscription-pool workspace', () => {
     render(<TeamSettings t={translate} embedded />)
     fireEvent.click(await screen.findByRole('button', { name: /本机账号 A · 本机已登录/u }))
     fireEvent.click(screen.getByRole('button', { name: zh.shareToTeam }))
-    const dialog = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const dialog = screen.getByRole('dialog', { name: '授权账号用于团队' })
     fireEvent.change(within(dialog).getByLabelText(zh.sharingQuotaWeeklyLimit), { target: { value: '25' } })
     fireEvent.click(within(dialog).getByRole('button', { name: zh.localAuthorizationConfirmAction }))
     await waitFor(() => expect(managementApi.cancelOAuth).toHaveBeenCalledWith('oauth-new', expectedContext(), true))
@@ -2219,10 +2220,10 @@ describe('Team subscription-pool workspace', () => {
 
     expect(within(details).getByRole('heading', { name: '本机账号 A' })).toBeDefined()
     expect(within(details).getByRole('img', { name: '本机正在使用' })).toBeDefined()
-    expect(details.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
+    expect(details.textContent).toContain('在浏览器中单独授权 OpenAI 账号后，即可用于团队。')
     expect(details.textContent).toContain('不会上传本机 auth.json。')
     const shareRegion = within(details).getByRole('region', { name: zh.shareToTeam })
-    expect(shareRegion.textContent).toContain('需要再次授权后，团队才能使用这个账号。')
+    expect(shareRegion.textContent).toContain('在浏览器中单独授权 OpenAI 账号后，即可用于团队。')
     expect(shareRegion.textContent).toContain(zh.localCredentialBoundary)
     expect(shareRegion.textContent).not.toContain(zh.localCredentialBoundaryHint)
     expect(within(details.querySelector('header')!).getByRole('button', { name: zh.shareToTeam })).toBeDefined()
@@ -2343,9 +2344,9 @@ describe('Team subscription-pool workspace', () => {
     const details = within(settings).getByRole('region', { name: zh.accountDetails })
     fireEvent.click(within(details).getByRole('button', { name: zh.shareToTeam }))
 
-    const confirmation = screen.getByRole('dialog', { name: '将 本机账号 A 用于团队' })
+    const confirmation = screen.getByRole('dialog', { name: '授权账号用于团队' })
     expect(managementApi.startOAuth).not.toHaveBeenCalled()
-    fireEvent.click(within(confirmation).getByRole('button', { name: '继续，再次授权' }))
+    fireEvent.click(within(confirmation).getByRole('button', { name: '继续，前往授权' }))
 
     const pending = await within(confirmation).findByRole('button', { name: zh.working })
     expect(pending).toHaveProperty('disabled', true)
