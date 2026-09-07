@@ -107,6 +107,7 @@ const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap
 const titleStyle: CSSProperties = { margin: 0, fontSize: 20, lineHeight: '28px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
 const bodyStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '22px', color: 'var(--dsw-alias-label-secondary)' }
 const quotaBodyStyle: CSSProperties = { ...bodyStyle, fontSize: 13, lineHeight: '20px' }
+const quotaResetStyle: CSSProperties = { margin: 0, gridColumn: '1 / -1', fontSize: 11, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }
 const badgeStyle: CSSProperties = { padding: '2px 8px', borderRadius: 999, background: 'color-mix(in srgb, var(--dsw-alias-state-business-primary, #3964fe) 14%, transparent)', color: 'var(--dsw-alias-state-business-primary, #3964fe)', fontSize: 12, fontWeight: 600 }
 const errorStyle: CSSProperties = { ...bodyStyle, color: 'var(--dsw-alias-state-error-primary)' }
 const quotaListStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 16 }
@@ -222,7 +223,7 @@ function QuotaBar({
   percent: number
   detail?: string
   /** Undefined omits reset information; null means a window has no reset instant. */
-  resetsAt?: number | null
+  resetsAt?: number | null | undefined
   t: OpenAICodexSettingsInjected['t']
 }) {
   const display = formatPercent(percent)
@@ -254,7 +255,7 @@ function QuotaBar({
       <span style={{ minWidth: 0, textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: percent <= 0 ? 'var(--dsw-alias-label-primary)' : undefined }}>
         {percent <= 0 ? t('quotaExhausted') : t('percentRemaining', { percent: display })}
       </span>
-      {resetsAt === undefined ? null : <p id={resetId} style={{ ...quotaBodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>
+      {resetsAt === undefined ? null : <p id={resetId} style={quotaResetStyle}>
         {validReset && !pendingReset ? <time dateTime={resetDate.toISOString()}>{resetText}</time> : resetText}
       </p>}
       {detail === undefined ? null : <p style={{ ...quotaBodyStyle, gridColumn: '1 / -1', fontSize: 12 }}>{detail}</p>}
@@ -287,7 +288,7 @@ function UsageLimits({ usage, quotaError, loading = false, t }: {
                 key={window.windowSeconds}
                 label={windowLabel(window.windowSeconds, t)}
                 percent={window.remainingPercent}
-                resetsAt={window.resetsAt ?? null}
+                resetsAt={limit.id === 'codex' ? window.resetsAt ?? null : undefined}
                 t={t}
               />
             ))}
