@@ -108,7 +108,7 @@ describe('OpenAI Codex local routing monitor', () => {
     })
     expect(screen.queryByText('Removed account')).toBeNull()
     expect(screen.queryByText('Stale quota label')).toBeNull()
-    expect(screen.getByRole('status').textContent).toContain(en.accountConnected)
+    expect(screen.getByRole('status').getAttribute('aria-label')).toBe(en.accountConnected)
   })
 
   it('retains accounts after quota timeout and aborts loading on unmount', async () => {
@@ -203,7 +203,8 @@ describe('OpenAI Codex local routing monitor', () => {
     const profile = await screen.findByRole('button', { name: /Private A/ })
     expect(profile.querySelector('[state="done"]')).not.toBeNull()
     const connection = screen.getByRole('status')
-    expect(connection.textContent).toContain(en.accountConnected)
+    expect(connection.getAttribute('aria-label')).toBe(en.accountConnected)
+    expect(connection.textContent).toBe('')
     expect(connection.getAttribute('data-state')).toBe('done')
     expect(screen.queryByText(en.accountConnectionUnavailable)).toBeNull()
     expect(screen.getByText(en.quotaUnavailable)).toBeDefined()
