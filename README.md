@@ -1,44 +1,57 @@
 # DSH Codex Shared Pool
 
-在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 里自由使用 Codex 订阅额度：把多个 ChatGPT/Codex 订阅账号放进同一个本地账号池，并在请求前根据模型额度自动选择可用账号。
+在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/DeepSeek-Harness) 中管理多个 Codex 订阅账号，并通过自托管团队服务把愿意贡献的账号额度分享给其他成员。
 
-支持本地多账号池，以及通过自托管 Team 服务邀请成员、共享账号额度和查看共享用量。
+[最新发布](https://github.com/502399493zjw-lgtm/dsh-codex-shared-pool/releases/latest) · [更新日志](CHANGELOG.md) · [安装](#安装) · [团队与自托管](#团队共享与自托管)
 
-## 它解决什么问题
+## 最近上新
 
-- 在 DSH 设置中分别完成 OAuth，添加多个 Codex 账号；不复制 `auth.json`。
-- 每次请求前读取所选模型的上游额度；当前账号明确耗尽时，自动选择仍有额度的账号。
-- 多个候选账号都可用时，优先选择上游重置时间更早的账号。
-- 自动切换后，新账号会成为全局“使用中”账号；也可以点击“使用此账号”手动切换。
-- 在设置页查看最近请求走了哪个账号、为什么切换、使用的模型以及成功/失败状态。
-- 模型菜单沿用 Codex 客户端的中文模式名称和说明，包括“标准/快速”以及五档推理等级。
-- 保留 Codex Responses、搜索、图片生成、`read_image`、TUI 管理等原有能力。
+**0.1.4 已发布到 npm，适配官方 DSH `0.1.2-rc.1` / Cordis `4.0.2`。**
 
-## 真实操作
+- **新版 DSH 兼容**：修复新版 Host 与浏览器接口变化导致的加载问题，加入 Windows、Linux 的官方 DSH 安装与启动验证。
+- **账号与额度更清楚**：突出账号名称，统一本机与共享账号的额度、订阅信息及刷新入口；本地额度显示重置时间。
+- **共享保护更易懂**：区分“本周已共享 / 上限”、账号剩余额度和 API 等价金额估算；无效上限或保存失败时就地提示并保留输入。
+- **团队操作更顺手**：可从成员页创建邀请；侧边栏额度刷新失败时保留上次成功数据，并显示过期状态和最后更新时间。
 
-以下三段展示一期最核心的产品操作：先看 Codex 模型的中文模式选择，再看真实账号池和各账号额度，最后看优先账号额度不足时如何自动切换并留下请求流水。第三段只模拟“首账号额度不足”的输入信号，账号选择、Provider 请求、响应和最近请求流水都由插件实际完成。
+近期版本还加入了可复用邀请码、独立的所有者恢复入口，以及达到每周共享预算后拒绝新请求的保护。完整版本归属见 [CHANGELOG](CHANGELOG.md)。
 
-### Codex 模式选择
+## 现在可以做什么
+
+| 场景 | 使用方式 |
+| --- | --- |
+| 一个人有多个订阅账号 | 在本机账号池分别登录；请求前按模型额度选择账号，明确耗尽时自动切换，并留下路由流水。 |
+| 把账号贡献给团队 | 在团队面板选择账号，通过浏览器完成独立的共享授权，设置每周共享上限，也可随时终止共享。 |
+| 成员使用共享额度 | 在已配置团队服务的 DSH 中通过邀请码加入，选择 Codex 模型即可使用共享账号；成员无需登录贡献者的 OpenAI 账号。 |
+| 管理多个团队 | 在团队名称菜单切换本机已保存的团队；所有者可保存恢复码，用于在同一服务器上恢复管理身份。 |
+| 自己部署团队服务 | 使用仓库内的 Docker Compose 模板部署 Host、Credential Broker、Team API Edge 和 PostgreSQL。 |
+
+Web 中添加账号和贡献账号都使用浏览器登录流程。贡献账号需要单独确认共享授权；已有的本机登录不会自动把凭据交给团队。当前版本仍保留设备码相关路径，尚未移除 `device_code`。
+
+## 界面与操作
+
+以下素材来自公开 npm `0.1.4` 安装到官方 DSH `0.1.2-rc.1` 后的实际页面。账号、团队和成员名称已在浏览器显示层脱敏；额度与用量未改写，图片未展示邀请码、恢复码或登录凭据。
+
+### 贡献者：账号、共享上限和近期用量放在一起
 
 <p align="center">
-  <img src="./docs/assets/codex-mode-localization.gif" alt="在 stock DSH 中实际选择 Codex 标准和快速模式，并查看五档中文推理等级说明" width="900" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/main/docs/assets/v0.1.4/team-owner.png" alt="贡献者查看共享账号、本周共享金额与上限、账号剩余额度和近期请求" width="800" />
 </p>
 
-> 画面来自把当前分支 tarball 安装进隔离的 stock DSH `0.1.0-rc.8` 后进行的真实操作；没有使用高保真动画模拟。
-
-### 多账号池与额度概览
+### 共享保护：打开上限编辑，再取消返回
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/account-pool-and-quota.gif" alt="在 DSH 中查看 Codex 多账号池和各账号额度" width="900" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/main/docs/assets/v0.1.4/sharing-limit.gif" alt="在实际 DSH 页面打开每周共享金额上限编辑框，查看说明并取消返回" width="800" />
 </p>
 
-### 额度不足时自动路由并留下最近请求流水
+GIF 展示实际编辑入口，本次录制没有保存上限。金额按标准 API 等价值估算，不是订阅账单，也不保证精确限制上游消耗；已接纳的请求结算后可能超过预算。
+
+### 成员：查看共享账号，无需导入贡献者的凭据
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/assets/phase-one-routing/automatic-routing-and-receipts.gif" alt="演示额度信号触发 Codex 自动路由，并显示真实响应和最近请求流水" width="779" />
+  <img src="https://raw.githubusercontent.com/502399493zjw-lgtm/dsh-codex-shared-pool/main/docs/assets/v0.1.4/team-member.png" alt="独立 DSH 实例中的团队成员查看贡献者账号及共享额度" width="800" />
 </p>
 
-> 第三段明确标注为混合演示：只把原使用中账号的额度信号临时投影为 `0%`，用于稳定触发回退；插件在请求发出前跳过它，并由下一可用账号完成真实 Provider 请求。流水中的“1 次请求”不代表 Token、费用或精确订阅消耗。
+真实测试已覆盖浏览器共享授权、成员调用、每周共享预算达限拒绝，以及解除限制后的恢复。测试使用同一电脑上的独立 DSH 实例和浏览器配置，尚未覆盖第二台物理设备、跨网络访问或上游订阅额度真正耗尽。详见 [公开包测试记录与素材说明](docs/acceptance/0.1.4-published-package.md)。
 
 ## 自动切换规则
 
@@ -71,7 +84,6 @@
 安装到新版 DSH Web profile：
 
 ```bash
-pnpm install --frozen-lockfile
 npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add dsh-codex-shared-pool@0.1.4
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
@@ -81,7 +93,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 然后启动同一个 Web profile，进入：
 
 ```text
-设置 → OpenAI Codex
+设置 → Codex 订阅池 → 本机
 ```
 
 点击“添加账号”会发起一条独立 OAuth 授权链。授权等待期间可以手动取消；超时或 Host 重启后不会残留永久等待状态。
@@ -91,6 +103,12 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 并仅在希望搜索也走 Codex 时手动选择对应 Search Provider。
 
 官方 SDK protocol 与 schema 包仍按社区目录规则声明为 peer；Host 构建会内联它们实际使用的轻量运行时代码，避免 stock DSH profile 还要重复安装官方包。
+
+## 模型能力
+
+模型目录兼容：插件为固定版本 DSH 的 Codex 目录补充 `gpt-6-astra`（GPT-6-Astra），本地账号和 Team 共享模式均可选择，并支持 Fast。推理档位为 `low`、`medium`（默认）、`high`、`xhigh`、`max`。目录可选不代表每个共享账号都有该模型的上游权限。Astra 尚未加入 Team 的已验证价格表，费用沿用未知价格处理，不套用其他模型的单价。
+
+Codex 模型菜单提供中文模式与推理等级说明；保留 Responses、搜索、图片生成和 `read_image` 能力。目录可选和界面展示不等于每个账号都获得了对应模型权限。
 
 ## TUI 管理
 
@@ -117,9 +135,9 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 - 账号别名和最近请求记录不包含原始 profile id、prompt、response 或 token。
 - 本项目通过公开 Cordis/DSH 扩展点安装，不修改或 fork DSH 核心。
 
-## 第二期：Team 共享与自托管
+## 团队共享与自托管
 
-第二期在同一个 npm 包中加入邀请制 Team、成员额度共享、Team 请求路由和自托管部署。OAuth 凭据、数据库连接和团队连接密钥仍只存在于 Host；Browser 只读取插件 same-origin 路由返回的最小脱敏投影。所有者恢复码仅在显式导出时展示。
+同一个 npm 包提供邀请制 Team、成员额度共享、Team 请求路由和自托管部署。OAuth 凭据、数据库连接和团队连接密钥仍只存在于 Host；Browser 只读取插件 same-origin 路由返回的最小脱敏投影。所有者恢复码仅在显式导出时展示。
 
 在 **设置 → Codex 订阅池 → 团队** 使用邀请码：尚未连接时直接粘贴邀请码并查看邀请；已连接时点击 **团队名称** 展开下拉菜单，在底部选择 **加入团队**，核对团队名称后填写成员名称并加入。成功加入前，本机仍使用原团队；网络中断时可通过页面的恢复入口继续处理。
 
@@ -129,14 +147,14 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 创建后，页面提示保存恢复码，点击 **显示恢复码** 再复制私密保存。已有所有者也可在 **团队设置 → 团队管理 → 保存团队恢复码** 导出本机保存的恢复码。恢复码等同于团队管理钥匙，不能作为邀请码分享；它只在显式请求时展示，不出现在普通状态或团队概览里。换设备时，在未连接页或团队下拉菜单选择 **使用恢复码**，即可在同一服务器上恢复所有者身份。旧版本创建或从其他设备加入的团队可能没有本机可导出的恢复码。
 
-自托管模板在一台中央服务器上运行 four long-running processes：PostgreSQL、仅监听回环地址的 stock DSH Team Host、Credential Broker，以及窄接口的 Team API Edge；另有 one-shot database migrator 在应用负载启动前完成迁移并退出：
+自托管模板在一台中央服务器上运行四个常驻服务：PostgreSQL、仅监听回环地址的 stock DSH Team Host、Credential Broker，以及窄接口的 Team API Edge；另有一次性数据库迁移器在应用负载启动前完成迁移并退出：
 
 ```sh
 node deploy/self-hosted/init-secrets.mjs
 docker compose -f deploy/self-hosted/compose.yml up --build -d
 ```
 
-初始化器会在被忽略的 `deploy/self-hosted/.secrets/` 下创建 four mode-`0600` files：
+初始化器会在被忽略的 `deploy/self-hosted/.secrets/` 下创建四个权限为 `0600` 的文件：
 
 - `postgres.env`：初始化数据库和不同运行身份的密码；
 - `team-migrations.env`：只向一次性迁移器提供 schema-owner 数据库 URL；
@@ -152,9 +170,9 @@ Compose 会把同一份可选代理文件交给 Team Host 和 Credential Broker�
 docker compose -f deploy/self-hosted/compose.yml up -d --force-recreate team-host credential-broker
 ```
 
-数据库按权限拆分为 `dsh_team_host_login` 和 `dsh_team_broker_login`。Team Host cannot read `team_contribution_credentials`；Credential Broker cannot read the Team control-plane tables。DSH Web/Remote API 不对公网暴露，Team API Edge 只转发 `/plugins/dsh-codex-shared-pool/team/...`。
+数据库按权限拆分为 `dsh_team_host_login` 和 `dsh_team_broker_login`。Team Host 不能读取 `team_contribution_credentials`；Credential Broker 不能读取团队控制面表。DSH Web/Remote API 不对公网暴露，Team API Edge 只转发 `/plugins/dsh-codex-shared-pool/team/...`。
 
-完整验收与部署说明见 [第二期验收文档](docs/acceptance/team-mvp-phase-two.md)。
+完整部署说明与早期阶段验收见 [第二期验收文档](docs/acceptance/team-mvp-phase-two.md)；其中旧版本的验收状态保留为历史记录，当前基线与实测见 [0.1.4 测试记录](docs/acceptance/0.1.4-published-package.md)。
 
 ## 额度、订阅与升级排障
 
@@ -204,5 +222,3 @@ pnpm pack
 ## 许可证
 
 [MIT](LICENSE)
-
-模型目录兼容：插件为固定版本 DSH 的 Codex 目录补充 `gpt-6-astra`（GPT-6-Astra），本地账号和 Team 共享模式均可选择，并支持 Fast。推理档位为 `low`、`medium`（默认）、`high`、`xhigh`、`max`；rc.8 不提供 `ultra`。目录可选不代表每个共享账号都有该模型的上游权限。Astra 尚未加入 Team 的已验证价格表，费用沿用未知价格处理，不套用其他模型的单价。

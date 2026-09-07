@@ -807,13 +807,13 @@ describe('self-hosted deployment assets', () => {
       'utf8',
     )
 
-    expect(readme).toMatch(/four long-running processes[\s\S]*one-shot database\s+migrator/iu)
-    expect(readme).toMatch(/four mode-`0600` files/iu)
+    expect(readme).toMatch(/四个常驻服务[\s\S]*一次性数据库迁移器/u)
+    expect(readme).toMatch(/四个权限为 `0600` 的文件/u)
     expect(readme).toContain('team-migrations.env')
     expect(readme).toContain('dsh_team_host_login')
     expect(readme).toContain('dsh_team_broker_login')
-    expect(readme).toMatch(/Team\s+Host cannot read `team_contribution_credentials`/u)
-    expect(readme).toMatch(/Credential\s+Broker cannot read the Team control-plane tables/u)
+    expect(readme).toMatch(/Team\s+Host 不能读取 `team_contribution_credentials`/u)
+    expect(readme).toMatch(/Credential\s+Broker 不能读取团队控制面表/u)
     expect(readme).toMatch(/outbound-network\.env[\s\S]*HTTP_PROXY[\s\S]*HTTPS_PROXY[\s\S]*NO_PROXY/iu)
     expect(readme).toMatch(/NO_PROXY[\s\S]*127\.0\.0\.1[\s\S]*localhost/iu)
     expect(readme).toMatch(/outbound-network\.env[\s\S]*(?:restart|recreate|重启)[\s\S]*Team Host[\s\S]*Credential Broker/iu)
